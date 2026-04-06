@@ -1,0 +1,40 @@
+:root {
+  color-scheme: dark;
+  --accent: #6b9fff;
+  --bg: #07080a;
+  --text: #f2f4f8;
+  --muted: #6a7384;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.display-shell {
+  height: 100vh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
+.display-shell .display-stage {
+  flex: 1;
+  min-height: 0;
+}
+
+.waiting {
+  font-size: clamp(1.5rem, 4vmin, 2.5rem);
+  color: var(--muted);
+  padding: 5vmin;
+}

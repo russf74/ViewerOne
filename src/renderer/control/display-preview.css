@@ -1,0 +1,29 @@
+@import '../shared/display-stage.css';
+
+.display-preview-outer {
+  margin-bottom: 10px;
+}
+
+.display-preview-caption {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin: 0 0 8px;
+  line-height: 1.35;
+}
+
+/* 50% of 2560×720 → frame scales with control width; inner stage fills and sizes text via cqi/cqh */
+.display-preview-frame {
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+  aspect-ratio: 2560 / 720;
+  background: #07080a;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.display-preview-frame .display-stage {
+  height: 100%;
+}

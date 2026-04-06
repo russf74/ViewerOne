@@ -1,0 +1,226 @@
+/* 3-column stage: use cqi/cqh so preview frame and fullscreen both scale text to panel size */
+.display-stage {
+  --stage-yellow: #ffff00;
+  --stage-cyan: #00ffff;
+  container-type: size;
+  container-name: stage;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 4fr 3fr 3fr;
+  background: #07080a;
+}
+
+.display-stage .dp-col {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: clamp(10px, 2.2cqh, 28px) clamp(12px, 2.8cqi, 40px);
+}
+
+.display-stage .dp-col-left {
+  border-right: 2px solid #2a3140;
+  justify-content: flex-start;
+  gap: clamp(6px, 1.8cqh, 18px);
+}
+
+.display-stage .dp-col-mid {
+  border-right: 2px solid #2a3140;
+  gap: clamp(10px, 2.2cqh, 22px);
+}
+
+.display-stage .dp-mid-bottom {
+  flex-shrink: 0;
+  width: 100%;
+  margin-top: auto;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.display-stage .dp-col-right {
+  justify-content: flex-end;
+  min-height: 0;
+}
+
+.display-stage .dp-block {
+  min-height: 0;
+}
+
+.display-stage .dp-current {
+  flex: 1.35;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-height: 0;
+}
+
+.display-stage .dp-current-title {
+  font-size: clamp(2.65rem, min(19cqh, 15cqi), 9rem);
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+  color: #ffffff;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.display-stage .dp-muted {
+  color: #6a7384;
+  font-weight: 500;
+}
+
+.display-stage .dp-next {
+  flex: 0.95;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 0;
+}
+
+.display-stage .dp-next-title {
+  font-size: clamp(2.45rem, min(14cqh, 11cqi), 7rem);
+  font-weight: 600;
+  color: var(--stage-yellow);
+  line-height: 1.12;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.display-stage .dp-next2 {
+  flex: 0.75;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 0;
+}
+
+.display-stage .dp-next2-title {
+  font-size: clamp(1.95rem, min(10cqh, 8.5cqi), 5.25rem);
+  font-weight: 500;
+  color: var(--stage-cyan);
+  line-height: 1.12;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* Match current song title size (see .dp-current-title) */
+.display-stage .dp-chords {
+  flex: 1;
+  font-size: clamp(2.65rem, min(19cqh, 15cqi), 9rem);
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.display-stage .dp-chords-live {
+  color: #a7f3d0;
+}
+
+.display-stage .dp-chords-not-live {
+  color: #fecaca;
+}
+
+.display-stage .dp-chords-idle {
+  color: #5c6570;
+  font-weight: 500;
+}
+
+.display-stage .dp-mid-bottom .dp-status-line {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0 0.75em;
+  max-width: 100%;
+  font-size: clamp(3.75rem, min(12.5cqh, 10.5cqi), 7.5rem);
+  line-height: 1.1;
+  text-align: center;
+  color: #8b95a8;
+}
+
+.display-stage .dp-mid-bottom .dp-clock {
+  font-size: 1em;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--stage-yellow);
+}
+
+.display-stage .dp-mid-bottom .dp-remaining-n {
+  font-weight: 800;
+  font-size: 1em;
+  color: var(--stage-yellow);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.display-stage .dp-right-stack {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: clamp(8px, 2cqh, 16px);
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+}
+
+.display-stage .dp-button-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: repeat(3, 1fr);
+  gap: clamp(8px, 2cqh, 18px);
+  min-height: 0;
+  align-content: stretch;
+}
+
+.display-stage .dp-button-grid button {
+  min-height: 0;
+  height: 100%;
+  align-self: stretch;
+  font-size: clamp(1.05rem, min(4.2cqh, 3.5cqi), 2.25rem);
+  font-weight: 600;
+  padding: clamp(6px, 1.1cqh, 14px) clamp(10px, 2cqi, 24px);
+  border-radius: clamp(8px, 1.2cqh, 16px);
+  border: 2px solid #343c4d;
+  background: #1a1f2a;
+  color: #e8ecf4;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.display-stage .dp-button-grid button:nth-child(5),
+.display-stage .dp-button-grid button:nth-child(6) {
+  font-size: clamp(1.25rem, min(4.8cqh, 4cqi), 2.75rem);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.display-stage .dp-right-stack button:active {
+  transform: scale(0.98);
+}
+
+.display-stage .dp-right-stack button:hover {
+  border-color: #5a6a8a;
+}
+
+.display-stage .dp-right-stack button.active {
+  background: #2a3f5c;
+  border-color: #5a7fc8;
+}
+
+/* Momentary highlight for Stop / Start (not a latched state) */
+.display-stage .dp-right-stack button.dp-flash {
+  background: #2a3f5c;
+  border-color: #5a7fc8;
+  box-shadow: 0 0 0 1px rgba(90, 127, 200, 0.35);
+}
