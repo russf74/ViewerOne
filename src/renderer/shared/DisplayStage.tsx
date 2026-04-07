@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { MouseEvent } from 'react'
 import type { PublicState } from '../../shared/types'
 
 type Props = {
@@ -42,25 +43,61 @@ export function DisplayStage({ state, onAfterAction }: Props) {
     }, BUTTON_FLASH_MS)
   }, [])
 
-  const handleStop = useCallback(() => {
-    pulseButton('stop')
-    void onAction(() => window.viewer.stop())
-  }, [onAction, pulseButton])
+  const blurTarget = useCallback((e: MouseEvent<HTMLButtonElement>) => {
+    e.currentTarget.blur()
+  }, [])
 
-  const handleStart = useCallback(() => {
-    pulseButton('start')
-    void onAction(() => window.viewer.start())
-  }, [onAction, pulseButton])
+  const handleStop = useCallback(
+    (e: MouseEvent<HTMLButtonElement>) => {
+      pulseButton('stop')
+      void onAction(() => window.viewer.stop())
+      blurTarget(e)
+    },
+    [onAction, blurTarget, pulseButton]
+  )
 
-  const handlePrevSong = useCallback(() => {
-    pulseButton('prev')
-    void onAction(() => window.viewer.prevSong())
-  }, [onAction, pulseButton])
+  const handleStart = useCallback(
+    (e: MouseEvent<HTMLButtonElement>) => {
+      pulseButton('start')
+      void onAction(() => window.viewer.start())
+      blurTarget(e)
+    },
+    [onAction, blurTarget, pulseButton]
+  )
 
-  const handleNextSong = useCallback(() => {
-    pulseButton('next')
-    void onAction(() => window.viewer.nextSong())
-  }, [onAction, pulseButton])
+  const handlePrevSong = useCallback(
+    (e: MouseEvent<HTMLButtonElement>) => {
+      pulseButton('prev')
+      void onAction(() => window.viewer.prevSong())
+      blurTarget(e)
+    },
+    [onAction, blurTarget, pulseButton]
+  )
+
+  const handleNextSong = useCallback(
+    (e: MouseEvent<HTMLButtonElement>) => {
+      pulseButton('next')
+      void onAction(() => window.viewer.nextSong())
+      blurTarget(e)
+    },
+    [onAction, blurTarget, pulseButton]
+  )
+
+  const muteMic = useCallback(
+    (e: MouseEvent<HTMLButtonElement>) => {
+      void onAction(() => window.viewer.muteAll())
+      blurTarget(e)
+    },
+    [onAction, blurTarget]
+  )
+
+  const muteFx = useCallback(
+    (e: MouseEvent<HTMLButtonElement>) => {
+      void onAction(() => window.viewer.muteFx())
+      blurTarget(e)
+    },
+    [onAction, blurTarget]
+  )
 
   const curIdx = state.currentSongId
     ? state.setlist.findIndex((r) => r.id === state.currentSongId)
@@ -121,12 +158,12 @@ export function DisplayStage({ state, onAfterAction }: Props) {
 
       <div className="dp-col dp-col-right">
         <div className="dp-right-stack">
-          <div className="dp-button-grid">
+          <div className="dp-mute-row">
             <button
               type="button"
               className={state.muteAllEngaged ? 'active' : ''}
               aria-pressed={state.muteAllEngaged}
-              onClick={() => onAction(() => window.viewer.muteAll())}
+              onClick={muteMic}
             >
               Mute Mic
             </button>
@@ -134,39 +171,47 @@ export function DisplayStage({ state, onAfterAction }: Props) {
               type="button"
               className={state.muteFxEngaged ? 'active' : ''}
               aria-pressed={state.muteFxEngaged}
-              onClick={() => onAction(() => window.viewer.muteFx())}
+              onClick={muteFx}
             >
               Mute FX
             </button>
+          </div>
+          <div className="dp-transport-grid">
             <button
               type="button"
-              className={buttonFlash === 'stop' ? 'dp-flash' : ''}
+              className={`dp-btn-icon dp-btn-stop ${!state.transportPlaying ? 'active' : ''} ${buttonFlash === 'stop' ? 'dp-flash' : ''}`}
+              aria-label="Stop"
+              title="Stop"
               onClick={handleStop}
             >
-              Stop
+              ■
             </button>
             <button
               type="button"
-              className={buttonFlash === 'start' ? 'dp-flash' : ''}
+              className={`dp-btn-icon dp-btn-play ${state.transportPlaying ? 'active' : ''} ${buttonFlash === 'start' ? 'dp-flash' : ''}`}
+              aria-label="Start"
+              title="Start"
               onClick={handleStart}
             >
-              Start
+              ▶
             </button>
             <button
               type="button"
+              className={`dp-btn-icon dp-btn-prev ${buttonFlash === 'prev' ? 'dp-flash' : ''}`}
               aria-label="Previous song"
-              className={buttonFlash === 'prev' ? 'dp-flash' : ''}
+              title="Previous song"
               onClick={handlePrevSong}
             >
-              &lt;&lt;&lt;
+              ⏮
             </button>
             <button
               type="button"
+              className={`dp-btn-icon dp-btn-next ${buttonFlash === 'next' ? 'dp-flash' : ''}`}
               aria-label="Next song"
-              className={buttonFlash === 'next' ? 'dp-flash' : ''}
+              title="Next song"
               onClick={handleNextSong}
             >
-              &gt;&gt;&gt;
+              ⏭
             </button>
           </div>
         </div>

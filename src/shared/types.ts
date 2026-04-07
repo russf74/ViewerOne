@@ -9,11 +9,18 @@ export type TransportSettings = {
   stopNote: number
 }
 
+/** How mute CC is sent: X32 mute groups often latch on each CC 127; absolute uses valueOn/valueOff. */
+export type CcMuteOutMode = 'toggle127' | 'absolute'
+
 export type CcButtonSettings = {
   channel: number
   cc: number
+  /** CC value when mute is engaged (channels muted). X32: often 0. */
   valueOn: number
+  /** CC value when unmuted. X32: often 127. */
   valueOff: number
+  /** absolute = send valueOn / valueOff from state; toggle127 = legacy pulse (rarely needed). */
+  outMode?: CcMuteOutMode
 }
 
 export type SetlistItem = {
@@ -44,6 +51,8 @@ export type PublicState = AppState & {
   /** Live CC toggle state (not persisted) */
   muteAllEngaged: boolean
   muteFxEngaged: boolean
+  /** Transport “playing” from MIDI (MMC / note / clock start) + local button presses (not persisted) */
+  transportPlaying: boolean
   /** From package.json / Electron app.getVersion() */
   appVersion: string
 }

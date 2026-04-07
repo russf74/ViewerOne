@@ -4,8 +4,9 @@ import { existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createAppStore, getState, setState, newSetlistItem } from './store.js'
-import { MidiService, listInputs, listOutputs } from './midi.js'
-import type { AppState, PublicState, SetlistItem } from '../shared/types.js'
+import { MidiService, listInputs, listOutputs, parseMmcTransportCommand } from './midi.js'
+import { ensureLoopMidiRunning } from './loopMidi.js'
+import type { AppState, CcButtonSettings, PublicState, SetlistItem } from '../shared/types.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -23,6 +24,7 @@ const midi = new MidiService()
 
 let muteAllEngaged = false
 let muteFxEngaged = false
+let transportPlaying = false
 
 function buildPublicState(): PublicState {
   const base = getState(store)
@@ -32,6 +34,7 @@ function buildPublicState(): PublicState {
     outputs: listOutputs(),
     muteAllEngaged,
     muteFxEngaged,
+    transportPlaying,
     appVersion: app.getVersion()
   }
 }
@@ -43,15 +46,75 @@ function broadcastState(): void {
   }
 }
 
+function ch0Matches(msgCh0: number, settingsCh1to16: number): boolean {
+  return msgCh0 === Math.max(0, Math.min(15, settingsCh1to16 - 1))
+}
+
+/** True = mute engaged (channels muted). Supports both polarities: 127/0 or 0/127 (X32 often uses 0=muted). */
+function engagedFromCcValue(settings: CcButtonSettings, value: number): boolean {
+  if (value === settings.valueOn) return true
+  if (value === settings.valueOff) return false
+  if (settings.valueOn > settings.valueOff) return value >= 64
+  return value < 64
+}
+
 function applyMidiFromState(): void {
   const st = getState(store)
-  midi.reconnectFromState(st, (wireProgram) => {
-    const s = getState(store)
-    // MIDI PC bytes are 0–127; UI/setlist use 1–127 so Cubase “2” (wire 1) matches PC column 2
-    const pc = Math.min(127, wireProgram + 1)
-    const row = s.setlist.find((r) => r.program === pc)
-    if (row) {
-      setState(store, { currentSongId: row.id })
+  midi.reconnectFromState(st, {
+    onProgramChange: (wireProgram) => {
+      const s = getState(store)
+      const pc = Math.min(127, wireProgram + 1)
+      const row = s.setlist.find((r) => r.program === pc)
+      if (row) {
+        setState(store, { currentSongId: row.id })
+        broadcastState()
+      }
+    },
+    onCc: (msg) => {
+      const s = getState(store)
+      if (ch0Matches(msg.channel, s.muteAll.channel) && msg.controller === s.muteAll.cc) {
+        const next = engagedFromCcValue(s.muteAll, msg.value)
+        if (next !== muteAllEngaged) {
+          muteAllEngaged = next
+          broadcastState()
+        }
+      }
+      if (ch0Matches(msg.channel, s.muteFx.channel) && msg.controller === s.muteFx.cc) {
+        const next = engagedFromCcValue(s.muteFx, msg.value)
+        if (next !== muteFxEngaged) {
+          muteFxEngaged = next
+          broadcastState()
+        }
+      }
+    },
+    onSysexBytes: (bytes) => {
+      const cmd = parseMmcTransportCommand(bytes)
+      if (cmd === 'play') {
+        transportPlaying = true
+        broadcastState()
+      } else if (cmd === 'stop') {
+        transportPlaying = false
+        broadcastState()
+      }
+    },
+    onNoteOn: (msg) => {
+      const t = getState(store).transport
+      if (t.mode !== 'note') return
+      if (!ch0Matches(msg.channel, t.channel)) return
+      if (msg.note === t.startNote) {
+        transportPlaying = true
+        broadcastState()
+      } else if (msg.note === t.stopNote) {
+        transportPlaying = false
+        broadcastState()
+      }
+    },
+    onSystemRealtimeStart: () => {
+      transportPlaying = true
+      broadcastState()
+    },
+    onSystemRealtimeStop: () => {
+      transportPlaying = false
       broadcastState()
     }
   })
@@ -79,6 +142,13 @@ function createControlWindow(): BrowserWindow {
   } else {
     void win.loadFile(join(__dirname, '../renderer/control/index.html'))
   }
+
+  win.on('close', () => {
+    if (displayWindow && !displayWindow.isDestroyed()) {
+      displayWindow.destroy()
+      displayWindow = null
+    }
+  })
 
   win.on('closed', () => {
     controlWindow = null
@@ -226,11 +296,15 @@ function registerIpc(): void {
 
   ipcMain.handle('action:start', () => {
     midi.sendTransportStart(getState(store).transport)
+    transportPlaying = true
+    broadcastState()
     return buildPublicState()
   })
 
   ipcMain.handle('action:stop', () => {
     midi.sendTransportStop(getState(store).transport)
+    transportPlaying = false
+    broadcastState()
     return buildPublicState()
   })
 
@@ -311,43 +385,80 @@ function sanitizeTransport(t: AppState['transport']): AppState['transport'] {
 
 function sanitizeCc(t: Partial<AppState['muteAll']> & Record<string, unknown>): AppState['muteAll'] {
   const cur = getState(store).muteAll
+  const rawMode = t.outMode
+  const outMode =
+    rawMode === 'absolute' || rawMode === 'toggle127'
+      ? rawMode
+      : cur.outMode === 'absolute' || cur.outMode === 'toggle127'
+        ? cur.outMode
+        : 'absolute'
   return {
     channel: clampInt(Number(t.channel ?? cur.channel), 1, 16),
     cc: clampInt(Number(t.cc ?? cur.cc), 0, 127),
     valueOn: clampInt(Number(t.valueOn ?? cur.valueOn), 0, 127),
-    valueOff: clampInt(Number(t.valueOff ?? cur.valueOff), 0, 127)
+    valueOff: clampInt(Number(t.valueOff ?? cur.valueOff), 0, 127),
+    outMode
   }
 }
 
-app.whenReady().then(() => {
-  registerIpc()
-  const initial = getState(store)
-  if (!programsMatchListOrder(initial.setlist)) {
-    setState(store, { setlist: assignProgramsByOrder(initial.setlist) })
-  }
-  applyMidiFromState()
-  setupAppMenu({
-    openDisplay: () => openDisplayWindowAction(),
-    hideDisplay: () => hideDisplayWindowAction()
-  })
-  controlWindow = createControlWindow()
+const gotTheLock = app.requestSingleInstanceLock()
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      controlWindow = createControlWindow()
+if (!gotTheLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (controlWindow && !controlWindow.isDestroyed()) {
+      if (controlWindow.isMinimized()) controlWindow.restore()
+      controlWindow.show()
+      controlWindow.focus()
     }
   })
-})
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
+  app.whenReady().then(() => {
+    ensureLoopMidiRunning()
+    registerIpc()
+    const initial = getState(store)
+    if (!programsMatchListOrder(initial.setlist)) {
+      setState(store, { setlist: assignProgramsByOrder(initial.setlist) })
+    }
+    applyMidiFromState()
+    setupAppMenu({
+      openDisplay: () => openDisplayWindowAction(),
+      hideDisplay: () => hideDisplayWindowAction()
+    })
+    controlWindow = createControlWindow()
+
+    if (screen.getAllDisplays().length > 1) {
+      openDisplayWindowAction()
+    }
+
+    screen.on('display-added', () => {
+      if (screen.getAllDisplays().length > 1) {
+        openDisplayWindowAction()
+      }
+    })
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        controlWindow = createControlWindow()
+      }
+    })
+  })
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') {
+      midi.closeInput()
+      midi.closeOutput()
+      app.quit()
+    }
+  })
+
+  app.on('before-quit', () => {
+    if (displayWindow && !displayWindow.isDestroyed()) {
+      displayWindow.destroy()
+      displayWindow = null
+    }
     midi.closeInput()
     midi.closeOutput()
-    app.quit()
-  }
-})
-
-app.on('before-quit', () => {
-  midi.closeInput()
-  midi.closeOutput()
-})
+  })
+}

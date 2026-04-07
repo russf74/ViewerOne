@@ -9,7 +9,7 @@
   min-height: 0;
   min-width: 0;
   display: grid;
-  grid-template-columns: 4fr 3fr 3fr;
+  grid-template-columns: 2fr 1fr 1fr;
   background: #07080a;
 }
 
@@ -167,29 +167,28 @@
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  gap: clamp(8px, 2cqh, 16px);
+  gap: clamp(12px, 2.5cqh, 22px);
   width: 100%;
   flex: 1;
   min-height: 0;
 }
 
-.display-stage .dp-button-grid {
-  flex: 1;
+.display-stage .dp-mute-row {
+  flex: 2;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  grid-template-rows: repeat(3, 1fr);
-  gap: clamp(8px, 2cqh, 18px);
+  gap: clamp(10px, 2cqh, 18px);
   min-height: 0;
   align-content: stretch;
 }
 
-.display-stage .dp-button-grid button {
+.display-stage .dp-mute-row button {
   min-height: 0;
   height: 100%;
   align-self: stretch;
-  font-size: clamp(1.05rem, min(4.2cqh, 3.5cqi), 2.25rem);
-  font-weight: 600;
-  padding: clamp(6px, 1.1cqh, 14px) clamp(10px, 2cqi, 24px);
+  font-size: clamp(1.35rem, min(5.6cqh, 4.6cqi), 3.15rem);
+  font-weight: 700;
+  padding: clamp(10px, 1.9cqh, 22px) clamp(12px, 2.1cqi, 28px);
   border-radius: clamp(8px, 1.2cqh, 16px);
   border: 2px solid #343c4d;
   background: #1a1f2a;
@@ -198,11 +197,44 @@
   touch-action: manipulation;
 }
 
-.display-stage .dp-button-grid button:nth-child(5),
-.display-stage .dp-button-grid button:nth-child(6) {
-  font-size: clamp(1.25rem, min(4.8cqh, 4cqi), 2.75rem);
+.display-stage .dp-transport-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: clamp(8px, 1.8cqh, 16px);
+  min-height: 0;
+  align-content: stretch;
+}
+
+.display-stage .dp-transport-grid button {
+  min-height: 0;
+  height: 100%;
+  align-self: stretch;
+  font-weight: 600;
+  padding: clamp(6px, 1.1cqh, 16px) clamp(8px, 1.6cqi, 20px);
+  border-radius: clamp(8px, 1.2cqh, 16px);
+  border: 2px solid #343c4d;
+  background: #1a1f2a;
+  color: #e8ecf4;
+  cursor: pointer;
+  touch-action: manipulation;
+  font-family: 'Segoe UI Symbol', 'Segoe UI', system-ui, sans-serif;
+}
+
+/* One scale for all transport glyphs (■ ▶ ⏮ ⏭) */
+.display-stage .dp-btn-icon {
+  font-size: clamp(1.65rem, min(6.2cqh, 5.2cqi), 3.35rem);
+  line-height: 1;
   font-weight: 700;
-  letter-spacing: 0.02em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.display-stage .dp-btn-prev,
+.display-stage .dp-btn-next {
+  letter-spacing: 0;
 }
 
 .display-stage .dp-right-stack button:active {
@@ -211,6 +243,15 @@
 
 .display-stage .dp-right-stack button:hover {
   border-color: #5a6a8a;
+}
+
+.display-stage .dp-right-stack button:focus,
+.display-stage .dp-right-stack button:focus-visible {
+  outline: none;
+}
+
+.display-stage .dp-right-stack button::-moz-focus-inner {
+  border: 0;
 }
 
 .display-stage .dp-right-stack button.active {

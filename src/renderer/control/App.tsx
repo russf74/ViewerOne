@@ -293,6 +293,57 @@ export function App() {
                 />
               </div>
             </div>
+            <div className="row-flex" style={{ marginTop: 8 }}>
+              <div className="field" style={{ width: '72px' }}>
+                <label>Muted val</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={127}
+                  value={state.muteAll.valueOn}
+                  onChange={(e) => {
+                    const valueOn = Number(e.target.value)
+                    void patchSettings({
+                      muteAll: { ...state.muteAll, valueOn },
+                      muteFx: { ...state.muteFx, valueOn }
+                    })
+                  }}
+                />
+              </div>
+              <div className="field" style={{ width: '72px' }}>
+                <label>Unmuted val</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={127}
+                  value={state.muteAll.valueOff}
+                  onChange={(e) => {
+                    const valueOff = Number(e.target.value)
+                    void patchSettings({
+                      muteAll: { ...state.muteAll, valueOff },
+                      muteFx: { ...state.muteFx, valueOff }
+                    })
+                  }}
+                />
+              </div>
+            </div>
+            <div className="field" style={{ marginTop: 8, maxWidth: 'min(100%, 320px)' }}>
+              <label htmlFor="mute-out-mode">Mute CC send</label>
+              <select
+                id="mute-out-mode"
+                value={state.muteAll.outMode ?? 'absolute'}
+                onChange={(e) => {
+                  const outMode = e.target.value === 'absolute' ? 'absolute' : 'toggle127'
+                  void patchSettings({
+                    muteAll: { ...state.muteAll, outMode },
+                    muteFx: { ...state.muteFx, outMode }
+                  })
+                }}
+              >
+                <option value="absolute">Absolute (mute = value On, unmute = Off)</option>
+                <option value="toggle127">Legacy: 127 pulse / toggle</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -300,15 +351,17 @@ export function App() {
           <summary>MIDI routing tips (loopMIDI, Cubase, X32)</summary>
           <p>
             Use a virtual cable (e.g. loopMIDI). Cubase → app <strong>input</strong> for program changes on the PC
-            channel you set. App <strong>output</strong> back into Cubase; turn on MIDI Thru so CC reaches the X32.
+            channel you set. App <strong>output</strong> → Cubase; use a MIDI track (see Transport hint) to forward CC
+            to your X32 MIDI port.
           </p>
         </details>
         <details className="details-hint">
           <summary>Transport &amp; mute buttons</summary>
           <p>
-            <strong>Note</strong> mode sends short notes — map them in Cubase <strong>MIDI Remote</strong>.
-            <strong>MMC</strong> sends standard play/stop SysEx if your chain supports it. Mute toggles CC 127/0 for
-            your mixer mapping.
+            <strong>Note</strong> mode: map Start/Stop in <strong>MIDI Remote</strong>. <strong>MMC</strong>: SysEx
+            play/stop. <strong>Mutes</strong> (defaults): CC <strong>0</strong> when muted, <strong>127</strong> when
+            unmuted on Mic CC 80 / FX CC 85. Pass-through: MIDI track input = app loopback port, output = X32,
+            monitoring on. Use <strong>absolute</strong>; swap value On/Off in settings only if your desk is inverted.
           </p>
         </details>
       </section>
