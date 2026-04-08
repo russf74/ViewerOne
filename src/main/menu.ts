@@ -1,16 +1,13 @@
 import { BrowserWindow, Menu, app, dialog } from 'electron'
 
 const startHelp =
-  '1. MIDI: Create a virtual cable (e.g. loopMIDI). In this window, pick Input (from Cubase) and Output (back to Cubase). Set the Program Change channel to match Cubase.\n\n' +
-  '2. Setlist: Order = program numbers 1, 2, 3… (Cubase program N matches PC N; raw MIDI byte is offset +1). Add songs at the bottom; drag ⋮⋮ to reorder.\n\n' +
-  '3. Display: Use Display → Open fullscreen on second monitor for the touch screen.\n\n' +
-  '4. Cubase: Send program changes on that channel; map MIDI Remote to Start/Stop notes if using note mode.\n\n' +
+  '1. ESP32: Flash firmware/esp32-display, enable the pocket display below, pick your COM port.\n\n' +
+  '2. MIDI: Pick Input (from Cubase) and Output (back to Cubase) if you use program changes from Cubase. Set the Program Change channel to match.\n\n' +
+  '3. Setlist: Order = program numbers 1, 2, 3… Add songs; drag ⋮⋮ to reorder.\n\n' +
+  '4. Cubase: Send program changes on that channel when using MIDI follow.\n\n' +
   'Tip: View → Toggle Developer Tools if something looks wrong.'
 
-export function setupAppMenu(handlers: {
-  openDisplay: () => void
-  hideDisplay: () => void
-}): void {
+export function setupAppMenu(): void {
   const template: Electron.MenuItemConstructorOptions[] = [
     {
       label: 'File',
@@ -26,21 +23,6 @@ export function setupAppMenu(handlers: {
         { role: 'copy' },
         { role: 'paste' },
         { role: 'selectAll' }
-      ]
-    },
-    {
-      label: 'Display',
-      submenu: [
-        {
-          label: 'Open fullscreen on second monitor',
-          accelerator: 'CmdOrCtrl+Shift+D',
-          click: () => handlers.openDisplay()
-        },
-        {
-          label: 'Hide display window',
-          accelerator: 'CmdOrCtrl+Shift+H',
-          click: () => handlers.hideDisplay()
-        }
       ]
     },
     {

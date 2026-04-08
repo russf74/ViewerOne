@@ -13,15 +13,14 @@ const api = {
   removeSong: (id: string): Promise<PublicState> => ipcRenderer.invoke('setlist:remove', id),
   prevSong: (): Promise<PublicState> => ipcRenderer.invoke('setlist:prevSong'),
   nextSong: (): Promise<PublicState> => ipcRenderer.invoke('setlist:nextSong'),
+  previewPrev: (): Promise<PublicState> => ipcRenderer.invoke('setlist:previewPrev'),
+  previewNext: (): Promise<PublicState> => ipcRenderer.invoke('setlist:previewNext'),
+  selectSong: (id: string | null): Promise<PublicState> => ipcRenderer.invoke('setlist:selectSong', id),
   patchSettings: (patch: Partial<AppState>): Promise<PublicState> =>
     ipcRenderer.invoke('settings:patch', patch),
   refreshMidi: (): Promise<PublicState> => ipcRenderer.invoke('midi:refresh'),
-  openDisplay: (): Promise<PublicState> => ipcRenderer.invoke('window:display:open'),
-  hideDisplay: (): Promise<PublicState> => ipcRenderer.invoke('window:display:hide'),
-  start: (): Promise<PublicState> => ipcRenderer.invoke('action:start'),
-  stop: (): Promise<PublicState> => ipcRenderer.invoke('action:stop'),
-  muteAll: (): Promise<PublicState> => ipcRenderer.invoke('action:muteAll'),
-  muteFx: (): Promise<PublicState> => ipcRenderer.invoke('action:muteFx')
+  listEsp32Ports: (): Promise<{ path: string; friendly?: string }[]> =>
+    ipcRenderer.invoke('esp32:listPorts')
 }
 
 contextBridge.exposeInMainWorld('viewer', api)

@@ -42,8 +42,7 @@ export default defineConfig({
       modulePreload: false,
       rollupOptions: {
         input: {
-          control: resolve(__dirname, 'src/renderer/control/index.html'),
-          display: resolve(__dirname, 'src/renderer/display/index.html')
+          control: resolve(__dirname, 'src/renderer/control/index.html')
         }
       }
     },

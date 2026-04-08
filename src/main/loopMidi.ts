@@ -33,7 +33,7 @@ function findLoopMidiExe(): string | null {
   return null
 }
 
-/** Start loopMIDI if installed and not already running (Windows). */
+/** Start loopMIDI if installed and not already running (Windows). Cubase ↔ ViewerOne virtual cable. */
 export function ensureLoopMidiRunning(): void {
   if (process.platform !== 'win32') return
   if (isLoopMidiRunning()) {
@@ -43,7 +43,7 @@ export function ensureLoopMidiRunning(): void {
   const exe = findLoopMidiExe()
   if (!exe) {
     console.warn(
-      '[ViewerOne] loopMIDI not installed or not in the default folder — install from https://www.tobias-erichsen.de/software/loopmidi.html'
+      '[ViewerOne] loopMIDI not found in default install path — install from https://www.tobias-erichsen.de/software/loopmidi.html if you need a virtual MIDI port for Cubase.'
     )
     return
   }

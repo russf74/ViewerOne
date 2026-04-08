@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react'
+import type { CSSProperties, MouseEvent } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import type { SetlistItem } from '../../shared/types'
@@ -8,9 +8,11 @@ type Props = {
   isCurrent: boolean
   onChange: (patch: Pick<SetlistItem, 'title' | 'chords' | 'live'>) => void
   onRemove: () => void
+  /** Click row (not inputs/drag/live) to set as current for ESP preview — no MIDI. */
+  onActivateRow?: () => void
 }
 
-export function SortableRow({ item, isCurrent, onChange, onRemove }: Props) {
+export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow }: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.id
   })
@@ -22,8 +24,20 @@ export function SortableRow({ item, isCurrent, onChange, onRemove }: Props) {
     zIndex: isDragging ? 2 : undefined
   }
 
+  const onRowClick = (e: MouseEvent) => {
+    const t = e.target as HTMLElement
+    if (t.closest('input, button, textarea, .drag-handle, .setlist-live-cell')) return
+    onActivateRow?.()
+  }
+
   return (
-    <div ref={setNodeRef} style={style} className={`setlist-row${isCurrent ? ' current' : ''}`}>
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`setlist-row${isCurrent ? ' current' : ''}${onActivateRow ? ' setlist-row-selectable' : ''}`}
+      onClick={onRowClick}
+      title={onActivateRow ? 'Click row (not fields) to preview on ESP — no MIDI to Cubase' : undefined}
+    >
       <div className="drag-handle" {...attributes} {...listeners} title="Drag to reorder">
         ⋮⋮
       </div>

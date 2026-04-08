@@ -8,14 +8,12 @@ export type ViewerApi = {
   removeSong: (id: string) => Promise<PublicState>
   prevSong: () => Promise<PublicState>
   nextSong: () => Promise<PublicState>
+  previewPrev: () => Promise<PublicState>
+  previewNext: () => Promise<PublicState>
+  selectSong: (id: string | null) => Promise<PublicState>
   patchSettings: (patch: Partial<AppState>) => Promise<PublicState>
   refreshMidi: () => Promise<PublicState>
-  openDisplay: () => Promise<PublicState>
-  hideDisplay: () => Promise<PublicState>
-  start: () => Promise<PublicState>
-  stop: () => Promise<PublicState>
-  muteAll: () => Promise<PublicState>
-  muteFx: () => Promise<PublicState>
+  listEsp32Ports: () => Promise<{ path: string; friendly?: string }[]>
 }
 
 declare global {

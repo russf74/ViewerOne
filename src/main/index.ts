@@ -1,12 +1,19 @@
-import { app, BrowserWindow, ipcMain, screen } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { setupAppMenu } from './menu.js'
 import { existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createAppStore, getState, setState, newSetlistItem } from './store.js'
-import { MidiService, listInputs, listOutputs, parseMmcTransportCommand } from './midi.js'
+import { MidiService, listInputs, listOutputs } from './midi.js'
+import {
+  listSerialPorts,
+  pushEsp32Payload,
+  setEsp32SerialPort,
+  shutdownEsp32Serial
+} from './esp32Bridge.js'
+import { buildEsp32DisplayPayload } from '../shared/esp32Payload.js'
 import { ensureLoopMidiRunning } from './loopMidi.js'
-import type { AppState, CcButtonSettings, PublicState, SetlistItem } from '../shared/types.js'
+import type { AppState, PublicState, SetlistItem } from '../shared/types.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -18,13 +25,8 @@ function preloadScriptPath(): string {
 }
 
 let controlWindow: BrowserWindow | null = null
-let displayWindow: BrowserWindow | null = null
 const store = createAppStore()
 const midi = new MidiService()
-
-let muteAllEngaged = false
-let muteFxEngaged = false
-let transportPlaying = false
 
 function buildPublicState(): PublicState {
   const base = getState(store)
@@ -32,10 +34,22 @@ function buildPublicState(): PublicState {
     ...base,
     inputs: listInputs(),
     outputs: listOutputs(),
-    muteAllEngaged,
-    muteFxEngaged,
-    transportPlaying,
     appVersion: app.getVersion()
+  }
+}
+
+function broadcastEsp32IfEnabled(): void {
+  const st = getState(store)
+  if (!st.esp32Enabled || !st.esp32SerialPort) return
+  pushEsp32Payload(buildEsp32DisplayPayload(st))
+}
+
+function syncEsp32SerialFromStore(): void {
+  const st = getState(store)
+  if (st.esp32Enabled && st.esp32SerialPort) {
+    setEsp32SerialPort(st.esp32SerialPort, () => broadcastEsp32IfEnabled())
+  } else {
+    setEsp32SerialPort(null)
   }
 }
 
@@ -44,18 +58,7 @@ function broadcastState(): void {
   for (const w of BrowserWindow.getAllWindows()) {
     w.webContents.send('state:update', payload)
   }
-}
-
-function ch0Matches(msgCh0: number, settingsCh1to16: number): boolean {
-  return msgCh0 === Math.max(0, Math.min(15, settingsCh1to16 - 1))
-}
-
-/** True = mute engaged (channels muted). Supports both polarities: 127/0 or 0/127 (X32 often uses 0=muted). */
-function engagedFromCcValue(settings: CcButtonSettings, value: number): boolean {
-  if (value === settings.valueOn) return true
-  if (value === settings.valueOff) return false
-  if (settings.valueOn > settings.valueOff) return value >= 64
-  return value < 64
+  broadcastEsp32IfEnabled()
 }
 
 function applyMidiFromState(): void {
@@ -69,53 +72,6 @@ function applyMidiFromState(): void {
         setState(store, { currentSongId: row.id })
         broadcastState()
       }
-    },
-    onCc: (msg) => {
-      const s = getState(store)
-      if (ch0Matches(msg.channel, s.muteAll.channel) && msg.controller === s.muteAll.cc) {
-        const next = engagedFromCcValue(s.muteAll, msg.value)
-        if (next !== muteAllEngaged) {
-          muteAllEngaged = next
-          broadcastState()
-        }
-      }
-      if (ch0Matches(msg.channel, s.muteFx.channel) && msg.controller === s.muteFx.cc) {
-        const next = engagedFromCcValue(s.muteFx, msg.value)
-        if (next !== muteFxEngaged) {
-          muteFxEngaged = next
-          broadcastState()
-        }
-      }
-    },
-    onSysexBytes: (bytes) => {
-      const cmd = parseMmcTransportCommand(bytes)
-      if (cmd === 'play') {
-        transportPlaying = true
-        broadcastState()
-      } else if (cmd === 'stop') {
-        transportPlaying = false
-        broadcastState()
-      }
-    },
-    onNoteOn: (msg) => {
-      const t = getState(store).transport
-      if (t.mode !== 'note') return
-      if (!ch0Matches(msg.channel, t.channel)) return
-      if (msg.note === t.startNote) {
-        transportPlaying = true
-        broadcastState()
-      } else if (msg.note === t.stopNote) {
-        transportPlaying = false
-        broadcastState()
-      }
-    },
-    onSystemRealtimeStart: () => {
-      transportPlaying = true
-      broadcastState()
-    },
-    onSystemRealtimeStop: () => {
-      transportPlaying = false
-      broadcastState()
     }
   })
 }
@@ -123,9 +79,9 @@ function applyMidiFromState(): void {
 function createControlWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1024,
-    height: 780,
-    minWidth: 520,
-    minHeight: 480,
+    height: 800,
+    minWidth: 560,
+    minHeight: 520,
     show: true,
     title: `ViewerOne v${app.getVersion()} — Control`,
     webPreferences: {
@@ -143,75 +99,11 @@ function createControlWindow(): BrowserWindow {
     void win.loadFile(join(__dirname, '../renderer/control/index.html'))
   }
 
-  win.on('close', () => {
-    if (displayWindow && !displayWindow.isDestroyed()) {
-      displayWindow.destroy()
-      displayWindow = null
-    }
-  })
-
   win.on('closed', () => {
     controlWindow = null
   })
 
   return win
-}
-
-function createDisplayWindow(): BrowserWindow {
-  const win = new BrowserWindow({
-    show: false,
-    fullscreen: false,
-    backgroundColor: '#0a0a0c',
-    autoHideMenuBar: true,
-    title: `ViewerOne v${app.getVersion()} — Display`,
-    webPreferences: {
-      preload: preloadScriptPath(),
-      contextIsolation: true,
-      sandbox: false,
-      nodeIntegration: false
-    }
-  })
-
-  if (!app.isPackaged && process.env['ELECTRON_RENDERER_URL']) {
-    const base = process.env['ELECTRON_RENDERER_URL'].replace(/\/$/, '')
-    void win.loadURL(`${base}/display/index.html`)
-  } else {
-    void win.loadFile(join(__dirname, '../renderer/display/index.html'))
-  }
-
-  win.on('closed', () => {
-    displayWindow = null
-  })
-
-  return win
-}
-
-function placeDisplayOnSecondary(win: BrowserWindow): void {
-  const displays = screen.getAllDisplays()
-  const primary = screen.getPrimaryDisplay()
-  const external = displays.find((d) => d.id !== primary.id) ?? primary
-  const { x, y, width, height } = external.workArea
-  win.setBounds({ x, y, width, height })
-  win.setFullScreen(true)
-}
-
-function ensureDisplayWindow(): BrowserWindow {
-  if (displayWindow && !displayWindow.isDestroyed()) return displayWindow
-  displayWindow = createDisplayWindow()
-  return displayWindow
-}
-
-function openDisplayWindowAction(): void {
-  const win = ensureDisplayWindow()
-  win.show()
-  placeDisplayOnSecondary(win)
-}
-
-function hideDisplayWindowAction(): void {
-  if (displayWindow && !displayWindow.isDestroyed()) {
-    displayWindow.setFullScreen(false)
-    displayWindow.hide()
-  }
 }
 
 function registerIpc(): void {
@@ -263,9 +155,13 @@ function registerIpc(): void {
     if (patch.programChangeChannel !== undefined) {
       allowed.programChangeChannel = clampInt(patch.programChangeChannel, 1, 16)
     }
-    if (patch.transport !== undefined) allowed.transport = sanitizeTransport(patch.transport)
-    if (patch.muteAll !== undefined) allowed.muteAll = sanitizeCc(patch.muteAll)
-    if (patch.muteFx !== undefined) allowed.muteFx = sanitizeCc(patch.muteFx)
+    if (patch.esp32SerialPort !== undefined) {
+      allowed.esp32SerialPort =
+        typeof patch.esp32SerialPort === 'string' && patch.esp32SerialPort.trim()
+          ? patch.esp32SerialPort.trim()
+          : null
+    }
+    if (patch.esp32Enabled !== undefined) allowed.esp32Enabled = Boolean(patch.esp32Enabled)
     setState(store, allowed)
     if (
       allowed.midiInputName !== undefined ||
@@ -273,6 +169,9 @@ function registerIpc(): void {
       allowed.programChangeChannel !== undefined
     ) {
       applyMidiFromState()
+    }
+    if (allowed.esp32SerialPort !== undefined || allowed.esp32Enabled !== undefined) {
+      syncEsp32SerialFromStore()
     }
     broadcastState()
     return buildPublicState()
@@ -284,42 +183,12 @@ function registerIpc(): void {
     return buildPublicState()
   })
 
-  ipcMain.handle('window:display:open', () => {
-    openDisplayWindowAction()
-    return buildPublicState()
-  })
-
-  ipcMain.handle('window:display:hide', () => {
-    hideDisplayWindowAction()
-    return buildPublicState()
-  })
-
-  ipcMain.handle('action:start', () => {
-    midi.sendTransportStart(getState(store).transport)
-    transportPlaying = true
-    broadcastState()
-    return buildPublicState()
-  })
-
-  ipcMain.handle('action:stop', () => {
-    midi.sendTransportStop(getState(store).transport)
-    transportPlaying = false
-    broadcastState()
-    return buildPublicState()
-  })
-
-  ipcMain.handle('action:muteAll', () => {
-    muteAllEngaged = !muteAllEngaged
-    midi.sendCcToggle(getState(store).muteAll, muteAllEngaged)
-    broadcastState()
-    return buildPublicState()
-  })
-
-  ipcMain.handle('action:muteFx', () => {
-    muteFxEngaged = !muteFxEngaged
-    midi.sendCcToggle(getState(store).muteFx, muteFxEngaged)
-    broadcastState()
-    return buildPublicState()
+  ipcMain.handle('esp32:listPorts', async () => {
+    try {
+      return await listSerialPorts()
+    } catch {
+      return []
+    }
   })
 
   ipcMain.handle('setlist:prevSong', () => {
@@ -353,6 +222,49 @@ function registerIpc(): void {
     broadcastState()
     return buildPublicState()
   })
+
+  /** Move current song for ESP / UI preview only — does not send MIDI program change. */
+  ipcMain.handle('setlist:previewPrev', () => {
+    const st = getState(store)
+    const { setlist } = st
+    if (setlist.length === 0) return buildPublicState()
+    const idx = st.currentSongId ? setlist.findIndex((r) => r.id === st.currentSongId) : -1
+    let nextIdx: number | null = null
+    if (idx > 0) nextIdx = idx - 1
+    else if (idx === -1) nextIdx = setlist.length - 1
+    if (nextIdx === null) return buildPublicState()
+    setState(store, { currentSongId: setlist[nextIdx].id })
+    broadcastState()
+    return buildPublicState()
+  })
+
+  ipcMain.handle('setlist:previewNext', () => {
+    const st = getState(store)
+    const { setlist } = st
+    if (setlist.length === 0) return buildPublicState()
+    const idx = st.currentSongId ? setlist.findIndex((r) => r.id === st.currentSongId) : -1
+    let nextIdx: number | null = null
+    if (idx >= 0 && idx < setlist.length - 1) nextIdx = idx + 1
+    else if (idx === -1) nextIdx = 0
+    if (nextIdx === null) return buildPublicState()
+    setState(store, { currentSongId: setlist[nextIdx].id })
+    broadcastState()
+    return buildPublicState()
+  })
+
+  ipcMain.handle('setlist:selectSong', (_e, id: unknown) => {
+    const st = getState(store)
+    if (id === null || id === undefined || id === '') {
+      setState(store, { currentSongId: null })
+      broadcastState()
+      return buildPublicState()
+    }
+    if (typeof id !== 'string') return buildPublicState()
+    if (!st.setlist.some((r) => r.id === id)) return buildPublicState()
+    setState(store, { currentSongId: id })
+    broadcastState()
+    return buildPublicState()
+  })
 }
 
 /** Program numbers follow setlist order: row i → PC = min(i + 1, 127) (1-based for Cubase). */
@@ -371,34 +283,6 @@ function clampInt(n: number, min: number, max: number): number {
   const x = Math.trunc(Number(n))
   if (Number.isNaN(x)) return min
   return Math.max(min, Math.min(max, x))
-}
-
-function sanitizeTransport(t: AppState['transport']): AppState['transport'] {
-  const mode = t.mode === 'mmc' ? 'mmc' : 'note'
-  return {
-    mode,
-    channel: clampInt(t.channel, 1, 16),
-    startNote: clampInt(t.startNote, 0, 127),
-    stopNote: clampInt(t.stopNote, 0, 127)
-  }
-}
-
-function sanitizeCc(t: Partial<AppState['muteAll']> & Record<string, unknown>): AppState['muteAll'] {
-  const cur = getState(store).muteAll
-  const rawMode = t.outMode
-  const outMode =
-    rawMode === 'absolute' || rawMode === 'toggle127'
-      ? rawMode
-      : cur.outMode === 'absolute' || cur.outMode === 'toggle127'
-        ? cur.outMode
-        : 'absolute'
-  return {
-    channel: clampInt(Number(t.channel ?? cur.channel), 1, 16),
-    cc: clampInt(Number(t.cc ?? cur.cc), 0, 127),
-    valueOn: clampInt(Number(t.valueOn ?? cur.valueOn), 0, 127),
-    valueOff: clampInt(Number(t.valueOff ?? cur.valueOff), 0, 127),
-    outMode
-  }
 }
 
 const gotTheLock = app.requestSingleInstanceLock()
@@ -422,21 +306,9 @@ if (!gotTheLock) {
       setState(store, { setlist: assignProgramsByOrder(initial.setlist) })
     }
     applyMidiFromState()
-    setupAppMenu({
-      openDisplay: () => openDisplayWindowAction(),
-      hideDisplay: () => hideDisplayWindowAction()
-    })
+    syncEsp32SerialFromStore()
+    setupAppMenu()
     controlWindow = createControlWindow()
-
-    if (screen.getAllDisplays().length > 1) {
-      openDisplayWindowAction()
-    }
-
-    screen.on('display-added', () => {
-      if (screen.getAllDisplays().length > 1) {
-        openDisplayWindowAction()
-      }
-    })
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
@@ -454,10 +326,7 @@ if (!gotTheLock) {
   })
 
   app.on('before-quit', () => {
-    if (displayWindow && !displayWindow.isDestroyed()) {
-      displayWindow.destroy()
-      displayWindow = null
-    }
+    shutdownEsp32Serial()
     midi.closeInput()
     midi.closeOutput()
   })
