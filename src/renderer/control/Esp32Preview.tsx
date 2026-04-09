@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import type { PublicState } from '../../shared/types'
-import { buildEsp32DisplayPayload, ESP32_WAITING_TITLE } from '../../shared/esp32Payload'
+import { buildEsp32DisplayPayload, chordBlockPlainText, ESP32_WAITING_TITLE } from '../../shared/esp32Payload'
 
 type Props = {
   state: PublicState
@@ -13,7 +13,8 @@ export function Esp32Preview({ state }: Props) {
     [state.setlist, state.currentSongId]
   )
 
-  const titleColor = payload.l ? '#6fdd7a' : '#e06c75'
+  const titleColor = '#ffffff'
+  const chordColor = payload.l ? '#00e5ff' : '#ffe066'
   const isWaiting = payload.t === ESP32_WAITING_TITLE && !payload.c
 
   return (
@@ -40,7 +41,15 @@ export function Esp32Preview({ state }: Props) {
             </div>
           </div>
           <div className="esp32-sim-half esp32-sim-half--chords">
-            <div className="esp32-sim-chords-fill">{payload.c || (isWaiting ? '' : '—')}</div>
+            <div className="esp32-sim-chords-fill" style={{ color: chordColor }}>
+              {isWaiting && !payload.c ? (
+                ''
+              ) : !payload.c.trim() ? (
+                '—'
+              ) : (
+                chordBlockPlainText(payload.c)
+              )}
+            </div>
           </div>
         </div>
       </div>

@@ -647,8 +647,7 @@ button:disabled {
   line-height: 1.2;
 }
 
-.esp32-sim-title-fill,
-.esp32-sim-chords-fill {
+.esp32-sim-title-fill {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
@@ -664,6 +663,21 @@ button:disabled {
   font-size: clamp(11px, 24cqmin, 30px);
 }
 
+/* Block text so `N`→newline matches firmware; flex row was laying out each line as columns. */
 .esp32-sim-chords-fill {
-  color: #e6c84a;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: block;
+  align-self: stretch;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: center;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  overflow-y: auto;
+  padding: 4px 4px 2px;
+  font-size: clamp(10px, 20cqmin, 24px);
 }

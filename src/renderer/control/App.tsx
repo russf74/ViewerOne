@@ -308,7 +308,8 @@ export function App() {
             </p>
           ) : (
             <p className="setlist-hint">
-              Reorder with ⋮⋮ to change PCs. Preview controls do not send MIDI to Cubase.
+              Reorder with ⋮⋮ to change PCs. In Chords, type <strong>N</strong> for a line break on the ESP (the letter is not shown).
+              Preview controls do not send MIDI to Cubase.
             </p>
           )}
           <button type="button" className="primary setlist-add-btn" onClick={() => void window.viewer.addSong().then(apply)}>

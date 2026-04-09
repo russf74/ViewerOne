@@ -1,4 +1,5 @@
-import type { CSSProperties, MouseEvent } from 'react'
+import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import type { SetlistItem } from '../../shared/types'
@@ -17,6 +18,34 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
     id: item.id
   })
 
+  const [titleDraft, setTitleDraft] = useState(item.title)
+  const [chordsDraft, setChordsDraft] = useState(item.chords)
+  const titleFocus = useRef(false)
+  const chordsFocus = useRef(false)
+
+  useEffect(() => {
+    setTitleDraft(item.title)
+    setChordsDraft(item.chords)
+  }, [item.id])
+
+  useEffect(() => {
+    if (!titleFocus.current) setTitleDraft(item.title)
+  }, [item.title])
+
+  useEffect(() => {
+    if (!chordsFocus.current) setChordsDraft(item.chords)
+  }, [item.chords])
+
+  const commitTitle = () => {
+    titleFocus.current = false
+    if (titleDraft !== item.title) onChange({ title: titleDraft })
+  }
+
+  const commitChords = () => {
+    chordsFocus.current = false
+    if (chordsDraft !== item.chords) onChange({ chords: chordsDraft })
+  }
+
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -28,6 +57,20 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
     const t = e.target as HTMLElement
     if (t.closest('input, button, textarea, .drag-handle, .setlist-live-cell')) return
     onActivateRow?.()
+  }
+
+  const onTitleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      e.currentTarget.blur()
+    }
+  }
+
+  const onChordsKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      e.currentTarget.blur()
+    }
   }
 
   return (
@@ -47,16 +90,26 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
       <input
         className="text-input"
         type="text"
-        value={item.title}
-        onChange={(e) => onChange({ title: e.target.value })}
+        value={titleDraft}
+        onChange={(e) => setTitleDraft(e.target.value)}
+        onFocus={() => {
+          titleFocus.current = true
+        }}
+        onBlur={commitTitle}
+        onKeyDown={onTitleKeyDown}
         placeholder="Title"
       />
       <input
         className="text-input chord-line"
         type="text"
-        value={item.chords}
-        onChange={(e) => onChange({ chords: e.target.value })}
-        placeholder="Chords"
+        value={chordsDraft}
+        onChange={(e) => setChordsDraft(e.target.value)}
+        onFocus={() => {
+          chordsFocus.current = true
+        }}
+        onBlur={commitChords}
+        onKeyDown={onChordsKeyDown}
+        placeholder="Chords (N = new line on ESP)"
       />
       <label className="setlist-live-cell" title="Live: chord display is green; off = red">
         <input

@@ -2,6 +2,7 @@
  * ViewerOne — ESP32-2432S028R ILI9341 (CYD), landscape 320×240 via ROTATION in board_pins.h
  *
  * PC @ 115200: {"t":"Title","c":"Chords","l":true}
+ * Chords: capital letter N in "c" starts a new line (N is not drawn).
  *
  * Display: LovyanGFX (same SPI wiring as firmware/display-pinout-scan profiles 1–2).
  * TFT_eSPI was dropped — its User_Setup path did not match this hardware reliably.
@@ -9,15 +10,19 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <cstdio>
 #include <driver/spi_common.h>
 #include <LovyanGFX.hpp>
 
 #include "board_pins.h"
 
+/** Keep in sync with repository root `package.json` version. */
+static constexpr const char *VIEWERONE_FW_VERSION = "0.4.1";
+
 // RGB565 (same as TFT_eSPI defaults)
 static constexpr uint16_t C_BLACK = 0x0000;
-static constexpr uint16_t C_GREEN = 0x07E0;
-static constexpr uint16_t C_RED = 0xF800;
+static constexpr uint16_t C_WHITE = 0xFFFF;
+static constexpr uint16_t C_CYAN = 0x07FF;
 static constexpr uint16_t C_YELLOW = 0xFFE0;
 static constexpr uint16_t C_GREY = 0x7BEF;
 
@@ -111,12 +116,37 @@ static int32_t drawTextBlock(const char *text, int32_t x, int32_t y, int32_t max
   return cy;
 }
 
+/**
+ * Chord string: ASCII 'N' splits logical lines; the marker is never sent to the printer.
+ * C-string scan avoids String::indexOf edge cases that could leave 'N' visible on some builds.
+ */
+static int32_t drawChordLines(const char *chords, int32_t x, int32_t y, int32_t maxW, int32_t maxY, uint16_t color,
+                              uint8_t textSize) {
+  if (!chords || !*chords) return y;
+  int32_t cy = y;
+  const char *p = chords;
+  const int32_t minRoom = 8 * textSize + 2;
+  while (cy < maxY - minRoom) {
+    const char *q = p;
+    while (*q && *q != 'N') ++q;
+    String part;
+    for (const char *t = p; t < q; ++t) part += *t;
+    part.trim();
+    if (part.length() > 0) {
+      cy = drawTextBlock(part.c_str(), x, cy, maxW, maxY, color, textSize, 0);
+    }
+    if (!*q) break;
+    p = q + 1;
+  }
+  return cy;
+}
+
 static void drawSong(const char *title, const char *chords, bool live) {
   const int32_t W = tft.width();
   const int32_t H = tft.height();
   const int32_t mid = H / 2;
-  const uint16_t titleColor = live ? C_GREEN : C_RED;
-  const uint16_t chordColor = C_YELLOW;
+  const uint16_t titleColor = C_WHITE;
+  const uint16_t chordColor = live ? C_CYAN : C_YELLOW;
   constexpr uint8_t kTitleSize = 5;
   constexpr uint8_t kChordSize = 5;
   constexpr int32_t kPad = 6;
@@ -125,7 +155,7 @@ static void drawSong(const char *title, const char *chords, bool live) {
 
   /* Big font; wraps to extra lines as needed within top/bottom halves (no fixed line cap). */
   drawTextBlock(title, kPad, kPad, W - 2 * kPad, mid - kPad, titleColor, kTitleSize, 0);
-  drawTextBlock(chords, kPad, mid + kPad / 2, W - 2 * kPad, H - kPad, chordColor, kChordSize, 0);
+  drawChordLines(chords, kPad, mid + kPad / 2, W - 2 * kPad, H - kPad, chordColor, kChordSize);
 
   Serial.printf("[ViewerOne] draw ok live=%d\n", live ? 1 : 0);
 }
@@ -154,9 +184,13 @@ void setup() {
   tft.setTextSize(1);
   tft.setTextColor(C_GREY, C_BLACK);
   tft.setCursor(4, H - 20);
-  tft.println("ViewerOne 115200");
+  {
+    char line[40];
+    snprintf(line, sizeof(line), "ViewerOne %s 115200", VIEWERONE_FW_VERSION);
+    tft.println(line);
+  }
 
-  Serial.println("ViewerOne ILI9341 ready @ 115200 (LovyanGFX)");
+  Serial.printf("ViewerOne ILI9341 v%s ready @ 115200 (LovyanGFX)\n", VIEWERONE_FW_VERSION);
 }
 
 void loop() {
