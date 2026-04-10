@@ -152,8 +152,9 @@ export function App() {
             <div className="settings-card">
               <h2 className="settings-card-title">MIDI</h2>
               <p className="settings-card-lead">
-                Route a virtual cable (e.g. loopMIDI) from Cubase into <strong>In</strong>. Program changes on{' '}
-                <strong>PC ch</strong> update the current song. The board gets lyrics over USB, not MIDI.
+                Route a virtual cable (e.g. loopMIDI) from Cubase into <strong>In</strong> and back on <strong>Out</strong>.
+                Program changes on <strong>PC ch</strong> pick the song. Send <strong>CC</strong> (default 85; muted = 0, unmuted = 127) on{' '}
+                <strong>Mute ch</strong> to sync FX mute with the display; a tap on the ESP screen sends the same CC out.
               </p>
               <div className="settings-fields settings-fields--midi">
                 <div className="field field-grow">
@@ -197,6 +198,36 @@ export function App() {
                     onChange={(e) => void patchSettings({ programChangeChannel: Number(e.target.value) })}
                   />
                 </div>
+                <div className="field field-pc">
+                  <label htmlFor="mch">Mute ch</label>
+                  <input
+                    id="mch"
+                    type="number"
+                    min={1}
+                    max={16}
+                    value={state.muteFxMidiChannel}
+                    onChange={(e) => void patchSettings({ muteFxMidiChannel: Number(e.target.value) })}
+                  />
+                </div>
+                <div className="field field-pc">
+                  <label htmlFor="mcc">CC</label>
+                  <input
+                    id="mcc"
+                    type="number"
+                    min={0}
+                    max={127}
+                    value={state.muteFxCC}
+                    onChange={(e) => void patchSettings({ muteFxCC: Number(e.target.value) })}
+                  />
+                </div>
+                <label className="esp-enable esp-enable--inline">
+                  <input
+                    type="checkbox"
+                    checked={state.fxMuted}
+                    onChange={(e) => void patchSettings({ fxMuted: e.target.checked })}
+                  />
+                  <span>FX muted (tint + CC 0)</span>
+                </label>
                 <div className="field field-btn">
                   <label className="label-spacer" aria-hidden>
                     &nbsp;

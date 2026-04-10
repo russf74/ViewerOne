@@ -1,11 +1,13 @@
 /**
  * ViewerOne — ESP32-2432S028R ILI9341 (CYD), landscape 320×240 via ROTATION in board_pins.h
  *
- * PC @ 115200: {"t":"Title","c":"Chords","l":true}
+ * PC @ 115200: {"t":"Title","c":"Chords","l":true,"m":false}
+ *   m = FX mute tint (faint red vs blue). Omitted/false = unmuted.
+ * To PC (touch): {"evt":"mute_toggle"} — tap anywhere to toggle (handled by ViewerOne).
+ *
  * Chords: capital letter N in "c" starts a new line (N is not drawn).
  *
  * Display: LovyanGFX (same SPI wiring as firmware/display-pinout-scan profiles 1–2).
- * TFT_eSPI was dropped — its User_Setup path did not match this hardware reliably.
  */
 
 #include <Arduino.h>
@@ -17,19 +19,22 @@
 #include "board_pins.h"
 
 /** Keep in sync with repository root `package.json` version. */
-static constexpr const char *VIEWERONE_FW_VERSION = "0.4.1";
+static constexpr const char *VIEWERONE_FW_VERSION = "0.5.0";
 
-// RGB565 (same as TFT_eSPI defaults)
+// RGB565
 static constexpr uint16_t C_BLACK = 0x0000;
 static constexpr uint16_t C_WHITE = 0xFFFF;
 static constexpr uint16_t C_CYAN = 0x07FF;
 static constexpr uint16_t C_YELLOW = 0xFFE0;
 static constexpr uint16_t C_GREY = 0x7BEF;
+/** Muted: vivid dark red wash; unmuted: plain black */
+static constexpr uint16_t C_BG_MUTED = 0x7000;
 
 /** ILI9341 + SPI — profile matching pinout-scan id 2 (HSPI, 40 MHz) or id 1 (20 MHz slow env). */
 class PanelGfx : public lgfx::LGFX_Device {
   lgfx::Bus_SPI _bus{};
   lgfx::Panel_ILI9341 _panel{};
+  lgfx::Touch_XPT2046 _touch{};
 
 public:
   PanelGfx() {
@@ -73,18 +78,44 @@ public:
       _panel.config(cfg);
     }
     setPanel(&_panel);
+
+#if !defined(VIEWERONE_NO_TOUCH)
+    {
+      auto touch_cfg = _touch.config();
+      touch_cfg.spi_host = VSPI_HOST;
+      touch_cfg.freq = 2500000;
+      touch_cfg.pin_sclk = PIN_TOUCH_SCLK;
+      touch_cfg.pin_mosi = PIN_TOUCH_MOSI;
+      touch_cfg.pin_miso = PIN_TOUCH_MISO;
+      touch_cfg.pin_cs = PIN_TOUCH_CS;
+      touch_cfg.pin_int = PIN_TOUCH_IRQ;
+      touch_cfg.bus_shared = false;
+      touch_cfg.offset_rotation = ROTATION;
+      touch_cfg.x_min = 300;
+      touch_cfg.x_max = 3900;
+      touch_cfg.y_min = 200;
+      touch_cfg.y_max = 3900;
+      _touch.config(touch_cfg);
+    }
+    _panel.setTouch(&_touch);
+#endif
   }
 };
 
 static String lineBuf;
 static PanelGfx tft;
 
+#if !defined(VIEWERONE_NO_TOUCH)
+static bool s_touch_down = false;
+static uint32_t s_touch_down_ms = 0;
+#endif
+
 /** Word-wrap (GLCD font); converts newlines to spaces. Optional maxLines (0 = no limit). */
 static int32_t drawTextBlock(const char *text, int32_t x, int32_t y, int32_t maxW, int32_t maxY, uint16_t color,
-                             uint8_t textSize, int32_t maxLines = 0) {
+                             uint8_t textSize, uint16_t bg, int32_t maxLines = 0) {
   if (!text || !*text) return y;
   tft.setTextSize(textSize);
-  tft.setTextColor(color, C_BLACK);
+  tft.setTextColor(color, bg);
   const int32_t cw = 6 * textSize;
   const int32_t lineH = 8 * textSize + 2;
   String rem = String(text);
@@ -118,10 +149,9 @@ static int32_t drawTextBlock(const char *text, int32_t x, int32_t y, int32_t max
 
 /**
  * Chord string: ASCII 'N' splits logical lines; the marker is never sent to the printer.
- * C-string scan avoids String::indexOf edge cases that could leave 'N' visible on some builds.
  */
 static int32_t drawChordLines(const char *chords, int32_t x, int32_t y, int32_t maxW, int32_t maxY, uint16_t color,
-                              uint8_t textSize) {
+                              uint8_t textSize, uint16_t bg) {
   if (!chords || !*chords) return y;
   int32_t cy = y;
   const char *p = chords;
@@ -133,7 +163,7 @@ static int32_t drawChordLines(const char *chords, int32_t x, int32_t y, int32_t 
     for (const char *t = p; t < q; ++t) part += *t;
     part.trim();
     if (part.length() > 0) {
-      cy = drawTextBlock(part.c_str(), x, cy, maxW, maxY, color, textSize, 0);
+      cy = drawTextBlock(part.c_str(), x, cy, maxW, maxY, color, textSize, bg, 0);
     }
     if (!*q) break;
     p = q + 1;
@@ -141,24 +171,46 @@ static int32_t drawChordLines(const char *chords, int32_t x, int32_t y, int32_t 
   return cy;
 }
 
-static void drawSong(const char *title, const char *chords, bool live) {
+static void drawSong(const char *title, const char *chords, bool live, bool muted) {
   const int32_t W = tft.width();
   const int32_t H = tft.height();
   const int32_t mid = H / 2;
+  const uint16_t bg = muted ? C_BG_MUTED : C_BLACK;
   const uint16_t titleColor = C_WHITE;
   const uint16_t chordColor = live ? C_CYAN : C_YELLOW;
   constexpr uint8_t kTitleSize = 5;
   constexpr uint8_t kChordSize = 5;
   constexpr int32_t kPad = 6;
 
-  tft.fillScreen(C_BLACK);
+  tft.fillScreen(bg);
 
-  /* Big font; wraps to extra lines as needed within top/bottom halves (no fixed line cap). */
-  drawTextBlock(title, kPad, kPad, W - 2 * kPad, mid - kPad, titleColor, kTitleSize, 0);
-  drawChordLines(chords, kPad, mid + kPad / 2, W - 2 * kPad, H - kPad, chordColor, kChordSize);
-
-  Serial.printf("[ViewerOne] draw ok live=%d\n", live ? 1 : 0);
+  drawTextBlock(title, kPad, kPad, W - 2 * kPad, mid - kPad, titleColor, kTitleSize, bg, 0);
+  drawChordLines(chords, kPad, mid + kPad / 2, W - 2 * kPad, H - kPad, chordColor, kChordSize, bg);
 }
+
+#if !defined(VIEWERONE_NO_TOUCH)
+static void pollTouchMuteToggle() {
+  int32_t tx = 0;
+  int32_t ty = 0;
+  bool down = tft.getTouch(&tx, &ty);
+  uint32_t now = millis();
+
+  if (down) {
+    if (!s_touch_down) {
+      s_touch_down = true;
+      s_touch_down_ms = now;
+    }
+  } else {
+    if (s_touch_down) {
+      uint32_t dur = now - s_touch_down_ms;
+      if (dur >= 30 && dur < 1200) {
+        Serial.println("{\"evt\":\"mute_toggle\"}");
+      }
+    }
+    s_touch_down = false;
+  }
+}
+#endif
 
 void setup() {
   Serial.begin(115200);
@@ -185,12 +237,17 @@ void setup() {
   tft.setTextColor(C_GREY, C_BLACK);
   tft.setCursor(4, H - 20);
   {
-    char line[40];
+    char line[48];
     snprintf(line, sizeof(line), "ViewerOne %s 115200", VIEWERONE_FW_VERSION);
     tft.println(line);
   }
 
-  Serial.printf("ViewerOne ILI9341 v%s ready @ 115200 (LovyanGFX)\n", VIEWERONE_FW_VERSION);
+  Serial.printf("ViewerOne ILI9341 v%s ready @ 115200 (LovyanGFX", VIEWERONE_FW_VERSION);
+#if defined(VIEWERONE_NO_TOUCH)
+  Serial.printf(", touch off)\n");
+#else
+  Serial.printf(", touch on)\n");
+#endif
 }
 
 void loop() {
@@ -209,9 +266,14 @@ void loop() {
       const char *t = doc["t"] | "";
       const char *c = doc["c"] | "";
       bool l = doc["l"] | true;
-      drawSong(t, c, l);
+      bool m = doc["m"] | false;
+      drawSong(t, c, l, m);
     } else if (lineBuf.length() < 480) {
       lineBuf += ch;
     }
   }
+
+#if !defined(VIEWERONE_NO_TOUCH)
+  pollTouchMuteToggle();
+#endif
 }

@@ -16,16 +16,17 @@ export function chordBlockPlainText(raw: string): string {
 }
 
 export function buildEsp32DisplayPayload(
-  st: Pick<AppState, 'setlist' | 'currentSongId'>
+  st: Pick<AppState, 'setlist' | 'currentSongId' | 'fxMuted'>
 ): Esp32DisplayPayload {
   const row = st.currentSongId ? st.setlist.find((r) => r.id === st.currentSongId) : null
+  const m = st.fxMuted
   if (!row || st.setlist.length === 0) {
-    return { t: ESP32_WAITING_TITLE, c: '', l: false }
+    return { t: ESP32_WAITING_TITLE, c: '', l: false, m }
   }
   const t = (row.title ?? '').trim()
   const c = (row.chords ?? '').trim()
   if (!t && !c) {
-    return { t: ESP32_WAITING_TITLE, c: '', l: false }
+    return { t: ESP32_WAITING_TITLE, c: '', l: false, m }
   }
-  return { t: t || '—', c, l: row.live }
+  return { t: t || '—', c, l: row.live, m }
 }

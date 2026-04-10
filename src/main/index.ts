@@ -8,8 +8,10 @@ import { MidiService, listInputs, listOutputs } from './midi.js'
 import {
   listSerialPorts,
   pushEsp32Payload,
+  setEsp32LineHandler,
   setEsp32SerialPort,
-  shutdownEsp32Serial
+  shutdownEsp32Serial,
+  type Esp32FromDeviceMsg
 } from './esp32Bridge.js'
 import { buildEsp32DisplayPayload } from '../shared/esp32Payload.js'
 import { ensureLoopMidiRunning } from './loopMidi.js'
@@ -28,6 +30,9 @@ let controlWindow: BrowserWindow | null = null
 const store = createAppStore()
 const midi = new MidiService()
 
+/** Ignore CC echo for a short window after we send mute CC (touch → out → Cubase → in). */
+let muteCcSentAtMs = 0
+
 function buildPublicState(): PublicState {
   const base = getState(store)
   return {
@@ -42,6 +47,35 @@ function broadcastEsp32IfEnabled(): void {
   const st = getState(store)
   if (!st.esp32Enabled || !st.esp32SerialPort) return
   pushEsp32Payload(buildEsp32DisplayPayload(st))
+}
+
+function ccValueToFxMuted(value: number): boolean {
+  return value < 64
+}
+
+function sendMuteCcToCubase(muted: boolean): void {
+  const st = getState(store)
+  muteCcSentAtMs = Date.now()
+  midi.sendControlChange(st.muteFxMidiChannel, st.muteFxCC, muted ? 0 : 127)
+}
+
+function applyFxMuted(muted: boolean, opts: { sendMidi: boolean }): void {
+  const st = getState(store)
+  if (st.fxMuted !== muted) {
+    setState(store, { fxMuted: muted })
+    broadcastState()
+  }
+  if (opts.sendMidi) sendMuteCcToCubase(muted)
+}
+
+function toggleFxMutedFromEsp(): void {
+  const st = getState(store)
+  applyFxMuted(!st.fxMuted, { sendMidi: true })
+}
+
+function handleEsp32Line(msg: Esp32FromDeviceMsg): void {
+  const evt = msg['evt']
+  if (evt === 'mute_toggle') toggleFxMutedFromEsp()
 }
 
 function syncEsp32SerialFromStore(): void {
@@ -63,6 +97,8 @@ function broadcastState(): void {
 
 function applyMidiFromState(): void {
   const st = getState(store)
+  const muteCh0 = Math.max(0, Math.min(15, st.muteFxMidiChannel - 1))
+  const muteCc = Math.max(0, Math.min(127, st.muteFxCC))
   midi.reconnectFromState(st, {
     onProgramChange: (wireProgram) => {
       const s = getState(store)
@@ -72,6 +108,12 @@ function applyMidiFromState(): void {
         setState(store, { currentSongId: row.id })
         broadcastState()
       }
+    },
+    onControlChange: (msg) => {
+      if (msg.channel !== muteCh0 || msg.controller !== muteCc) return
+      if (Date.now() - muteCcSentAtMs < 90) return
+      const muted = ccValueToFxMuted(msg.value)
+      applyFxMuted(muted, { sendMidi: false })
     }
   })
 }
@@ -155,6 +197,13 @@ function registerIpc(): void {
     if (patch.programChangeChannel !== undefined) {
       allowed.programChangeChannel = clampInt(patch.programChangeChannel, 1, 16)
     }
+    if (patch.muteFxMidiChannel !== undefined) {
+      allowed.muteFxMidiChannel = clampInt(patch.muteFxMidiChannel, 1, 16)
+    }
+    if (patch.muteFxCC !== undefined) {
+      allowed.muteFxCC = clampInt(patch.muteFxCC, 0, 127)
+    }
+    if (patch.fxMuted !== undefined) allowed.fxMuted = Boolean(patch.fxMuted)
     if (patch.esp32SerialPort !== undefined) {
       allowed.esp32SerialPort =
         typeof patch.esp32SerialPort === 'string' && patch.esp32SerialPort.trim()
@@ -163,10 +212,15 @@ function registerIpc(): void {
     }
     if (patch.esp32Enabled !== undefined) allowed.esp32Enabled = Boolean(patch.esp32Enabled)
     setState(store, allowed)
+    if (allowed.fxMuted !== undefined) {
+      sendMuteCcToCubase(getState(store).fxMuted)
+    }
     if (
       allowed.midiInputName !== undefined ||
       allowed.midiOutputName !== undefined ||
-      allowed.programChangeChannel !== undefined
+      allowed.programChangeChannel !== undefined ||
+      allowed.muteFxMidiChannel !== undefined ||
+      allowed.muteFxCC !== undefined
     ) {
       applyMidiFromState()
     }
@@ -300,6 +354,7 @@ if (!gotTheLock) {
 
   app.whenReady().then(() => {
     ensureLoopMidiRunning()
+    setEsp32LineHandler(handleEsp32Line)
     registerIpc()
     const initial = getState(store)
     if (!programsMatchListOrder(initial.setlist)) {

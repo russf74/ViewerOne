@@ -175,6 +175,11 @@ body {
   cursor: pointer;
 }
 
+.esp-enable--inline {
+  flex: 1 1 100%;
+  margin-top: 2px;
+}
+
 .app-title {
   display: flex;
   flex-wrap: wrap;
@@ -607,6 +612,15 @@ button:disabled {
   overflow: hidden;
   container-type: size;
   container-name: esp-lcd;
+}
+
+/* Match ESP: black when unmuted; dark red wash when FX muted (RGB565 ~0x7000) */
+.esp32-sim-lcd--fx-unmuted {
+  box-shadow: none;
+}
+
+.esp32-sim-lcd--fx-muted {
+  box-shadow: inset 0 0 120px rgba(248, 32, 24, 0.52);
 }
 
 .esp32-sim-lcd--dim {

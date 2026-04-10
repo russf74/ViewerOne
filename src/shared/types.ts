@@ -6,6 +6,8 @@ export type Esp32DisplayPayload = {
   c: string
   /** live */
   l: boolean
+  /** FX mute — faint red vs blue tint on device */
+  m?: boolean
 }
 
 export type SetlistItem = {
@@ -22,6 +24,12 @@ export type AppState = {
   midiInputName: string | null
   midiOutputName: string | null
   programChangeChannel: number
+  /** Cubase / X32 sends CC on this channel — muted = 0, unmuted = 127 (default CC 85) */
+  muteFxMidiChannel: number
+  /** Control change number for FX mute (e.g. 85) */
+  muteFxCC: number
+  /** Cubase / X32 ↔ ViewerOne / ESP: muted = CC 0, unmuted = 127 */
+  fxMuted: boolean
   setlist: SetlistItem[]
   /** Row id from last matched program change; null until first PC */
   currentSongId: string | null

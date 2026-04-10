@@ -5,6 +5,37 @@ export type { Esp32DisplayPayload } from '../shared/types.js'
 
 let port: SerialPort | null = null
 let openPath: string | null = null
+let rxBuf = ''
+
+export type Esp32FromDeviceMsg = Record<string, unknown>
+
+/** Lines from ESP32 (touch, etc.); parse errors ignored. */
+export type Esp32LineHandler = (msg: Esp32FromDeviceMsg) => void
+
+let lineHandler: Esp32LineHandler | null = null
+
+export function setEsp32LineHandler(handler: Esp32LineHandler | null): void {
+  lineHandler = handler
+}
+
+function attachSerialReader(p: SerialPort): void {
+  rxBuf = ''
+  p.on('data', (chunk: Buffer) => {
+    rxBuf += chunk.toString('utf8')
+    for (;;) {
+      const i = rxBuf.indexOf('\n')
+      if (i < 0) break
+      const line = rxBuf.slice(0, i).trim()
+      rxBuf = rxBuf.slice(i + 1)
+      if (!line || !lineHandler) continue
+      try {
+        lineHandler(JSON.parse(line) as Esp32FromDeviceMsg)
+      } catch {
+        /* ignore non-JSON noise */
+      }
+    }
+  })
+}
 
 export async function listSerialPorts(): Promise<{ path: string; friendly?: string }[]> {
   const list = await SerialPort.list()
@@ -45,6 +76,7 @@ export function setEsp32SerialPort(path: string | null, onOpened?: () => void): 
       }
       openPath = path
       port = p
+      attachSerialReader(p)
       console.log('[ViewerOne] ESP32 serial:', path, '@ 115200')
       onOpened?.()
     })

@@ -19,8 +19,11 @@ export function listOutputs(): string[] {
 
 type PcHandler = (program: number) => void
 
+export type CcHandler = (msg: { channel: number; controller: number; value: number }) => void
+
 export type MidiInputHandlers = {
   onProgramChange: PcHandler
+  onControlChange?: CcHandler
 }
 
 export class MidiService {
@@ -53,6 +56,12 @@ export class MidiService {
         if (msg.channel !== this.pcChannel0) return
         onPc?.(msg.number)
       })
+      const onCc = handlers.onControlChange
+      if (onCc) {
+        this.input.on('cc', (msg) => {
+          onCc({ channel: msg.channel, controller: msg.controller, value: msg.value })
+        })
+      }
       console.log(`[ViewerOne] MIDI: listening on "${name}" — Program Change channel ${this.pcChannel0 + 1}`)
     } catch (err) {
       this.input = null
@@ -106,5 +115,14 @@ export class MidiService {
     const ch = Math.max(0, Math.min(15, channel1to16 - 1))
     const wire = Math.max(0, Math.min(127, program1to127 - 1))
     this.output.send('program', { number: wire, channel: ch })
+  }
+
+  /** Control change; channel 1–16, value 0–127 */
+  sendControlChange(channel1to16: number, controller: number, value: number): void {
+    if (!this.output) return
+    const ch = Math.max(0, Math.min(15, channel1to16 - 1))
+    const cc = Math.max(0, Math.min(127, controller))
+    const v = Math.max(0, Math.min(127, value))
+    this.output.send('cc', { controller: cc, value: v, channel: ch })
   }
 }
