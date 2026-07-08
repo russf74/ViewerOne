@@ -12,7 +12,6 @@ const defaults: AppState = {
   fxMuted: false,
   setlist: [],
   currentSongId: null,
-  esp32SerialPort: null,
   esp32Enabled: false
 }
 
@@ -49,7 +48,6 @@ export function getState(store: AppStore): AppState {
     fxMuted: Boolean(store.get('fxMuted')),
     setlist: normalizeSetlist(store.get('setlist')),
     currentSongId: (store.get('currentSongId') as string | null | undefined) ?? null,
-    esp32SerialPort: (store.get('esp32SerialPort') as string | null | undefined) ?? null,
     esp32Enabled: Boolean(store.get('esp32Enabled'))
   }
 }

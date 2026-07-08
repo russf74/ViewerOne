@@ -18,9 +18,7 @@ const api = {
   selectSong: (id: string | null): Promise<PublicState> => ipcRenderer.invoke('setlist:selectSong', id),
   patchSettings: (patch: Partial<AppState>): Promise<PublicState> =>
     ipcRenderer.invoke('settings:patch', patch),
-  refreshMidi: (): Promise<PublicState> => ipcRenderer.invoke('midi:refresh'),
-  listEsp32Ports: (): Promise<{ path: string; friendly?: string }[]> =>
-    ipcRenderer.invoke('esp32:listPorts')
+  refreshMidi: (): Promise<PublicState> => ipcRenderer.invoke('midi:refresh')
 }
 
 contextBridge.exposeInMainWorld('viewer', api)

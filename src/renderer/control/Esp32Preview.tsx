@@ -10,7 +10,7 @@ type Props = {
 export function Esp32Preview({ state }: Props) {
   const payload = useMemo(
     () => buildEsp32DisplayPayload(state),
-    [state.setlist, state.currentSongId]
+    [state.setlist, state.currentSongId, state.fxMuted]
   )
 
   const titleColor = '#ffffff'
@@ -23,11 +23,7 @@ export function Esp32Preview({ state }: Props) {
       <div className="esp32-sim-chrome">
         <span className="esp32-sim-label">ESP32 (simulated)</span>
         <span className="esp32-sim-status">
-          {!state.esp32Enabled
-            ? 'Serial off'
-            : !state.esp32SerialPort
-              ? 'Pick a COM port'
-              : 'Same JSON as USB serial'}
+          {!state.esp32Enabled ? 'Serial off' : 'USB serial — same JSON as device'}
         </span>
       </div>
       <div

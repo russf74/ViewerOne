@@ -2,24 +2,34 @@
  * ViewerOne — ESP32-2432S028R ILI9341 (CYD), landscape 320×240 via ROTATION in board_pins.h
  *
  * PC @ 115200: {"t":"Title","c":"Chords","l":true,"m":false}
- *   m = FX mute tint (faint red vs blue). Omitted/false = unmuted.
+ *   m = FX mute (full bright red background vs black). Omitted/false = unmuted.
  * To PC (touch): {"evt":"mute_toggle"} — tap anywhere to toggle (handled by ViewerOne).
+ * To PC (boot): {"evt":"boot"} — sent once on startup so ViewerOne immediately re-sends the
+ *   current song/mute state after any reset (manual power cycle or watchdog auto-recovery).
  *
  * Chords: capital letter N in "c" starts a new line (N is not drawn).
  *
  * Display: LovyanGFX (same SPI wiring as firmware/display-pinout-scan profiles 1–2).
+ *
+ * Auto-recovery: a task watchdog reboots the board if the main loop ever stalls (e.g. a wedged
+ * touch/SPI read) for longer than WDT_TIMEOUT_S, so a hang mid-gig clears itself without needing
+ * a manual unplug/replug. The boot handshake above then restores the display within ~1s.
  */
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <cstdio>
 #include <driver/spi_common.h>
+#include <esp_task_wdt.h>
 #include <LovyanGFX.hpp>
 
 #include "board_pins.h"
 
 /** Keep in sync with repository root `package.json` version. */
-static constexpr const char *VIEWERONE_FW_VERSION = "0.5.0";
+static constexpr const char *VIEWERONE_FW_VERSION = "0.5.2";
+
+/** Seconds the main loop may go without feeding the watchdog before it force-reboots the board. */
+static constexpr uint32_t WDT_TIMEOUT_S = 5;
 
 // RGB565
 static constexpr uint16_t C_BLACK = 0x0000;
@@ -27,8 +37,8 @@ static constexpr uint16_t C_WHITE = 0xFFFF;
 static constexpr uint16_t C_CYAN = 0x07FF;
 static constexpr uint16_t C_YELLOW = 0xFFE0;
 static constexpr uint16_t C_GREY = 0x7BEF;
-/** Muted: vivid dark red wash; unmuted: plain black */
-static constexpr uint16_t C_BG_MUTED = 0x7000;
+/** Muted: full-brightness red (RGB565 0xF800) for outdoor visibility; unmuted: plain black */
+static constexpr uint16_t C_BG_MUTED = 0xF800;
 
 /** ILI9341 + SPI — profile matching pinout-scan id 2 (HSPI, 40 MHz) or id 1 (20 MHz slow env). */
 class PanelGfx : public lgfx::LGFX_Device {
@@ -216,6 +226,11 @@ void setup() {
   Serial.begin(115200);
   lineBuf.reserve(512);
 
+  // Arm the watchdog before anything that could conceivably hang (panel/touch init included),
+  // so a wedged board reboots itself instead of freezing silently for the rest of a gig.
+  esp_task_wdt_init(WDT_TIMEOUT_S, true);
+  esp_task_wdt_add(NULL);
+
   pinMode(PIN_TFT_BL, OUTPUT);
   digitalWrite(PIN_TFT_BL, HIGH);
 
@@ -248,9 +263,14 @@ void setup() {
 #else
   Serial.printf(", touch on)\n");
 #endif
+
+  // Ask ViewerOne to resend the current song/mute state — restores the screen after any reset.
+  Serial.println("{\"evt\":\"boot\"}");
 }
 
 void loop() {
+  esp_task_wdt_reset();
+
   while (Serial.available()) {
     char ch = static_cast<char>(Serial.read());
     if (ch == '\r') continue;

@@ -614,13 +614,15 @@ button:disabled {
   container-name: esp-lcd;
 }
 
-/* Match ESP: black when unmuted; dark red wash when FX muted (RGB565 ~0x7000) */
+/* Match ESP: black when unmuted; full red when FX muted (RGB565 0xF800) */
 .esp32-sim-lcd--fx-unmuted {
+  background: #000;
   box-shadow: none;
 }
 
 .esp32-sim-lcd--fx-muted {
-  box-shadow: inset 0 0 120px rgba(248, 32, 24, 0.52);
+  background: #ff0000;
+  box-shadow: none;
 }
 
 .esp32-sim-lcd--dim {

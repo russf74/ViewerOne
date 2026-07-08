@@ -33,9 +33,7 @@ export type AppState = {
   setlist: SetlistItem[]
   /** Row id from last matched program change; null until first PC */
   currentSongId: string | null
-  /** Windows COM port path (e.g. COM5) for ESP32 USB serial display; null = off */
-  esp32SerialPort: string | null
-  /** When true, push current song/chords JSON lines to esp32SerialPort */
+  /** When true, push current song/chords JSON over USB serial (CH340 / USB-serial autodetect; replug supported). */
   esp32Enabled: boolean
 }
 

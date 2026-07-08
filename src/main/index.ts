@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url'
 import { createAppStore, getState, setState, newSetlistItem } from './store.js'
 import { MidiService, listInputs, listOutputs } from './midi.js'
 import {
-  listSerialPorts,
   pushEsp32Payload,
   setEsp32LineHandler,
   setEsp32SerialPort,
@@ -14,6 +13,7 @@ import {
   type Esp32FromDeviceMsg
 } from './esp32Bridge.js'
 import { buildEsp32DisplayPayload } from '../shared/esp32Payload.js'
+import { ESP32_SERIAL_PORT_AUTO } from '../shared/esp32Serial.js'
 import { ensureLoopMidiRunning } from './loopMidi.js'
 import type { AppState, PublicState, SetlistItem } from '../shared/types.js'
 
@@ -45,7 +45,7 @@ function buildPublicState(): PublicState {
 
 function broadcastEsp32IfEnabled(): void {
   const st = getState(store)
-  if (!st.esp32Enabled || !st.esp32SerialPort) return
+  if (!st.esp32Enabled) return
   pushEsp32Payload(buildEsp32DisplayPayload(st))
 }
 
@@ -76,12 +76,17 @@ function toggleFxMutedFromEsp(): void {
 function handleEsp32Line(msg: Esp32FromDeviceMsg): void {
   const evt = msg['evt']
   if (evt === 'mute_toggle') toggleFxMutedFromEsp()
+  if (evt === 'boot') {
+    // Board reset (manual power cycle or its own watchdog auto-recovery) — resync its display.
+    console.log('[ViewerOne] ESP32 reported boot/reset — resending current song/mute state')
+    broadcastEsp32IfEnabled()
+  }
 }
 
 function syncEsp32SerialFromStore(): void {
   const st = getState(store)
-  if (st.esp32Enabled && st.esp32SerialPort) {
-    setEsp32SerialPort(st.esp32SerialPort, () => broadcastEsp32IfEnabled())
+  if (st.esp32Enabled) {
+    setEsp32SerialPort(ESP32_SERIAL_PORT_AUTO, () => broadcastEsp32IfEnabled())
   } else {
     setEsp32SerialPort(null)
   }
@@ -204,12 +209,6 @@ function registerIpc(): void {
       allowed.muteFxCC = clampInt(patch.muteFxCC, 0, 127)
     }
     if (patch.fxMuted !== undefined) allowed.fxMuted = Boolean(patch.fxMuted)
-    if (patch.esp32SerialPort !== undefined) {
-      allowed.esp32SerialPort =
-        typeof patch.esp32SerialPort === 'string' && patch.esp32SerialPort.trim()
-          ? patch.esp32SerialPort.trim()
-          : null
-    }
     if (patch.esp32Enabled !== undefined) allowed.esp32Enabled = Boolean(patch.esp32Enabled)
     setState(store, allowed)
     if (allowed.fxMuted !== undefined) {
@@ -224,7 +223,7 @@ function registerIpc(): void {
     ) {
       applyMidiFromState()
     }
-    if (allowed.esp32SerialPort !== undefined || allowed.esp32Enabled !== undefined) {
+    if (allowed.esp32Enabled !== undefined) {
       syncEsp32SerialFromStore()
     }
     broadcastState()
@@ -235,14 +234,6 @@ function registerIpc(): void {
     applyMidiFromState()
     broadcastState()
     return buildPublicState()
-  })
-
-  ipcMain.handle('esp32:listPorts', async () => {
-    try {
-      return await listSerialPorts()
-    } catch {
-      return []
-    }
   })
 
   ipcMain.handle('setlist:prevSong', () => {

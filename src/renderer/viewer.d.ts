@@ -13,7 +13,6 @@ export type ViewerApi = {
   selectSong: (id: string | null) => Promise<PublicState>
   patchSettings: (patch: Partial<AppState>) => Promise<PublicState>
   refreshMidi: () => Promise<PublicState>
-  listEsp32Ports: () => Promise<{ path: string; friendly?: string }[]>
 }
 
 declare global {

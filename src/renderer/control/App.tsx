@@ -14,12 +14,7 @@ import { Esp32Preview } from './Esp32Preview'
 
 export function App() {
   const [state, setState] = useState<PublicState | null>(null)
-  const [espPorts, setEspPorts] = useState<{ path: string; friendly?: string }[]>([])
   const bridgeOk = typeof window !== 'undefined' && typeof window.viewer !== 'undefined'
-
-  const refreshEspPorts = useCallback(() => {
-    void window.viewer.listEsp32Ports().then(setEspPorts)
-  }, [])
 
   const apply = useCallback((next: PublicState) => {
     setState(next)
@@ -38,9 +33,8 @@ export function App() {
     let off: (() => void) | undefined
     void window.viewer.getState().then(setState)
     off = window.viewer.onState(setState)
-    refreshEspPorts()
     return () => off?.()
-  }, [bridgeOk, refreshEspPorts])
+  }, [bridgeOk])
 
   useEffect(() => {
     if (!state?.currentSongId) return
@@ -243,7 +237,8 @@ export function App() {
               <h2 className="settings-card-title">ESP32 display</h2>
               <p className="settings-card-lead">
                 JSON lines at <strong>115200</strong> baud — same as the preview. Flash <code>firmware/esp32-display</code>{' '}
-                for your board.
+                for your board. USB serial uses the CH340 / USB-serial device automatically (or the only COM port if
+                there is just one); unplug and replug without restarting the app.
               </p>
               <div className="settings-fields settings-fields--esp">
                 <label className="esp-enable">
@@ -252,31 +247,8 @@ export function App() {
                     checked={state.esp32Enabled}
                     onChange={(e) => void patchSettings({ esp32Enabled: e.target.checked })}
                   />
-                  <span>Enable USB serial</span>
+                  <span>Enable USB serial to ESP32</span>
                 </label>
-                <div className="field field-grow">
-                  <label htmlFor="esp32-com">COM port</label>
-                  <select
-                    id="esp32-com"
-                    value={state.esp32SerialPort ?? ''}
-                    onChange={(e) => void patchSettings({ esp32SerialPort: e.target.value || null })}
-                  >
-                    <option value="">— none —</option>
-                    {espPorts.map((p) => (
-                      <option key={p.path} value={p.path}>
-                        {p.friendly ? `${p.path} — ${p.friendly}` : p.path}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="field field-btn">
-                  <label className="label-spacer" aria-hidden>
-                    &nbsp;
-                  </label>
-                  <button type="button" className="btn-secondary" onClick={() => refreshEspPorts()}>
-                    Refresh list
-                  </button>
-                </div>
               </div>
             </div>
           </div>
