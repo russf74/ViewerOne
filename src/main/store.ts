@@ -4,11 +4,6 @@ import type { AppState, SetlistItem } from '../shared/types.js'
 type AppStore = InstanceType<typeof Store>
 
 const defaults: AppState = {
-  midiInputName: null,
-  midiOutputName: null,
-  programChangeChannel: 1,
-  muteFxMidiChannel: 1,
-  muteFxCC: 85,
   fxMuted: false,
   setlist: [],
   currentSongId: null,
@@ -36,15 +31,7 @@ function normalizeSetlist(list: unknown): SetlistItem[] {
 }
 
 export function getState(store: AppStore): AppState {
-  const pc = store.get('programChangeChannel')
-  const mch = store.get('muteFxMidiChannel')
-  const mcc = store.get('muteFxCC')
   return {
-    midiInputName: store.get('midiInputName'),
-    midiOutputName: store.get('midiOutputName'),
-    programChangeChannel: typeof pc === 'number' && !Number.isNaN(pc) ? pc : 1,
-    muteFxMidiChannel: typeof mch === 'number' && !Number.isNaN(mch) ? mch : 1,
-    muteFxCC: typeof mcc === 'number' && !Number.isNaN(mcc) ? mcc : 85,
     fxMuted: Boolean(store.get('fxMuted')),
     setlist: normalizeSetlist(store.get('setlist')),
     currentSongId: (store.get('currentSongId') as string | null | undefined) ?? null,

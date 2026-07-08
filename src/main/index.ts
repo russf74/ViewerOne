@@ -15,6 +15,15 @@ import {
 import { buildEsp32DisplayPayload } from '../shared/esp32Payload.js'
 import { ESP32_SERIAL_PORT_AUTO } from '../shared/esp32Serial.js'
 import { ensureLoopMidiRunning } from './loopMidi.js'
+import { detectCubasePorts, detectMixerPorts } from '../shared/midiAutoDetect.js'
+import {
+  CUBASE_PC_CHANNEL,
+  CUBASE_MUTE_CHANNEL,
+  CUBASE_MUTE_CC,
+  MIXER_MUTE_CHANNEL,
+  MIXER_MUTE_CC,
+  MIXER_MUTE_INVERTED
+} from '../shared/midiConfig.js'
 import type { AppState, PublicState, SetlistItem } from '../shared/types.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -30,16 +39,42 @@ let controlWindow: BrowserWindow | null = null
 const store = createAppStore()
 const midi = new MidiService()
 
-/** Ignore CC echo for a short window after we send mute CC (touch → out → Cubase → in). */
+/** Ignore CC echo for a short window after we send mute CC (touch → out → Cubase/mixer → in). */
 let muteCcSentAtMs = 0
+
+/** Live MIDI connection status, surfaced in the UI since ports are auto-detected with no manual config. */
+let cubaseInputName: string | null = null
+let cubaseOutputName: string | null = null
+let mixerInputName: string | null = null
+let mixerInputOpen = false
+let mixerOutputName: string | null = null
+let mixerOutputOpen = false
+let mixerLastMessageAtMs: number | null = null
+let mixerLastCc: { channel: number; controller: number; value: number } | null = null
+let mixerLastSentAtMs: number | null = null
+let mixerLastSentCc: { channel: number; controller: number; value: number } | null = null
+let cubaseLastSentAtMs: number | null = null
+let cubaseLastSentCc: { channel: number; controller: number; value: number } | null = null
 
 function buildPublicState(): PublicState {
   const base = getState(store)
   return {
     ...base,
-    inputs: listInputs(),
-    outputs: listOutputs(),
-    appVersion: app.getVersion()
+    appVersion: app.getVersion(),
+    midi: {
+      cubaseInputName,
+      cubaseOutputName,
+      mixerInputName,
+      mixerInputOpen,
+      mixerOutputName,
+      mixerOutputOpen,
+      mixerLastMessageAgoMs: mixerLastMessageAtMs !== null ? Date.now() - mixerLastMessageAtMs : null,
+      mixerLastCc,
+      mixerLastSentAgoMs: mixerLastSentAtMs !== null ? Date.now() - mixerLastSentAtMs : null,
+      mixerLastSentCc,
+      cubaseLastSentAgoMs: cubaseLastSentAtMs !== null ? Date.now() - cubaseLastSentAtMs : null,
+      cubaseLastSentCc
+    }
   }
 }
 
@@ -49,28 +84,52 @@ function broadcastEsp32IfEnabled(): void {
   pushEsp32Payload(buildEsp32DisplayPayload(st))
 }
 
-function ccValueToFxMuted(value: number): boolean {
-  return value < 64
+function ccValueToFxMuted(value: number, inverted = false): boolean {
+  return inverted ? value >= 64 : value < 64
 }
 
+/**
+ * Sends mute state to Cubase (its own private ch1/CC85 convention — Cubase relays this onward
+ * via its own "X32 Mutes" track for its own automation-driven use cases). This is also how song
+ * changes reach Cubase, so it's a single well-tested path for everything ViewerOne sends there.
+ */
 function sendMuteCcToCubase(muted: boolean): void {
-  const st = getState(store)
   muteCcSentAtMs = Date.now()
-  midi.sendControlChange(st.muteFxMidiChannel, st.muteFxCC, muted ? 0 : 127)
+  const value = muted ? 0 : 127
+  cubaseLastSentAtMs = Date.now()
+  cubaseLastSentCc = { channel: CUBASE_MUTE_CHANNEL - 1, controller: CUBASE_MUTE_CC, value }
+  console.log(`[ViewerOne] MIDI: sending mute=${muted} to Cubase (ch ${CUBASE_MUTE_CHANNEL}, CC ${CUBASE_MUTE_CC}, val ${value}) on "${cubaseOutputName ?? '(no output port)'}"`)
+  midi.sendControlChange(CUBASE_MUTE_CHANNEL, CUBASE_MUTE_CC, value)
 }
 
-function applyFxMuted(muted: boolean, opts: { sendMidi: boolean }): void {
+/**
+ * Sends mute state directly to the mixer's own USB MIDI port, using its native ch2/CC63
+ * convention (inverted: 127 = muted). Independent of Cubase, so this keeps working even with
+ * Cubase closed. If ViewerOne couldn't open the mixer output (e.g. Cubase already has it open
+ * for its own relay), this is a silent no-op — see midi.ts openMixerOutput.
+ */
+function sendMuteCcToMixer(muted: boolean): void {
+  muteCcSentAtMs = Date.now()
+  const value = MIXER_MUTE_INVERTED ? (muted ? 127 : 0) : muted ? 0 : 127
+  mixerLastSentAtMs = Date.now()
+  mixerLastSentCc = { channel: MIXER_MUTE_CHANNEL - 1, controller: MIXER_MUTE_CC, value }
+  console.log(`[ViewerOne] MIDI: sending mute=${muted} to mixer (ch ${MIXER_MUTE_CHANNEL}, CC ${MIXER_MUTE_CC}, val ${value}) on "${mixerOutputName ?? '(no output port)'}"`)
+  midi.sendMixerControlChange(MIXER_MUTE_CHANNEL, MIXER_MUTE_CC, value)
+}
+
+function applyFxMuted(muted: boolean, opts: { sendToCubase: boolean; sendToMixer: boolean }): void {
   const st = getState(store)
   if (st.fxMuted !== muted) {
     setState(store, { fxMuted: muted })
     broadcastState()
   }
-  if (opts.sendMidi) sendMuteCcToCubase(muted)
+  if (opts.sendToCubase) sendMuteCcToCubase(muted)
+  if (opts.sendToMixer) sendMuteCcToMixer(muted)
 }
 
 function toggleFxMutedFromEsp(): void {
   const st = getState(store)
-  applyFxMuted(!st.fxMuted, { sendMidi: true })
+  applyFxMuted(!st.fxMuted, { sendToCubase: true, sendToMixer: true })
 }
 
 function handleEsp32Line(msg: Esp32FromDeviceMsg): void {
@@ -100,11 +159,26 @@ function broadcastState(): void {
   broadcastEsp32IfEnabled()
 }
 
-function applyMidiFromState(): void {
-  const st = getState(store)
-  const muteCh0 = Math.max(0, Math.min(15, st.muteFxMidiChannel - 1))
-  const muteCc = Math.max(0, Math.min(127, st.muteFxCC))
-  midi.reconnectFromState(st, {
+/**
+ * Connects to Cubase (one-way in: song changes + its own auto-mute automation, over a loopMIDI
+ * cable pair; one-way out: ViewerOne's own mute changes, so Cubase's state/automation stays in
+ * sync) and to the mixer (two-way, directly over its own USB MIDI port, independent of Cubase).
+ * Everything is auto-detected by name — see shared/midiAutoDetect.ts — and the channel/CC
+ * conventions are fixed in shared/midiConfig.ts.
+ */
+function connectMidi(): void {
+  const inputs = listInputs()
+  const outputs = listOutputs()
+  const cubaseMuteCh0 = CUBASE_MUTE_CHANNEL - 1
+  const mixerMuteCh0 = MIXER_MUTE_CHANNEL - 1
+
+  const cubase = detectCubasePorts(inputs, outputs)
+  cubaseInputName = cubase.input
+  cubaseOutputName = cubase.output
+  cubaseLastSentAtMs = null
+  cubaseLastSentCc = null
+  midi.setProgramChangeChannel(CUBASE_PC_CHANNEL)
+  midi.openInput(cubase.input, {
     onProgramChange: (wireProgram) => {
       const s = getState(store)
       const pc = Math.min(127, wireProgram + 1)
@@ -115,12 +189,35 @@ function applyMidiFromState(): void {
       }
     },
     onControlChange: (msg) => {
-      if (msg.channel !== muteCh0 || msg.controller !== muteCc) return
+      if (msg.channel !== cubaseMuteCh0 || msg.controller !== CUBASE_MUTE_CC) return
       if (Date.now() - muteCcSentAtMs < 90) return
       const muted = ccValueToFxMuted(msg.value)
-      applyFxMuted(muted, { sendMidi: false })
+      // Cubase already owns telling the mixer for its own automation, so nothing echoed back out.
+      applyFxMuted(muted, { sendToCubase: false, sendToMixer: false })
     }
   })
+  midi.openOutput(cubase.output)
+
+  // Direct, two-way connection to the mixer's own USB MIDI port — independent of Cubase, so
+  // mute stays in sync (both ways) even with Cubase closed or its own routing unavailable.
+  const mixer = detectMixerPorts(inputs, outputs)
+  mixerInputName = mixer.input
+  mixerOutputName = mixer.output
+  mixerLastMessageAtMs = null
+  mixerLastCc = null
+  mixerLastSentAtMs = null
+  mixerLastSentCc = null
+  mixerInputOpen = midi.openMixerInput(mixer.input, (msg) => {
+    mixerLastMessageAtMs = Date.now()
+    mixerLastCc = msg
+    broadcastState()
+    if (msg.channel !== mixerMuteCh0 || msg.controller !== MIXER_MUTE_CC) return
+    if (Date.now() - muteCcSentAtMs < 90) return
+    const muted = ccValueToFxMuted(msg.value, MIXER_MUTE_INVERTED)
+    // Tell Cubase so its own state stays in sync; don't echo straight back out to the mixer.
+    applyFxMuted(muted, { sendToCubase: true, sendToMixer: false })
+  })
+  mixerOutputOpen = midi.openMixerOutput(mixer.output)
 }
 
 function createControlWindow(): BrowserWindow {
@@ -138,6 +235,10 @@ function createControlWindow(): BrowserWindow {
       nodeIntegration: false
     }
   })
+
+  // The renderer's static <title> tag would otherwise overwrite this once the page loads —
+  // keep the version-bearing title above as the single source of truth for the window/taskbar.
+  win.on('page-title-updated', (e) => e.preventDefault())
 
   if (!app.isPackaged && process.env['ELECTRON_RENDERER_URL']) {
     const base = process.env['ELECTRON_RENDERER_URL'].replace(/\/$/, '')
@@ -197,31 +298,13 @@ function registerIpc(): void {
   ipcMain.handle('settings:patch', (_e, patch: Partial<AppState>) => {
     if (!patch || typeof patch !== 'object') return buildPublicState()
     const allowed: Partial<AppState> = {}
-    if (patch.midiInputName !== undefined) allowed.midiInputName = patch.midiInputName
-    if (patch.midiOutputName !== undefined) allowed.midiOutputName = patch.midiOutputName
-    if (patch.programChangeChannel !== undefined) {
-      allowed.programChangeChannel = clampInt(patch.programChangeChannel, 1, 16)
-    }
-    if (patch.muteFxMidiChannel !== undefined) {
-      allowed.muteFxMidiChannel = clampInt(patch.muteFxMidiChannel, 1, 16)
-    }
-    if (patch.muteFxCC !== undefined) {
-      allowed.muteFxCC = clampInt(patch.muteFxCC, 0, 127)
-    }
     if (patch.fxMuted !== undefined) allowed.fxMuted = Boolean(patch.fxMuted)
     if (patch.esp32Enabled !== undefined) allowed.esp32Enabled = Boolean(patch.esp32Enabled)
     setState(store, allowed)
     if (allowed.fxMuted !== undefined) {
-      sendMuteCcToCubase(getState(store).fxMuted)
-    }
-    if (
-      allowed.midiInputName !== undefined ||
-      allowed.midiOutputName !== undefined ||
-      allowed.programChangeChannel !== undefined ||
-      allowed.muteFxMidiChannel !== undefined ||
-      allowed.muteFxCC !== undefined
-    ) {
-      applyMidiFromState()
+      const muted = getState(store).fxMuted
+      sendMuteCcToCubase(muted)
+      sendMuteCcToMixer(muted)
     }
     if (allowed.esp32Enabled !== undefined) {
       syncEsp32SerialFromStore()
@@ -231,7 +314,7 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('midi:refresh', () => {
-    applyMidiFromState()
+    connectMidi()
     broadcastState()
     return buildPublicState()
   })
@@ -247,7 +330,7 @@ function registerIpc(): void {
     if (nextIdx === null) return buildPublicState()
     const row = setlist[nextIdx]
     setState(store, { currentSongId: row.id })
-    midi.sendProgramChange(st.programChangeChannel, row.program)
+    midi.sendProgramChange(CUBASE_PC_CHANNEL, row.program)
     broadcastState()
     return buildPublicState()
   })
@@ -263,7 +346,7 @@ function registerIpc(): void {
     if (nextIdx === null) return buildPublicState()
     const row = setlist[nextIdx]
     setState(store, { currentSongId: row.id })
-    midi.sendProgramChange(st.programChangeChannel, row.program)
+    midi.sendProgramChange(CUBASE_PC_CHANNEL, row.program)
     broadcastState()
     return buildPublicState()
   })
@@ -324,12 +407,6 @@ function programsMatchListOrder(items: SetlistItem[]): boolean {
   return items.every((row, i) => row.program === Math.min(127, i + 1))
 }
 
-function clampInt(n: number, min: number, max: number): number {
-  const x = Math.trunc(Number(n))
-  if (Number.isNaN(x)) return min
-  return Math.max(min, Math.min(max, x))
-}
-
 const gotTheLock = app.requestSingleInstanceLock()
 
 if (!gotTheLock) {
@@ -351,7 +428,7 @@ if (!gotTheLock) {
     if (!programsMatchListOrder(initial.setlist)) {
       setState(store, { setlist: assignProgramsByOrder(initial.setlist) })
     }
-    applyMidiFromState()
+    connectMidi()
     syncEsp32SerialFromStore()
     setupAppMenu()
     controlWindow = createControlWindow()
@@ -366,6 +443,8 @@ if (!gotTheLock) {
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
       midi.closeInput()
+      midi.closeMixerInput()
+      midi.closeMixerOutput()
       midi.closeOutput()
       app.quit()
     }
@@ -374,6 +453,8 @@ if (!gotTheLock) {
   app.on('before-quit', () => {
     shutdownEsp32Serial()
     midi.closeInput()
+    midi.closeMixerInput()
+    midi.closeMixerOutput()
     midi.closeOutput()
   })
 }

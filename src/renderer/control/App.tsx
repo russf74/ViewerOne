@@ -12,6 +12,60 @@ import type { AppState, PublicState, SetlistItem } from '../../shared/types'
 import { SortableRow } from './SortableRow'
 import { Esp32Preview } from './Esp32Preview'
 
+type StatusLine = { text: string; tone: 'ok' | 'warn' | 'error' }
+
+function cubaseStatusLine(state: PublicState): StatusLine {
+  const { midi } = state
+  if (!midi.cubaseInputName && !midi.cubaseOutputName) {
+    return {
+      text: 'not found — open loopMIDI and create cables named e.g. "CubaseToViewerOne" / "ViewerOneToCubase".',
+      tone: 'error'
+    }
+  }
+  if (!midi.cubaseInputName || !midi.cubaseOutputName) {
+    return {
+      text: `partially connected (in: ${midi.cubaseInputName ?? 'missing'}, out: ${midi.cubaseOutputName ?? 'missing'})`,
+      tone: 'warn'
+    }
+  }
+  let text = `connected (${midi.cubaseInputName} ↔ ${midi.cubaseOutputName})`
+  if (midi.cubaseLastSentCc) {
+    const ago = midi.cubaseLastSentAgoMs ?? 0
+    const agoText = ago < 1500 ? 'just now' : `${Math.round(ago / 1000)}s ago`
+    text += ` — last sent ${agoText} (ch ${midi.cubaseLastSentCc.channel + 1}, CC ${midi.cubaseLastSentCc.controller}, val ${midi.cubaseLastSentCc.value})`
+  }
+  return { text, tone: 'ok' }
+}
+
+function mixerStatusLine(state: PublicState): StatusLine {
+  const { midi } = state
+  if (!midi.mixerInputName && !midi.mixerOutputName) {
+    return { text: 'not found — check the mixer is connected over USB.', tone: 'error' }
+  }
+  if (!midi.mixerInputOpen || !midi.mixerOutputOpen) {
+    const parts: string[] = []
+    parts.push(midi.mixerInputOpen ? `in: ${midi.mixerInputName}` : `in: couldn't open ${midi.mixerInputName ?? 'missing'}`)
+    parts.push(
+      midi.mixerOutputOpen
+        ? `out: ${midi.mixerOutputName}`
+        : `out: couldn't open ${midi.mixerOutputName ?? 'missing'} (in use elsewhere, e.g. Cubase?)`
+    )
+    return { text: `partially connected (${parts.join(', ')})`, tone: 'warn' }
+  }
+  let text = `connected (${midi.mixerInputName} ↔ ${midi.mixerOutputName})`
+  if (midi.mixerLastCc) {
+    const ago = midi.mixerLastMessageAgoMs ?? 0
+    const agoText = ago < 1500 ? 'just now' : `${Math.round(ago / 1000)}s ago`
+    text += ` — last received ${agoText} (ch ${midi.mixerLastCc.channel + 1}, CC ${midi.mixerLastCc.controller}, val ${midi.mixerLastCc.value})`
+  }
+  if (midi.mixerLastSentCc) {
+    const ago = midi.mixerLastSentAgoMs ?? 0
+    const agoText = ago < 1500 ? 'just now' : `${Math.round(ago / 1000)}s ago`
+    text += ` — last sent ${agoText} (ch ${midi.mixerLastSentCc.channel + 1}, CC ${midi.mixerLastSentCc.controller}, val ${midi.mixerLastSentCc.value})`
+  }
+  return { text, tone: 'ok' }
+}
+
 export function App() {
   const [state, setState] = useState<PublicState | null>(null)
   const bridgeOk = typeof window !== 'undefined' && typeof window.viewer !== 'undefined'
@@ -95,11 +149,8 @@ export function App() {
     [state, setSetlist]
   )
 
-  const inputOptions = useMemo(() => {
-    const ins = state?.inputs ?? []
-    const outs = state?.outputs ?? []
-    return { ins, outs }
-  }, [state?.inputs, state?.outputs])
+  const cubaseStatus = useMemo(() => (state ? cubaseStatusLine(state) : null), [state])
+  const mixerStatus = useMemo(() => (state ? mixerStatusLine(state) : null), [state])
 
   if (!bridgeOk) {
     return (
@@ -127,12 +178,7 @@ export function App() {
       <div className="layout-top">
         <header className="top-header">
           <div className="top-header-text">
-            <h1 className="app-title">
-              ViewerOne
-              <span className="version-badge" title="App version">
-                v{state.appVersion}
-              </span>
-            </h1>
+            <h1 className="app-title">ViewerOne</h1>
             <p className="sub">Cubase program change → setlist · USB serial → ESP32 · settings saved automatically</p>
           </div>
         </header>
@@ -146,88 +192,34 @@ export function App() {
             <div className="settings-card">
               <h2 className="settings-card-title">MIDI</h2>
               <p className="settings-card-lead">
-                Route a virtual cable (e.g. loopMIDI) from Cubase into <strong>In</strong> and back on <strong>Out</strong>.
-                Program changes on <strong>PC ch</strong> pick the song. Send <strong>CC</strong> (default 85; muted = 0, unmuted = 127) on{' '}
-                <strong>Mute ch</strong> to sync FX mute with the display; a tap on the ESP screen sends the same CC out.
+                Cubase syncs song changes and its own auto-mute to ViewerOne over loopMIDI, and hears ViewerOne's mute
+                changes back so it stays in sync. The mixer talks to ViewerOne directly, two-way, over its own USB
+                MIDI port — mute stays in sync even with Cubase closed. Everything below is detected automatically —
+                nothing to pick or configure.
               </p>
+              <div className="midi-status-list">
+                <p className={`midi-status-row midi-status-row--${cubaseStatus?.tone ?? 'warn'}`}>
+                  <strong>Cubase</strong> {cubaseStatus?.text}
+                </p>
+                <p className={`midi-status-row midi-status-row--${mixerStatus?.tone ?? 'warn'}`}>
+                  <strong>Mixer</strong> {mixerStatus?.text}
+                </p>
+              </div>
               <div className="settings-fields settings-fields--midi">
-                <div className="field field-grow">
-                  <label htmlFor="in">In (from Cubase)</label>
-                  <select
-                    id="in"
-                    value={state.midiInputName ?? ''}
-                    onChange={(e) => void patchSettings({ midiInputName: e.target.value || null })}
-                  >
-                    <option value="">— none —</option>
-                    {inputOptions.ins.map((n) => (
-                      <option key={n} value={n}>
-                        {n}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="field field-grow">
-                  <label htmlFor="out">Out (to Cubase)</label>
-                  <select
-                    id="out"
-                    value={state.midiOutputName ?? ''}
-                    onChange={(e) => void patchSettings({ midiOutputName: e.target.value || null })}
-                  >
-                    <option value="">— none —</option>
-                    {inputOptions.outs.map((n) => (
-                      <option key={n} value={n}>
-                        {n}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="field field-pc">
-                  <label htmlFor="pch">PC ch</label>
-                  <input
-                    id="pch"
-                    type="number"
-                    min={1}
-                    max={16}
-                    value={state.programChangeChannel}
-                    onChange={(e) => void patchSettings({ programChangeChannel: Number(e.target.value) })}
-                  />
-                </div>
-                <div className="field field-pc">
-                  <label htmlFor="mch">Mute ch</label>
-                  <input
-                    id="mch"
-                    type="number"
-                    min={1}
-                    max={16}
-                    value={state.muteFxMidiChannel}
-                    onChange={(e) => void patchSettings({ muteFxMidiChannel: Number(e.target.value) })}
-                  />
-                </div>
-                <div className="field field-pc">
-                  <label htmlFor="mcc">CC</label>
-                  <input
-                    id="mcc"
-                    type="number"
-                    min={0}
-                    max={127}
-                    value={state.muteFxCC}
-                    onChange={(e) => void patchSettings({ muteFxCC: Number(e.target.value) })}
-                  />
-                </div>
                 <label className="esp-enable esp-enable--inline">
                   <input
                     type="checkbox"
                     checked={state.fxMuted}
                     onChange={(e) => void patchSettings({ fxMuted: e.target.checked })}
                   />
-                  <span>FX muted (tint + CC 0)</span>
+                  <span>FX muted (tint + CC out)</span>
                 </label>
                 <div className="field field-btn">
                   <label className="label-spacer" aria-hidden>
                     &nbsp;
                   </label>
                   <button type="button" className="btn-secondary" onClick={() => void window.viewer.refreshMidi().then(apply)}>
-                    Refresh ports
+                    Reconnect MIDI
                   </button>
                 </div>
               </div>

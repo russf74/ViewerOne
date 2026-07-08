@@ -191,18 +191,6 @@ body {
   letter-spacing: -0.02em;
 }
 
-.version-badge {
-  font-size: 0.65rem;
-  font-weight: 600;
-  color: var(--accent);
-  background: rgba(108, 159, 255, 0.12);
-  border: 1px solid rgba(108, 159, 255, 0.35);
-  padding: 2px 6px;
-  border-radius: 4px;
-  letter-spacing: 0.02em;
-  vertical-align: middle;
-}
-
 .sub {
   color: var(--muted);
   font-size: 0.72rem;
@@ -337,6 +325,36 @@ button.danger {
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.midi-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 10px;
+}
+
+.midi-status-row {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin: 0;
+}
+
+.midi-status-row strong {
+  color: var(--text);
+  margin-right: 4px;
+}
+
+.midi-status-row--warn {
+  color: #d8a657;
+}
+
+.midi-status-row--error {
+  color: var(--danger);
+}
+
+.midi-status-row--ok {
+  color: #7dc47d;
 }
 
 .details-hint {

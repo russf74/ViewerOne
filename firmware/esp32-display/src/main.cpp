@@ -26,7 +26,7 @@
 #include "board_pins.h"
 
 /** Keep in sync with repository root `package.json` version. */
-static constexpr const char *VIEWERONE_FW_VERSION = "0.5.2";
+static constexpr const char *VIEWERONE_FW_VERSION = "5.0.1";
 
 /** Seconds the main loop may go without feeding the watchdog before it force-reboots the board. */
 static constexpr uint32_t WDT_TIMEOUT_S = 5;
@@ -116,8 +116,31 @@ static String lineBuf;
 static PanelGfx tft;
 
 #if !defined(VIEWERONE_NO_TOUCH)
-static bool s_touch_down = false;
-static uint32_t s_touch_down_ms = 0;
+static bool s_touch_raw_down = false;    // raw tft.getTouch() reading, unfiltered
+static uint32_t s_touch_raw_since_ms = 0; // when the raw reading last changed state
+static bool s_touch_down = false;        // confirmed (debounced) touch-down in progress
+static uint32_t s_touch_down_ms = 0;      // when the confirmed touch-down started
+static uint32_t s_last_toggle_ms = 0;
+
+/**
+ * A raw touch reading must hold steady for this long before it's trusted as a real press-down,
+ * rejecting brief electrical/contact noise glitches at the source rather than after the fact.
+ */
+static constexpr uint32_t TOUCH_CONFIRM_MS = 20;
+
+/**
+ * Minimum time between two mute_toggle events. Capacitive/resistive touch controllers on these
+ * cheap panels can chatter — a single finger press was observed in the field producing over a
+ * dozen rapid, independently valid-looking press/release cycles within a few seconds (each
+ * passing the normal 30-1200ms tap filter below, spaced ~250-900ms apart — i.e. full press/release
+ * cycles, not sub-debounce noise), which without this cooldown fires that many contradictory mute
+ * toggles instead of one. IMPORTANT: keep this short — an earlier 500ms value was long enough
+ * that a user's own quick legitimate re-tap (e.g. re-tapping because they didn't see instant
+ * visual feedback) got silently swallowed, making single taps feel unreliable. 200ms is still
+ * long enough to knock out the tightest part of an observed chatter burst without being
+ * perceptible as "unresponsive" for normal deliberate tapping.
+ */
+static constexpr uint32_t TOUCH_TOGGLE_COOLDOWN_MS = 200;
 #endif
 
 /** Word-wrap (GLCD font); converts newlines to spaces. Optional maxLines (0 = no limit). */
@@ -202,20 +225,29 @@ static void drawSong(const char *title, const char *chords, bool live, bool mute
 static void pollTouchMuteToggle() {
   int32_t tx = 0;
   int32_t ty = 0;
-  bool down = tft.getTouch(&tx, &ty);
+  bool raw = tft.getTouch(&tx, &ty);
   uint32_t now = millis();
 
-  if (down) {
+  // Stage 1: edge-detect the raw reading and require it to hold steady for TOUCH_CONFIRM_MS
+  // before trusting it, so a brief electrical blip can't even start a touch-down. This does NOT
+  // delay recognizing a genuine tap in practice — a real fingertip press easily holds past 20ms.
+  if (raw != s_touch_raw_down) {
+    s_touch_raw_down = raw;
+    s_touch_raw_since_ms = now;
+  }
+  bool confirmedRaw = s_touch_raw_down && (now - s_touch_raw_since_ms) >= TOUCH_CONFIRM_MS;
+
+  if (confirmedRaw) {
     if (!s_touch_down) {
       s_touch_down = true;
-      s_touch_down_ms = now;
+      s_touch_down_ms = s_touch_raw_since_ms; // true physical contact start, not the confirm instant
     }
-  } else {
-    if (s_touch_down) {
-      uint32_t dur = now - s_touch_down_ms;
-      if (dur >= 30 && dur < 1200) {
-        Serial.println("{\"evt\":\"mute_toggle\"}");
-      }
+  } else if (s_touch_down && !s_touch_raw_down) {
+    // Confirmed touch has now genuinely released (raw signal is low, not just mid-confirm).
+    uint32_t dur = now - s_touch_down_ms;
+    if (dur >= 30 && dur < 1200 && (now - s_last_toggle_ms) >= TOUCH_TOGGLE_COOLDOWN_MS) {
+      s_last_toggle_ms = now;
+      Serial.println("{\"evt\":\"mute_toggle\"}");
     }
     s_touch_down = false;
   }

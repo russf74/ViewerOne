@@ -21,14 +21,7 @@ export type SetlistItem = {
 }
 
 export type AppState = {
-  midiInputName: string | null
-  midiOutputName: string | null
-  programChangeChannel: number
-  /** Cubase / X32 sends CC on this channel — muted = 0, unmuted = 127 (default CC 85) */
-  muteFxMidiChannel: number
-  /** Control change number for FX mute (e.g. 85) */
-  muteFxCC: number
-  /** Cubase / X32 ↔ ViewerOne / ESP: muted = CC 0, unmuted = 127 */
+  /** Cubase / mixer ↔ ViewerOne / ESP: muted = tint + CC 0/127 out (see shared/midiConfig.ts) */
   fxMuted: boolean
   setlist: SetlistItem[]
   /** Row id from last matched program change; null until first PC */
@@ -37,9 +30,24 @@ export type AppState = {
   esp32Enabled: boolean
 }
 
+/** Live MIDI connection status, so the UI isn't "blind" even though ports are auto-detected/hardcoded. */
+export type MidiStatus = {
+  cubaseInputName: string | null
+  cubaseOutputName: string | null
+  mixerInputName: string | null
+  mixerInputOpen: boolean
+  mixerOutputName: string | null
+  mixerOutputOpen: boolean
+  mixerLastMessageAgoMs: number | null
+  mixerLastCc: { channel: number; controller: number; value: number } | null
+  mixerLastSentAgoMs: number | null
+  mixerLastSentCc: { channel: number; controller: number; value: number } | null
+  cubaseLastSentAgoMs: number | null
+  cubaseLastSentCc: { channel: number; controller: number; value: number } | null
+}
+
 export type PublicState = AppState & {
-  inputs: string[]
-  outputs: string[]
   /** From package.json / Electron app.getVersion() */
   appVersion: string
+  midi: MidiStatus
 }
