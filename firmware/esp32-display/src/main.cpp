@@ -2,7 +2,7 @@
  * ViewerOne — ESP32-2432S028R ILI9341 (CYD), landscape 320×240 via ROTATION in board_pins.h
  *
  * PC @ 115200: {"t":"Title","c":"1999","l":true,"m":false}
- *   c = release year (4-digit). m = FX mute: white text on black; unmuted = vivid green text on black.
+ *   c = release year (4-digit). m = FX mute: bright yellow text on black; unmuted = vivid green text on black.
  *   l is accepted for compatibility (display colour does not depend on live).
  * To PC (touch): {"evt":"mute_toggle"} — tap anywhere to toggle (handled by ViewerOne).
  * To PC (boot): {"evt":"boot"} — sent once on startup so ViewerOne immediately re-sends the
@@ -25,7 +25,7 @@
 #include "board_pins.h"
 
 /** Keep in sync with repository root `package.json` version. */
-static constexpr const char *VIEWERONE_FW_VERSION = "5.0.3";
+static constexpr const char *VIEWERONE_FW_VERSION = "5.0.4";
 
 /** Seconds the main loop may go without feeding the watchdog before it force-reboots the board. */
 static constexpr uint32_t WDT_TIMEOUT_S = 5;
@@ -183,7 +183,7 @@ static void drawSong(const char *title, const char *year, bool /*live*/, bool mu
   const int32_t H = tft.height();
   const int32_t mid = H / 2;
   const uint16_t bg = C_BLACK;
-  const uint16_t textColor = muted ? C_WHITE : C_LIME;
+  const uint16_t textColor = muted ? C_YELLOW : C_LIME;
   constexpr uint8_t kTitleSize = 5;
   constexpr uint8_t kYearSize = 7;
   constexpr int32_t kPad = 6;

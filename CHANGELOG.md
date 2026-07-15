@@ -1,5 +1,9 @@
 # Changelog
 
+## v5.0.4
+
+- Mute colours: muted = bright yellow text; unmuted = vivid lime green (black background).
+
 ## v5.0.3
 
 - Mute colours: muted = white text; unmuted = vivid lime green (black background).

@@ -14,8 +14,8 @@ export function Esp32Preview({ state }: Props) {
   )
 
   const fxMuted = Boolean(payload.m)
-  /** Match firmware: muted = white; unmuted = vivid lime (both title + year). */
-  const textColor = fxMuted ? '#ffffff' : '#39ff14'
+  /** Match firmware: muted = bright yellow; unmuted = vivid lime (both title + year). */
+  const textColor = fxMuted ? '#ffe600' : '#39ff14'
   const isWaiting = payload.t === ESP32_WAITING_TITLE && !payload.c
 
   return (

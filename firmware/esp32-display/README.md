@@ -1,6 +1,6 @@
 # ViewerOne ESP32 display (ILI9341)
 
-Firmware for the ESP32-2432S028R-style board: USB serial at **115200**, JSON lines: `{"t":"Title","c":"1999","l":true,"m":false}` (`c` = release year; `m` = mute → white text; unmuted → vivid green).
+Firmware for the ESP32-2432S028R-style board: USB serial at **115200**, JSON lines: `{"t":"Title","c":"1999","l":true,"m":false}` (`c` = release year; `m` = mute → bright yellow; unmuted → vivid green).
 
 ## Deploy from Windows (PowerShell)
 
