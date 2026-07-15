@@ -1,5 +1,9 @@
 # Changelog
 
+## v5.0.3
+
+- Mute colours: muted = white text; unmuted = vivid lime green (black background).
+
 ## v5.0.2
 
 - Setlist field is now **Year** (4-digit release year) instead of chords.

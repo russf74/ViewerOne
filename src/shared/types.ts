@@ -6,7 +6,7 @@ export type Esp32DisplayPayload = {
   c: string
   /** live */
   l: boolean
-  /** FX mute — red text on device when true; white when false */
+  /** FX mute — white text when true; vivid green when false */
   m?: boolean
 }
 
