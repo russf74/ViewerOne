@@ -141,7 +141,7 @@ export function App() {
   )
 
   const updateRow = useCallback(
-    (id: string, patch: Pick<SetlistItem, 'title' | 'chords' | 'live'>) => {
+    (id: string, patch: Partial<Pick<SetlistItem, 'title' | 'year' | 'live'>>) => {
       if (!state) return
       const nextItems = state.setlist.map((r) => (r.id === id ? { ...r, ...patch } : r))
       void setSetlist(nextItems)
@@ -276,7 +276,7 @@ export function App() {
           <span />
           <span>PC</span>
           <span>Title</span>
-          <span>Chords</span>
+          <span>Year</span>
           <span className="setlist-h-live">Live</span>
           <span />
         </div>
@@ -303,7 +303,7 @@ export function App() {
             </p>
           ) : (
             <p className="setlist-hint">
-              Reorder with ⋮⋮ to change PCs. In Chords, type <strong>N</strong> for a line break on the ESP (the letter is not shown).
+              Reorder with ⋮⋮ to change PCs. Year is a 4-digit release year shown on the ESP.
               Preview controls do not send MIDI to Cubase.
             </p>
           )}

@@ -22,9 +22,13 @@ export function createAppStore() {
 function normalizeSetlist(list: unknown): SetlistItem[] {
   if (!Array.isArray(list)) return []
   return list.map((row) => {
-    const r = row as SetlistItem
+    const r = row as SetlistItem & { chords?: string }
+    const year = String(r.year ?? r.chords ?? '')
     return {
-      ...r,
+      id: typeof r.id === 'string' ? r.id : crypto.randomUUID(),
+      program: typeof r.program === 'number' ? r.program : 0,
+      title: String(r.title ?? ''),
+      year,
       live: typeof r.live === 'boolean' ? r.live : true
     }
   })
@@ -51,7 +55,7 @@ export function newSetlistItem(partial?: Partial<SetlistItem>): SetlistItem {
     id: crypto.randomUUID(),
     program: partial?.program ?? 0,
     title: partial?.title ?? '',
-    chords: partial?.chords ?? '',
+    year: partial?.year ?? '',
     live: typeof partial?.live === 'boolean' ? partial.live : true
   }
 }

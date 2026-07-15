@@ -1,22 +1,22 @@
 import { useMemo } from 'react'
 import type { PublicState } from '../../shared/types'
-import { buildEsp32DisplayPayload, chordBlockPlainText, ESP32_WAITING_TITLE } from '../../shared/esp32Payload'
+import { buildEsp32DisplayPayload, ESP32_WAITING_TITLE } from '../../shared/esp32Payload'
 
 type Props = {
   state: PublicState
 }
 
-/** Mirrors payload + 50/50 title/chords (landscape 320×240 on device). */
+/** Mirrors payload + 50/50 title/year (landscape 320×240 on device). */
 export function Esp32Preview({ state }: Props) {
   const payload = useMemo(
     () => buildEsp32DisplayPayload(state),
     [state.setlist, state.currentSongId, state.fxMuted]
   )
 
-  const titleColor = '#ffffff'
-  const chordColor = payload.l ? '#00e5ff' : '#ffe066'
-  const isWaiting = payload.t === ESP32_WAITING_TITLE && !payload.c
   const fxMuted = Boolean(payload.m)
+  /** Match firmware: muted = bright red text; unmuted = white (both title + year). */
+  const textColor = fxMuted ? '#ff0000' : '#ffffff'
+  const isWaiting = payload.t === ESP32_WAITING_TITLE && !payload.c
 
   return (
     <div className="esp32-sim">
@@ -26,30 +26,20 @@ export function Esp32Preview({ state }: Props) {
           {!state.esp32Enabled ? 'Serial off' : 'USB serial — same JSON as device'}
         </span>
       </div>
-      <div
-        className={`esp32-sim-lcd ${!state.esp32Enabled ? 'esp32-sim-lcd--dim' : ''} ${
-          fxMuted ? 'esp32-sim-lcd--fx-muted' : 'esp32-sim-lcd--fx-unmuted'
-        }`}
-      >
+      <div className={`esp32-sim-lcd ${!state.esp32Enabled ? 'esp32-sim-lcd--dim' : ''}`}>
         <div className="esp32-sim-inner">
           <div className="esp32-sim-half esp32-sim-half--title">
             <div
               className="esp32-sim-title-fill"
-              style={{ color: titleColor }}
+              style={{ color: textColor }}
               title={isWaiting ? 'Idle text matches firmware + PC default' : undefined}
             >
               {payload.t || '—'}
             </div>
           </div>
-          <div className="esp32-sim-half esp32-sim-half--chords">
-            <div className="esp32-sim-chords-fill" style={{ color: chordColor }}>
-              {isWaiting && !payload.c ? (
-                ''
-              ) : !payload.c.trim() ? (
-                '—'
-              ) : (
-                chordBlockPlainText(payload.c)
-              )}
+          <div className="esp32-sim-half esp32-sim-half--year">
+            <div className="esp32-sim-year-fill" style={{ color: textColor }}>
+              {isWaiting && !payload.c ? '' : !payload.c.trim() ? '—' : payload.c}
             </div>
           </div>
         </div>

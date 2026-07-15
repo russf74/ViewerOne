@@ -1,5 +1,12 @@
 # Changelog
 
+## v5.0.2
+
+- Setlist field is now **Year** (4-digit release year) instead of chords.
+- ESP32 mute indicator: bright red title + year text on a black background (no solid red fill);
+  unmuted text is white.
+- Slightly smaller song title on the ESP; desktop ESP preview font sizes/colours aligned to match.
+
 ## v5.0.1
 
 - Version number now shows in the app's window/taskbar title ("ViewerOne v5.0.1 — Control")

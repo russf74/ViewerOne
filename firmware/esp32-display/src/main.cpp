@@ -1,13 +1,12 @@
 /**
  * ViewerOne — ESP32-2432S028R ILI9341 (CYD), landscape 320×240 via ROTATION in board_pins.h
  *
- * PC @ 115200: {"t":"Title","c":"Chords","l":true,"m":false}
- *   m = FX mute (full bright red background vs black). Omitted/false = unmuted.
+ * PC @ 115200: {"t":"Title","c":"1999","l":true,"m":false}
+ *   c = release year (4-digit). m = FX mute: bright red text on black; unmuted = white text on black.
+ *   l is accepted for compatibility (display colour does not depend on live).
  * To PC (touch): {"evt":"mute_toggle"} — tap anywhere to toggle (handled by ViewerOne).
  * To PC (boot): {"evt":"boot"} — sent once on startup so ViewerOne immediately re-sends the
  *   current song/mute state after any reset (manual power cycle or watchdog auto-recovery).
- *
- * Chords: capital letter N in "c" starts a new line (N is not drawn).
  *
  * Display: LovyanGFX (same SPI wiring as firmware/display-pinout-scan profiles 1–2).
  *
@@ -26,7 +25,7 @@
 #include "board_pins.h"
 
 /** Keep in sync with repository root `package.json` version. */
-static constexpr const char *VIEWERONE_FW_VERSION = "5.0.1";
+static constexpr const char *VIEWERONE_FW_VERSION = "5.0.2";
 
 /** Seconds the main loop may go without feeding the watchdog before it force-reboots the board. */
 static constexpr uint32_t WDT_TIMEOUT_S = 5;
@@ -34,11 +33,10 @@ static constexpr uint32_t WDT_TIMEOUT_S = 5;
 // RGB565
 static constexpr uint16_t C_BLACK = 0x0000;
 static constexpr uint16_t C_WHITE = 0xFFFF;
-static constexpr uint16_t C_CYAN = 0x07FF;
 static constexpr uint16_t C_YELLOW = 0xFFE0;
 static constexpr uint16_t C_GREY = 0x7BEF;
-/** Muted: full-brightness red (RGB565 0xF800) for outdoor visibility; unmuted: plain black */
-static constexpr uint16_t C_BG_MUTED = 0xF800;
+/** Muted text: full-brightness red (RGB565 0xF800) on black background */
+static constexpr uint16_t C_RED = 0xF800;
 
 /** ILI9341 + SPI — profile matching pinout-scan id 2 (HSPI, 40 MHz) or id 1 (20 MHz slow env). */
 class PanelGfx : public lgfx::LGFX_Device {
@@ -180,45 +178,20 @@ static int32_t drawTextBlock(const char *text, int32_t x, int32_t y, int32_t max
   return cy;
 }
 
-/**
- * Chord string: ASCII 'N' splits logical lines; the marker is never sent to the printer.
- */
-static int32_t drawChordLines(const char *chords, int32_t x, int32_t y, int32_t maxW, int32_t maxY, uint16_t color,
-                              uint8_t textSize, uint16_t bg) {
-  if (!chords || !*chords) return y;
-  int32_t cy = y;
-  const char *p = chords;
-  const int32_t minRoom = 8 * textSize + 2;
-  while (cy < maxY - minRoom) {
-    const char *q = p;
-    while (*q && *q != 'N') ++q;
-    String part;
-    for (const char *t = p; t < q; ++t) part += *t;
-    part.trim();
-    if (part.length() > 0) {
-      cy = drawTextBlock(part.c_str(), x, cy, maxW, maxY, color, textSize, bg, 0);
-    }
-    if (!*q) break;
-    p = q + 1;
-  }
-  return cy;
-}
-
-static void drawSong(const char *title, const char *chords, bool live, bool muted) {
+static void drawSong(const char *title, const char *year, bool /*live*/, bool muted) {
   const int32_t W = tft.width();
   const int32_t H = tft.height();
   const int32_t mid = H / 2;
-  const uint16_t bg = muted ? C_BG_MUTED : C_BLACK;
-  const uint16_t titleColor = C_WHITE;
-  const uint16_t chordColor = live ? C_CYAN : C_YELLOW;
+  const uint16_t bg = C_BLACK;
+  const uint16_t textColor = muted ? C_RED : C_WHITE;
   constexpr uint8_t kTitleSize = 5;
-  constexpr uint8_t kChordSize = 5;
+  constexpr uint8_t kYearSize = 7;
   constexpr int32_t kPad = 6;
 
   tft.fillScreen(bg);
 
-  drawTextBlock(title, kPad, kPad, W - 2 * kPad, mid - kPad, titleColor, kTitleSize, bg, 0);
-  drawChordLines(chords, kPad, mid + kPad / 2, W - 2 * kPad, H - kPad, chordColor, kChordSize, bg);
+  drawTextBlock(title, kPad, kPad, W - 2 * kPad, mid - kPad, textColor, kTitleSize, bg, 0);
+  drawTextBlock(year, kPad, mid + kPad / 2, W - 2 * kPad, H - kPad, textColor, kYearSize, bg, 0);
 }
 
 #if !defined(VIEWERONE_NO_TOUCH)

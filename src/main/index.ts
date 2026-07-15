@@ -263,7 +263,9 @@ function registerIpc(): void {
       id: typeof row.id === 'string' ? row.id : crypto.randomUUID(),
       program: 0,
       title: String(row.title ?? ''),
-      chords: String(row.chords ?? ''),
+      year: String(
+        row.year ?? (row as SetlistItem & { chords?: string }).chords ?? ''
+      ),
       live: typeof row.live === 'boolean' ? row.live : true
     }))
     const normalized = assignProgramsByOrder(withIds)

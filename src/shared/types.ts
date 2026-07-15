@@ -2,11 +2,11 @@
 export type Esp32DisplayPayload = {
   /** title */
   t: string
-  /** chords */
+  /** release year (4-digit) */
   c: string
   /** live */
   l: boolean
-  /** FX mute — faint red vs blue tint on device */
+  /** FX mute — red text on device when true; white when false */
   m?: boolean
 }
 
@@ -15,8 +15,9 @@ export type SetlistItem = {
   /** MIDI program 1–127; equals row index + 1 (recomputed when order changes) */
   program: number
   title: string
-  chords: string
-  /** Chord display: live = green title tint on ESP; not live = red */
+  /** Release year, typically 4 digits */
+  year: string
+  /** Kept for setlist/payload compatibility (ESP colour is mute-driven only). */
   live: boolean
 }
 
@@ -26,7 +27,7 @@ export type AppState = {
   setlist: SetlistItem[]
   /** Row id from last matched program change; null until first PC */
   currentSongId: string | null
-  /** When true, push current song/chords JSON over USB serial (CH340 / USB-serial autodetect; replug supported). */
+  /** When true, push current song/year JSON over USB serial (CH340 / USB-serial autodetect; replug supported). */
   esp32Enabled: boolean
 }
 

@@ -7,7 +7,7 @@ import type { SetlistItem } from '../../shared/types'
 type Props = {
   item: SetlistItem
   isCurrent: boolean
-  onChange: (patch: Pick<SetlistItem, 'title' | 'chords' | 'live'>) => void
+  onChange: (patch: Partial<Pick<SetlistItem, 'title' | 'year' | 'live'>>) => void
   onRemove: () => void
   /** Click row (not inputs/drag/live) to set as current for ESP preview — no MIDI. */
   onActivateRow?: () => void
@@ -19,13 +19,13 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
   })
 
   const [titleDraft, setTitleDraft] = useState(item.title)
-  const [chordsDraft, setChordsDraft] = useState(item.chords)
+  const [yearDraft, setYearDraft] = useState(item.year)
   const titleFocus = useRef(false)
-  const chordsFocus = useRef(false)
+  const yearFocus = useRef(false)
 
   useEffect(() => {
     setTitleDraft(item.title)
-    setChordsDraft(item.chords)
+    setYearDraft(item.year)
   }, [item.id])
 
   useEffect(() => {
@@ -33,17 +33,17 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
   }, [item.title])
 
   useEffect(() => {
-    if (!chordsFocus.current) setChordsDraft(item.chords)
-  }, [item.chords])
+    if (!yearFocus.current) setYearDraft(item.year)
+  }, [item.year])
 
   const commitTitle = () => {
     titleFocus.current = false
     if (titleDraft !== item.title) onChange({ title: titleDraft })
   }
 
-  const commitChords = () => {
-    chordsFocus.current = false
-    if (chordsDraft !== item.chords) onChange({ chords: chordsDraft })
+  const commitYear = () => {
+    yearFocus.current = false
+    if (yearDraft !== item.year) onChange({ year: yearDraft })
   }
 
   const style: CSSProperties = {
@@ -66,7 +66,7 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
     }
   }
 
-  const onChordsKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+  const onYearKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault()
       e.currentTarget.blur()
@@ -100,18 +100,20 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
         placeholder="Title"
       />
       <input
-        className="text-input chord-line"
+        className="text-input year-line"
         type="text"
-        value={chordsDraft}
-        onChange={(e) => setChordsDraft(e.target.value)}
+        inputMode="numeric"
+        maxLength={4}
+        value={yearDraft}
+        onChange={(e) => setYearDraft(e.target.value.replace(/\D/g, '').slice(0, 4))}
         onFocus={() => {
-          chordsFocus.current = true
+          yearFocus.current = true
         }}
-        onBlur={commitChords}
-        onKeyDown={onChordsKeyDown}
-        placeholder="Chords (N = new line on ESP)"
+        onBlur={commitYear}
+        onKeyDown={onYearKeyDown}
+        placeholder="Year"
       />
-      <label className="setlist-live-cell" title="Live: chord display is green; off = red">
+      <label className="setlist-live-cell" title="Live flag (setlist metadata)">
         <input
           type="checkbox"
           checked={item.live}

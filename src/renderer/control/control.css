@@ -551,7 +551,7 @@ button:disabled {
   min-height: 24px;
 }
 
-.setlist-row input.chord-line {
+.setlist-row input.year-line {
   min-width: 0;
 }
 
@@ -632,17 +632,7 @@ button:disabled {
   container-name: esp-lcd;
 }
 
-/* Match ESP: black when unmuted; full red when FX muted (RGB565 0xF800) */
-.esp32-sim-lcd--fx-unmuted {
-  background: #000;
-  box-shadow: none;
-}
-
-.esp32-sim-lcd--fx-muted {
-  background: #ff0000;
-  box-shadow: none;
-}
-
+/* Match ESP: always black background; mute state is text colour only */
 .esp32-sim-lcd--dim {
   opacity: 0.55;
 }
@@ -694,24 +684,26 @@ button:disabled {
   word-break: break-word;
   hyphens: auto;
   padding: 2px 0;
+  /* Match firmware kTitleSize = 5 vs kYearSize = 7 (~5/7 ratio) */
   font-size: clamp(11px, 24cqmin, 30px);
 }
 
-/* Block text so `N`→newline matches firmware; flex row was laying out each line as columns. */
-.esp32-sim-chords-fill {
+.esp32-sim-year-fill {
   flex: 1 1 auto;
   min-height: 0;
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   align-self: stretch;
   width: 100%;
   box-sizing: border-box;
   text-align: center;
   font-weight: 700;
   line-height: 1.2;
-  white-space: pre-line;
   overflow-wrap: anywhere;
   word-break: break-word;
   overflow-y: auto;
   padding: 4px 4px 2px;
-  font-size: clamp(10px, 20cqmin, 24px);
+  /* Match firmware kYearSize = 7 */
+  font-size: clamp(16px, 34cqmin, 42px);
 }
