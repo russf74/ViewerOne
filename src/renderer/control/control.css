@@ -632,7 +632,15 @@ button:disabled {
   container-name: esp-lcd;
 }
 
-/* Match ESP: always black background; mute state is text colour only */
+/* Match ESP: unmuted black; muted deep navy (RGB565 0x0011 ≈ #000088) */
+.esp32-sim-lcd--fx-unmuted {
+  background: #000;
+}
+
+.esp32-sim-lcd--fx-muted {
+  background: #000088;
+}
+
 .esp32-sim-lcd--dim {
   opacity: 0.55;
 }

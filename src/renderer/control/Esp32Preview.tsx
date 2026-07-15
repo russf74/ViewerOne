@@ -14,7 +14,7 @@ export function Esp32Preview({ state }: Props) {
   )
 
   const fxMuted = Boolean(payload.m)
-  /** Match firmware: muted = bright yellow; unmuted = vivid lime (both title + year). */
+  /** Match firmware: muted = yellow on navy; unmuted = lime on black. */
   const textColor = fxMuted ? '#ffe600' : '#39ff14'
   const isWaiting = payload.t === ESP32_WAITING_TITLE && !payload.c
 
@@ -26,7 +26,11 @@ export function Esp32Preview({ state }: Props) {
           {!state.esp32Enabled ? 'Serial off' : 'USB serial — same JSON as device'}
         </span>
       </div>
-      <div className={`esp32-sim-lcd ${!state.esp32Enabled ? 'esp32-sim-lcd--dim' : ''}`}>
+      <div
+        className={`esp32-sim-lcd ${!state.esp32Enabled ? 'esp32-sim-lcd--dim' : ''} ${
+          fxMuted ? 'esp32-sim-lcd--fx-muted' : 'esp32-sim-lcd--fx-unmuted'
+        }`}
+      >
         <div className="esp32-sim-inner">
           <div className="esp32-sim-half esp32-sim-half--title">
             <div
