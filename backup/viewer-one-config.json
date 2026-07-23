@@ -1,0 +1,278 @@
+{
+	"fxMuted": true,
+	"setlist": [
+		{
+			"id": "c0ba953b-588c-4920-a945-2e63310975e9",
+			"program": 1,
+			"title": "Soundcheck (Reflex)",
+			"year": "",
+			"ledPattern": 20
+		},
+		{
+			"id": "a1097ebd-df8b-4889-8e92-c28ac95379cd",
+			"program": 2,
+			"title": "Ready to Go",
+			"year": "",
+			"ledPattern": 20
+		},
+		{
+			"id": "d4205e65-4a6d-4506-81a3-4356c4d0365c",
+			"program": 3,
+			"title": "Let me entertain you",
+			"year": "1998",
+			"ledPattern": 20
+		},
+		{
+			"id": "1ff1f579-6353-4999-84df-709c967d878e",
+			"program": 4,
+			"title": "Take on me",
+			"year": "1985",
+			"ledPattern": 20
+		},
+		{
+			"id": "a44bac39-14df-4fd6-89ef-7b6d7a3130f1",
+			"program": 5,
+			"title": "Take your momma",
+			"year": "",
+			"ledPattern": 20
+		},
+		{
+			"id": "6f142877-3f8d-460c-bfc8-9e475f7b1e5c",
+			"program": 6,
+			"title": "A little respect",
+			"year": "1988",
+			"ledPattern": 20
+		},
+		{
+			"id": "2dc91f89-1c32-484b-aa68-b0961cbc562e",
+			"program": 7,
+			"title": "Friday im in love",
+			"year": "1992",
+			"ledPattern": 20
+		},
+		{
+			"id": "0fadd0c8-1538-4379-b73a-e2b3539ffe8a",
+			"program": 8,
+			"title": "I'm your man",
+			"year": "1985",
+			"ledPattern": 20
+		},
+		{
+			"id": "66bddc3f-4c0f-4dad-9844-cfa91fd29fe4",
+			"program": 9,
+			"title": "Year 3000",
+			"year": "2003",
+			"ledPattern": 20
+		},
+		{
+			"id": "75b7ee2b-ae1e-4a1d-ac8f-f8aaf79cf995",
+			"program": 10,
+			"title": "Baby give it up",
+			"year": "1983",
+			"ledPattern": 20
+		},
+		{
+			"id": "3d690482-dd9d-480c-a101-7150c0eafbf1",
+			"program": 11,
+			"title": "Sit down",
+			"year": "1991",
+			"ledPattern": 20
+		},
+		{
+			"id": "742e77dd-9fd3-496b-a565-00463edfccf6",
+			"program": 12,
+			"title": "Spin me round",
+			"year": "1984",
+			"ledPattern": 20
+		},
+		{
+			"id": "0203981b-a4ab-4194-aba5-8f4a3d52a021",
+			"program": 13,
+			"title": "Shine",
+			"year": "2007",
+			"ledPattern": 20
+		},
+		{
+			"id": "69c58429-c4d6-4e43-82c3-75489c31b3a2",
+			"program": 14,
+			"title": "Rio",
+			"year": "1982",
+			"ledPattern": 20
+		},
+		{
+			"id": "9349d75e-3213-401b-882f-d1a230b2f87c",
+			"program": 15,
+			"title": "Rock DJ",
+			"year": "",
+			"ledPattern": 20
+		},
+		{
+			"id": "afa147cb-0720-4820-b912-52109400fcfa",
+			"program": 16,
+			"title": "Don't you want me",
+			"year": "1981",
+			"ledPattern": 20
+		},
+		{
+			"id": "56d7a34a-8d5e-4142-b815-c2a42fbb2e5e",
+			"program": 17,
+			"title": "Keep on moving",
+			"year": "",
+			"ledPattern": 20
+		},
+		{
+			"id": "0a4737e5-c5af-459e-89eb-b4ffc4b25269",
+			"program": 18,
+			"title": "Just can't get enough",
+			"year": "1981",
+			"ledPattern": 20
+		},
+		{
+			"id": "2b1d2570-7130-4ac6-bbad-a9b27f341463",
+			"program": 19,
+			"title": "Kids",
+			"year": "",
+			"ledPattern": 20
+		},
+		{
+			"id": "ad8a0dc5-d823-4fb6-9896-bd0e903b76d7",
+			"program": 20,
+			"title": "I'm still standing",
+			"year": "1983",
+			"ledPattern": 20
+		},
+		{
+			"id": "9ec45673-c269-4157-8059-537a452693f4",
+			"program": 21,
+			"title": "Reach for the stars",
+			"year": "2000",
+			"ledPattern": 20
+		},
+		{
+			"id": "56120eb3-6cc6-4311-bd5e-e62ce8e367f6",
+			"program": 22,
+			"title": "Sometimes",
+			"year": "1986",
+			"ledPattern": 20
+		},
+		{
+			"id": "3d076538-dbb0-45dc-ad84-0545afcedfc5",
+			"program": 23,
+			"title": "C'est la vie",
+			"year": "",
+			"ledPattern": 20
+		},
+		{
+			"id": "154d31c7-e6ed-4e60-8d35-f56845702c0d",
+			"program": 24,
+			"title": "Reflex",
+			"year": "1984",
+			"ledPattern": 20
+		},
+		{
+			"id": "8dc3d278-6c8f-482b-b4f8-ac9492f82c6f",
+			"program": 25,
+			"title": "Country house",
+			"year": "",
+			"ledPattern": 20
+		},
+		{
+			"id": "87c95111-944b-4496-8972-a92d52dcd9d4",
+			"program": 26,
+			"title": "I don't feel like dancing",
+			"year": "",
+			"ledPattern": 20
+		},
+		{
+			"id": "7a24dced-4a21-4547-9e50-5cb8cdee1ca0",
+			"program": 27,
+			"title": "Tubthumping",
+			"year": "",
+			"ledPattern": 20
+		},
+		{
+			"id": "6d42a18c-54e2-46a4-805e-eb9970cd8b6b",
+			"program": 28,
+			"title": "Teenage dirtbag",
+			"year": "2000",
+			"ledPattern": 20
+		},
+		{
+			"id": "9f61b1c2-828b-4f6f-90fa-a635ca6bde27",
+			"program": 29,
+			"title": "Livin' la vida loca",
+			"year": "",
+			"ledPattern": 20
+		},
+		{
+			"id": "853bb4eb-cda7-47d4-9f40-ac9d4c449f97",
+			"program": 30,
+			"title": "Angels",
+			"year": "1997",
+			"ledPattern": 20
+		},
+		{
+			"id": "25bc572e-c150-4ff4-b6ee-00deed2d4e05",
+			"program": 31,
+			"title": "Dont look back ",
+			"year": "1996",
+			"ledPattern": 20
+		},
+		{
+			"id": "627ede9d-31be-49c8-a8a2-e4cc41431297",
+			"program": 32,
+			"title": "Outro M83",
+			"year": "",
+			"ledPattern": 20
+		},
+		{
+			"id": "edd2ad39-5422-4227-a449-d9dc75f33a69",
+			"program": 33,
+			"title": "Jump",
+			"year": "1983",
+			"ledPattern": 20
+		},
+		{
+			"id": "da5dbfbd-9086-4042-81c8-56fe7fb58225",
+			"program": 34,
+			"title": "",
+			"year": "",
+			"ledPattern": 20
+		}
+	],
+	"currentSongId": "d4205e65-4a6d-4506-81a3-4356c4d0365c",
+	"esp32Enabled": true,
+	"ledBrightness": 255,
+	"ledExternalPower": true,
+	"midiInputName": "CubaseToViewerOne",
+	"midiOutputName": "ViewerOneToCubase",
+	"mixerMidiInputName": "X-USB MIDI IN",
+	"mixerMidiOutputName": null,
+	"mixerMuteMidiChannel": 2,
+	"mixerMuteCC": 63,
+	"mixerMuteInverted": true,
+	"programChangeChannel": 1,
+	"muteFxMidiChannel": 1,
+	"muteFxCC": 85,
+	"esp32SerialPort": "__AUTO__",
+	"transport": {
+		"mode": "note",
+		"channel": 16,
+		"startNote": 60,
+		"stopNote": 61
+	},
+	"muteAll": {
+		"channel": 1,
+		"cc": 80,
+		"valueOn": 0,
+		"valueOff": 127,
+		"outMode": "absolute"
+	},
+	"muteFx": {
+		"channel": 1,
+		"cc": 85,
+		"valueOn": 0,
+		"valueOff": 127,
+		"outMode": "absolute"
+	}
+}
