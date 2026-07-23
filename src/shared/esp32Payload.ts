@@ -9,12 +9,12 @@ export function buildEsp32DisplayPayload(
   const row = st.currentSongId ? st.setlist.find((r) => r.id === st.currentSongId) : null
   const m = st.fxMuted
   if (!row || st.setlist.length === 0) {
-    return { t: ESP32_WAITING_TITLE, c: '', l: false, m }
+    return { t: ESP32_WAITING_TITLE, c: '', l: true, m }
   }
   const t = (row.title ?? '').trim()
   const c = (row.year ?? '').trim()
   if (!t && !c) {
-    return { t: ESP32_WAITING_TITLE, c: '', l: false, m }
+    return { t: ESP32_WAITING_TITLE, c: '', l: true, m }
   }
-  return { t: t || '—', c, l: row.live, m }
+  return { t: t || '—', c, l: true, m }
 }

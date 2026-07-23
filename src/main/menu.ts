@@ -1,10 +1,10 @@
 import { BrowserWindow, Menu, app, dialog } from 'electron'
 
 const startHelp =
-  '1. ESP32: Flash firmware/esp32-display, enable the pocket display below, pick your COM port.\n\n' +
-  '2. MIDI: Pick Input (from Cubase) and Output (back to Cubase) if you use program changes from Cubase. Set the Program Change channel to match.\n\n' +
-  '3. Setlist: Order = program numbers 1, 2, 3… Add songs; drag ⋮⋮ to reorder.\n\n' +
-  '4. Cubase: Send program changes on that channel when using MIDI follow.\n\n' +
+  '1. ESP32: Flash firmware/esp32-display, enable USB serial below (COM autodetect).\n\n' +
+  '2. MIDI: Cubase ↔ ViewerOne over loopMIDI (auto-detected). Program Change channel is fixed (see midiConfig).\n\n' +
+  '3. Setlist: Order = program numbers 1…125. Add songs; drag ⋮⋮ to reorder.\n\n' +
+  '4. Cubase: Song PC updates the display only. PC 126 = dim knight rider (between songs). PC 127 = apply lights for the displayed song.\n\n' +
   'Tip: View → Toggle Developer Tools if something looks wrong.'
 
 export function setupAppMenu(): void {

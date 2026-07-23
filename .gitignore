@@ -5,3 +5,5 @@ release/
 firmware/**/.pio/
 *.log
 .DS_Store
+*.tsbuildinfo
+

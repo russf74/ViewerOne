@@ -18,7 +18,14 @@ const api = {
   selectSong: (id: string | null): Promise<PublicState> => ipcRenderer.invoke('setlist:selectSong', id),
   patchSettings: (patch: Partial<AppState>): Promise<PublicState> =>
     ipcRenderer.invoke('settings:patch', patch),
-  refreshMidi: (): Promise<PublicState> => ipcRenderer.invoke('midi:refresh')
+  refreshMidi: (): Promise<PublicState> => ipcRenderer.invoke('midi:refresh'),
+  /** Simulate Cubase PC 126 — dim knight rider (idle lights). */
+  ledMidiIdle: (): Promise<PublicState> => ipcRenderer.invoke('led:midiIdle'),
+  /** Simulate Cubase PC 127 — apply current song pattern. */
+  ledMidiApply: (): Promise<PublicState> => ipcRenderer.invoke('led:midiApply'),
+  /** Live-test pattern id 0–20 on the ESP (does not change the song’s stored pattern). */
+  previewLedPattern: (id: number): Promise<PublicState> =>
+    ipcRenderer.invoke('led:previewPattern', id)
 }
 
 contextBridge.exposeInMainWorld('viewer', api)

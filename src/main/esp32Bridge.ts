@@ -44,7 +44,12 @@ function attachSerialReader(p: SerialPort): void {
       rxBuf = rxBuf.slice(i + 1)
       if (!line || !lineHandler) continue
       try {
-        lineHandler(JSON.parse(line) as Esp32FromDeviceMsg)
+        const msg = JSON.parse(line) as Esp32FromDeviceMsg
+        try {
+          lineHandler(msg)
+        } catch (err) {
+          console.warn('[ViewerOne] ESP32 line handler threw (swallowed):', err)
+        }
       } catch {
         /* ignore non-JSON noise */
       }
@@ -152,7 +157,11 @@ async function openDesiredPath(): Promise<void> {
       attachDisconnectHandlers(p, gen)
       const mode = desiredPath === ESP32_SERIAL_PORT_AUTO ? ' (auto)' : ''
       console.log('[ViewerOne] ESP32 serial:', concretePath, '@ 115200' + mode)
-      onOpenedCb?.()
+      try {
+        onOpenedCb?.()
+      } catch (err) {
+        console.warn('[ViewerOne] ESP32 onOpened callback threw (swallowed):', err)
+      }
     })
   } catch (e) {
     console.warn('[ViewerOne] ESP32 serial:', e)
@@ -181,12 +190,41 @@ export function setEsp32SerialPort(path: string | null, onOpened?: () => void): 
   void openDesiredPath()
 }
 
+/** Write a line; never throw. On failure, drop the port and schedule reconnect. */
+function writeSerialLine(line: string, label: string): void {
+  const p = port
+  if (!p?.isOpen) return
+  try {
+    p.write(line, (err) => {
+      if (!err) return
+      console.warn(`[ViewerOne] ESP32 ${label} write:`, err.message)
+      if (port !== p) return
+      disposeCurrentPort()
+      if (desiredPath) scheduleReconnect(openGeneration)
+    })
+  } catch (e) {
+    console.warn(`[ViewerOne] ESP32 ${label} write threw:`, e)
+    if (port === p) {
+      disposeCurrentPort()
+      if (desiredPath) scheduleReconnect(openGeneration)
+    }
+  }
+}
+
 export function pushEsp32Payload(payload: Esp32DisplayPayload): void {
-  if (!port?.isOpen) return
-  const line = JSON.stringify(payload) + '\n'
-  port.write(line, (err) => {
-    if (err) console.warn('[ViewerOne] ESP32 serial write:', err.message)
-  })
+  writeSerialLine(JSON.stringify(payload) + '\n', 'serial')
+}
+
+/** Trigger an LED pattern on the merged ViewerOne firmware (`{"led":"pattern","id":N}`). */
+export function pushEsp32LedPattern(patternId: number): void {
+  const id = Math.max(0, Math.min(20, Math.trunc(patternId)))
+  writeSerialLine(JSON.stringify({ led: 'pattern', id }) + '\n', 'LED')
+}
+
+/** Set LED brightness on the ESP (`{"led":"brightness","v":N}`). */
+export function pushEsp32LedBrightness(brightness: number): void {
+  const v = Math.max(0, Math.min(255, Math.trunc(brightness)))
+  writeSerialLine(JSON.stringify({ led: 'brightness', v }) + '\n', 'brightness')
 }
 
 export function shutdownEsp32Serial(): void {

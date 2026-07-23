@@ -23,3 +23,9 @@ static constexpr int8_t PIN_TOUCH_MOSI = 32;
 static constexpr int8_t PIN_TOUCH_MISO = 39;
 static constexpr int8_t PIN_TOUCH_CS = 33;
 static constexpr int8_t PIN_TOUCH_IRQ = 36;
+
+/**
+ * WS2812B data — CN1 header GPIO 27 (free on CYD; do NOT use GPIO 2 — that is TFT DC).
+ * CN1: GND | GPIO22 | GPIO27 | 3V3 — wire DIN to GPIO27, share GND with external 5V PSU.
+ */
+static constexpr int8_t PIN_LED_DATA = 27;

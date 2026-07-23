@@ -13,6 +13,9 @@ export type ViewerApi = {
   selectSong: (id: string | null) => Promise<PublicState>
   patchSettings: (patch: Partial<AppState>) => Promise<PublicState>
   refreshMidi: () => Promise<PublicState>
+  ledMidiIdle: () => Promise<PublicState>
+  ledMidiApply: () => Promise<PublicState>
+  previewLedPattern: (id: number) => Promise<PublicState>
 }
 
 declare global {

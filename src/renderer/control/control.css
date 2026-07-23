@@ -357,6 +357,39 @@ button:disabled {
   color: #7dc47d;
 }
 
+.midi-status-row--flash {
+  font-weight: 600;
+  animation: midi-feedback-in 0.35s ease;
+}
+
+@keyframes midi-feedback-in {
+  from {
+    opacity: 0.35;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/** Shared click acknowledgement for toolbar / settings / LED test buttons. */
+.btn-click-flash {
+  animation: btn-click-pulse 0.45s ease;
+}
+
+@keyframes btn-click-pulse {
+  0% {
+    background: color-mix(in srgb, var(--accent) 50%, #fff 8%);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 50%, transparent);
+    color: #0b0d12;
+  }
+  100% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+}
+
 .details-hint {
   margin-top: 6px;
   font-size: 0.72rem;
@@ -462,7 +495,7 @@ button:disabled {
 .setlist-header {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: 22px 28px minmax(72px, 1fr) minmax(72px, 1fr) 30px 26px;
+  grid-template-columns: 22px 28px minmax(72px, 1fr) minmax(56px, 0.55fr) minmax(110px, 0.85fr) 26px;
   gap: 2px 4px;
   font-size: 0.58rem;
   color: var(--muted);
@@ -473,13 +506,13 @@ button:disabled {
   margin-bottom: 2px;
 }
 
-.setlist-header .setlist-h-live {
-  text-align: center;
+.setlist-header .setlist-h-pattern {
+  text-align: left;
 }
 
 .setlist-row {
   display: grid;
-  grid-template-columns: 22px 28px minmax(72px, 1fr) minmax(72px, 1fr) 30px 26px;
+  grid-template-columns: 22px 28px minmax(72px, 1fr) minmax(56px, 0.55fr) minmax(110px, 0.85fr) 26px;
   gap: 2px 4px;
   align-items: center;
   padding: 1px 2px;
@@ -503,7 +536,8 @@ button:disabled {
 }
 
 .setlist-row-selectable input,
-.setlist-row-selectable textarea {
+.setlist-row-selectable textarea,
+.setlist-row-selectable select {
   cursor: text;
 }
 
@@ -555,20 +589,24 @@ button:disabled {
   min-width: 0;
 }
 
-.setlist-live-cell {
+.setlist-pattern-cell {
   display: flex;
   align-items: center;
-  justify-content: center;
+  min-width: 0;
   margin: 0;
-  cursor: pointer;
   min-height: 24px;
 }
 
-.setlist-live-cell input {
-  width: 14px;
-  height: 14px;
-  accent-color: var(--accent);
-  cursor: pointer;
+.setlist-pattern-cell select {
+  width: 100%;
+  min-width: 0;
+  font-size: 0.68rem;
+  padding: 2px 4px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: #0d1016;
+  color: var(--text);
+  font-family: inherit;
 }
 
 .text-input {
@@ -714,4 +752,186 @@ button:disabled {
   padding: 4px 4px 2px;
   /* Match firmware kYearSize = 7 */
   font-size: clamp(16px, 34cqmin, 42px);
+}
+
+.esp32-sim-pattern {
+  flex: 0 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  padding: 0 6px 5px;
+  font-size: clamp(10px, 13cqmin, 15px);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  opacity: 0.95;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Below the simulated LCD (app chrome only — not on device). */
+.esp32-sim-queued-line {
+  margin: 8px 0 0;
+  max-width: min(320px, 92vw);
+  font-size: 0.95rem;
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.esp32-sim-queued-line--pending {
+  color: var(--accent);
+}
+
+.esp32-sim-led-hint {
+  margin: 6px 0 0;
+  max-width: min(320px, 92vw);
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.esp32-sim-pc-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  max-width: min(320px, 92vw);
+}
+
+.esp32-sim-pc-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  color: var(--text);
+  background: color-mix(in srgb, var(--panel, #1a1f2a) 88%, var(--accent) 12%);
+  border: 1px solid color-mix(in srgb, var(--muted) 55%, transparent);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.esp32-sim-pc-btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.esp32-sim-pc-btn:active {
+  transform: translateY(0.5px);
+}
+
+.esp32-sim-pc-btn--flash {
+  animation: esp32-pc-pulse 0.5s ease;
+}
+
+.esp32-sim-pattern-test {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  margin-top: 8px;
+  max-width: min(320px, 92vw);
+}
+
+.esp32-sim-pattern-select-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+}
+
+.esp32-sim-pattern-select-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.esp32-sim-pattern-select {
+  width: 100%;
+  min-width: 0;
+  padding: 5px 6px;
+  font-size: 0.72rem;
+  font-family: inherit;
+  color: var(--text);
+  background: #0d1016;
+  border: 1px solid color-mix(in srgb, var(--muted) 55%, transparent);
+  border-radius: 6px;
+}
+
+.esp32-sim-pattern-select:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.esp32-sim-pattern-step {
+  flex: 0 0 auto;
+  width: 2rem;
+  align-self: flex-end;
+  padding: 5px 0;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text);
+  background: color-mix(in srgb, var(--panel, #1a1f2a) 88%, var(--accent) 12%);
+  border: 1px solid color-mix(in srgb, var(--muted) 55%, transparent);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.esp32-sim-pattern-step:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.esp32-sim-pattern-step:active {
+  transform: translateY(0.5px);
+}
+
+@keyframes esp32-pc-pulse {
+  0% {
+    background: color-mix(in srgb, var(--accent) 55%, #fff 10%);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+    color: #0b0d12;
+  }
+  100% {
+    background: color-mix(in srgb, var(--panel, #1a1f2a) 88%, var(--accent) 12%);
+    border-color: color-mix(in srgb, var(--muted) 55%, transparent);
+    box-shadow: 0 0 0 8px transparent;
+    color: var(--text);
+  }
+}
+
+.led-brightness-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.led-brightness-field input[type='range'] {
+  width: 100%;
+}
+
+.led-bri-value {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.settings-hint {
+  margin: 0;
+  font-size: 0.68rem;
+  color: var(--muted);
+  line-height: 1.35;
 }

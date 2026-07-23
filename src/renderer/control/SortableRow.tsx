@@ -3,13 +3,14 @@ import { useEffect, useRef, useState } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import type { SetlistItem } from '../../shared/types'
+import { LED_PATTERNS } from '../../shared/ledPatterns'
 
 type Props = {
   item: SetlistItem
   isCurrent: boolean
-  onChange: (patch: Partial<Pick<SetlistItem, 'title' | 'year' | 'live'>>) => void
+  onChange: (patch: Partial<Pick<SetlistItem, 'title' | 'year' | 'ledPattern'>>) => void
   onRemove: () => void
-  /** Click row (not inputs/drag/live) to set as current for ESP preview — no MIDI. */
+  /** Click row (not inputs/drag/select) to set as current for ESP preview — no MIDI. */
   onActivateRow?: () => void
 }
 
@@ -55,7 +56,7 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
 
   const onRowClick = (e: MouseEvent) => {
     const t = e.target as HTMLElement
-    if (t.closest('input, button, textarea, .drag-handle, .setlist-live-cell')) return
+    if (t.closest('input, button, textarea, select, .drag-handle, .setlist-pattern-cell')) return
     onActivateRow?.()
   }
 
@@ -84,7 +85,7 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
       <div className="drag-handle" {...attributes} {...listeners} title="Drag to reorder">
         ⋮⋮
       </div>
-      <span className="prog-label" title="Cubase program number for this row (matches standard 0–127 MIDI PC + 1).">
+      <span className="prog-label" title="Cubase program number for this row (wire PC = this − 1). Songs use 1–125; 126/127 are LED idle/apply.">
         {item.program}
       </span>
       <input
@@ -113,12 +114,18 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
         onKeyDown={onYearKeyDown}
         placeholder="Year"
       />
-      <label className="setlist-live-cell" title="Live flag (setlist metadata)">
-        <input
-          type="checkbox"
-          checked={item.live}
-          onChange={(e) => onChange({ live: e.target.checked })}
-        />
+      <label className="setlist-pattern-cell" title="LED pattern for this song">
+        <select
+          value={item.ledPattern}
+          onChange={(e) => onChange({ ledPattern: Number(e.target.value) })}
+          aria-label="LED pattern"
+        >
+          {LED_PATTERNS.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.label}
+            </option>
+          ))}
+        </select>
       </label>
       <button type="button" className="danger" onClick={onRemove} title="Remove">
         ×
