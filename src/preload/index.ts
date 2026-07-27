@@ -23,7 +23,7 @@ const api = {
   ledMidiIdle: (): Promise<PublicState> => ipcRenderer.invoke('led:midiIdle'),
   /** Simulate Cubase PC 127 — apply current song pattern. */
   ledMidiApply: (): Promise<PublicState> => ipcRenderer.invoke('led:midiApply'),
-  /** Live-test pattern id 0–20 on the ESP (does not change the song’s stored pattern). */
+  /** Live-test pattern id 0–20 or 99 on the ESP (does not change the song’s stored pattern). */
   previewLedPattern: (id: number): Promise<PublicState> =>
     ipcRenderer.invoke('led:previewPattern', id)
 }

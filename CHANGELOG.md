@@ -1,5 +1,14 @@
 # Changelog
 
+## v5.6.5
+
+- **99 - Blackout:** new LED pattern id 99 (`blackout`) — all LEDs solid off. Available in
+  setlist / test-pattern dropdowns; clamp/push accept 0–20 and 99. Random rotator (20) still
+  cycles 1→19 only — blackout is manual/special.
+- **ESP32 auto footer:** in random mode the TFT shows `(A) - <child title>` (e.g.
+  `(A) - Starfield`) at text size 2; long labels truncate instead of falling back to size 1.
+  Non-random patterns keep `NN - Name` at size 2 with the same truncate rule.
+
 ## v5.6.4
 
 - **Hardened against EPIPE / broken-pipe crashes:** Windows Electron can throw

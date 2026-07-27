@@ -9,7 +9,6 @@ type Props = {
 }
 
 const FLASH_MS = 500
-const PATTERN_COUNT = LED_PATTERNS.length
 
 function activePatternId(ledPattern: string): number {
   const found = LED_PATTERNS.find((p) => p.name === ledPattern)
@@ -59,8 +58,10 @@ export function Esp32Preview({ state }: Props) {
   }
 
   const stepPreview = (delta: number) => {
-    const next = (selectedId + delta + PATTERN_COUNT) % PATTERN_COUNT
-    applyPreview(next)
+    const idx = LED_PATTERNS.findIndex((p) => p.id === selectedId)
+    const i = idx < 0 ? 0 : idx
+    const next = LED_PATTERNS[(i + delta + LED_PATTERNS.length) % LED_PATTERNS.length]
+    applyPreview(next.id)
   }
 
   return (

@@ -246,7 +246,7 @@ function applyLedForCurrentSong(): void {
 }
 
 /**
- * Live LED pattern test (control UI). Same push path as PC 127, but any id 0–20 —
+ * Live LED pattern test (control UI). Same push path as PC 127, but any id 0–20 or 99 —
  * does not change the song’s stored ledPattern. Clears idle dim and restores brightness.
  */
 function previewLedPattern(rawId: unknown): void {

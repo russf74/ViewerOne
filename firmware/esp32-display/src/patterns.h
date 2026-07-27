@@ -6,7 +6,7 @@
 const char *patternName(PatternId id);
 
 /** Full TFT/UI label: "00 - Knight Rider" (title case). Wire JSON still uses patternName().
- *  Random (20) shows current child when space allows: "20 - Random › 05 - Starfield". */
+ *  Random (20) shows auto child title only: "(A) - Starfield". */
 void patternLabelDisplay(PatternId id, char *out, size_t n);
 
 void patternsBegin(CRGB *leds, uint16_t count);

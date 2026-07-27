@@ -76,4 +76,4 @@ A separate local **LED-Driver** repo (not required for ViewerOne rebuild) can se
 
 ## Version
 
-Firmware reports `VIEWERONE_FW_VERSION` in `src/main.cpp` (**5.6.1** = TFT footer matches ViewerOne labels, e.g. `01 - Aurora`; JSON `name` stays underscored).
+Firmware reports `VIEWERONE_FW_VERSION` in `src/main.cpp` (**5.6.5** = blackout id 99 + auto footer `(A) - Title`; JSON `name` stays underscored).

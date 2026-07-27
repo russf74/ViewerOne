@@ -8,7 +8,7 @@ export type LedPatternDef = {
   label: string
 }
 
-/** Zero-padded id matching pattern id: 0 → `00 - …`, 20 → `20 - …`. */
+/** Zero-padded id matching pattern id: 0 → `00 - …`, 20 → `20 - …`, 99 → `99 - …`. */
 function numberedLabel(id: number, title: string): string {
   return `${String(id).padStart(2, '0')} - ${title}`
 }
@@ -34,7 +34,9 @@ export const LED_PATTERNS: readonly LedPatternDef[] = [
   { id: 17, name: 'spark_shower', label: numberedLabel(17, 'Spark Shower') },
   { id: 18, name: 'color_bomb', label: numberedLabel(18, 'Color Bomb') },
   { id: 19, name: 'roller_derby', label: numberedLabel(19, 'Roller Derby') },
-  { id: 20, name: 'random', label: numberedLabel(20, 'Random') }
+  { id: 20, name: 'random', label: numberedLabel(20, 'Random') },
+  /** Manual/special only — not in random rotator (1..19). */
+  { id: 99, name: 'blackout', label: numberedLabel(99, 'Blackout') }
 ] as const
 
 /** Boot / waiting-only pattern — songs should not prefer this. */
@@ -42,6 +44,9 @@ export const DEFAULT_LED_PATTERN_ID = 0
 
 /** Default song pattern: sequential rotator through busy disco set (1..19). */
 export const RANDOM_LED_PATTERN_ID = 20
+
+/** Manual all-off; sparse id — not contiguous with 0–20. */
+export const BLACKOUT_LED_PATTERN_ID = 99
 
 /** @deprecated Prefer RANDOM_LED_PATTERN_ID — songs all use random now. */
 export const FIRST_SONG_LED_PATTERN_ID = 1
@@ -55,17 +60,20 @@ export function clampLedPatternId(id: unknown): number {
   const n = typeof id === 'number' ? id : Number(id)
   if (!Number.isFinite(n)) return DEFAULT_LED_PATTERN_ID
   const i = Math.trunc(n)
-  if (i < 0 || i >= LED_PATTERNS.length) return DEFAULT_LED_PATTERN_ID
-  return i
+  if (LED_PATTERNS.some((p) => p.id === i)) return i
+  return DEFAULT_LED_PATTERN_ID
 }
 
 export function ledPatternName(id: number): string {
-  return LED_PATTERNS[clampLedPatternId(id)]?.name ?? 'knight_rider'
+  return LED_PATTERNS.find((p) => p.id === clampLedPatternId(id))?.name ?? 'knight_rider'
 }
 
 export function formatLedPatternLabel(nameOrId: string | number | undefined): string {
   if (typeof nameOrId === 'number') {
-    return LED_PATTERNS[clampLedPatternId(nameOrId)]?.label ?? numberedLabel(0, 'Knight Rider')
+    return (
+      LED_PATTERNS.find((p) => p.id === clampLedPatternId(nameOrId))?.label ??
+      numberedLabel(0, 'Knight Rider')
+    )
   }
   const raw = (nameOrId ?? 'knight_rider').trim() || 'knight_rider'
   const found = LED_PATTERNS.find((p) => p.name === raw)

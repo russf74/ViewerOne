@@ -32,7 +32,7 @@
 #include "patterns.h"
 
 /** Keep in sync with repository root `package.json` version when releasing the app. */
-static constexpr const char *VIEWERONE_FW_VERSION = "5.6.1";
+static constexpr const char *VIEWERONE_FW_VERSION = "5.6.5";
 
 /** Seconds the main loop may go without feeding the watchdog before it force-reboots the board. */
 static constexpr uint32_t WDT_TIMEOUT_S = 5;
@@ -135,13 +135,17 @@ static void drawPatternFooter(uint16_t bg, uint16_t textColor) {
   const int32_t H = tft.height();
   char label[48];
   patternLabelDisplay(patternsCurrent(), label, sizeof(label));
-  // Size 2 ≈ 12px/char (~26 fit on 320); fall back to size 1 if longer.
-  const size_t len = strlen(label);
-  const uint8_t textSize = (len > 25) ? 1 : 2;
+  // Always size 2 (≈12px/char); truncate if wider than the footer — never fall back to size 1.
+  const uint8_t textSize = 2;
+  const int32_t cw = 6 * textSize;
+  const int32_t maxChars = cw > 0 ? (W - 8) / cw : 0;
+  if (maxChars > 0 && (int32_t)strlen(label) > maxChars) {
+    label[maxChars] = '\0';
+  }
   tft.fillRect(0, H - PATTERN_FOOTER_H, W, PATTERN_FOOTER_H, bg);
   tft.setTextSize(textSize);
   tft.setTextColor(textColor, bg);
-  tft.setCursor(4, textSize == 2 ? (H - 15) : (H - 12));
+  tft.setCursor(4, H - 15);
   tft.print(label);
 }
 
@@ -289,12 +293,14 @@ static PatternId parsePatternId(JsonVariantConst idField, JsonVariantConst nameF
       for (uint8_t i = 0; i < PATTERN_COUNT; i++) {
         if (strcasecmp(n, patternName((PatternId)i)) == 0) return (PatternId)i;
       }
+      if (strcasecmp(n, "blackout") == 0) return PATTERN_BLACKOUT;
       if (strcasecmp(n, "off") == 0 || strcasecmp(n, "stop") == 0) return PATTERN_OFF;
     }
   }
   if (!idField.isNull()) {
     int n = idField.as<int>();
     if (n >= 0 && n < PATTERN_COUNT) return (PatternId)n;
+    if (n == (int)PATTERN_BLACKOUT) return PATTERN_BLACKOUT;
     if (n == 255) return PATTERN_OFF;
   }
   return (PatternId)254;  // invalid

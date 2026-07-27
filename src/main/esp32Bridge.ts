@@ -1,6 +1,7 @@
 import { SerialPort } from 'serialport'
 import type { Esp32DisplayPayload } from '../shared/types.js'
 import { ESP32_SERIAL_PORT_AUTO, pickEsp32UsbSerialPath, type Esp32UsbSerialListEntry } from '../shared/esp32Serial.js'
+import { clampLedPatternId } from '../shared/ledPatterns.js'
 
 export type { Esp32DisplayPayload } from '../shared/types.js'
 
@@ -217,7 +218,7 @@ export function pushEsp32Payload(payload: Esp32DisplayPayload): void {
 
 /** Trigger an LED pattern on the merged ViewerOne firmware (`{"led":"pattern","id":N}`). */
 export function pushEsp32LedPattern(patternId: number): void {
-  const id = Math.max(0, Math.min(20, Math.trunc(patternId)))
+  const id = clampLedPatternId(patternId)
   writeSerialLine(JSON.stringify({ led: 'pattern', id }) + '\n', 'LED')
 }
 

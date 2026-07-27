@@ -660,6 +660,7 @@ const char *patternName(PatternId id) {
     case PATTERN_COLOR_BOMB: return "color_bomb";
     case PATTERN_ROLLER_DERBY: return "roller_derby";
     case PATTERN_RANDOM: return "random";
+    case PATTERN_BLACKOUT: return "blackout";
     case PATTERN_OFF: return "off";
     default: return "unknown";
   }
@@ -688,6 +689,7 @@ static const char *patternTitle(PatternId id) {
     case PATTERN_COLOR_BOMB: return "Color Bomb";
     case PATTERN_ROLLER_DERBY: return "Roller Derby";
     case PATTERN_RANDOM: return "Random";
+    case PATTERN_BLACKOUT: return "Blackout";
     case PATTERN_OFF: return "Off";
     default: return "Unknown";
   }
@@ -700,9 +702,12 @@ void patternLabelDisplay(PatternId id, char *out, size_t n) {
     return;
   }
   if (id == PATTERN_RANDOM) {
-    // e.g. "20 - Random › 05 - Starfield" (size-1 footer if long)
-    snprintf(out, n, "%02u - %s › %02u - %s", (unsigned)PATTERN_RANDOM, "Random",
-             (unsigned)g_randomChild, patternTitle(g_randomChild));
+    // e.g. "(A) - Starfield" — child title only (large font + truncate in footer)
+    snprintf(out, n, "(A) - %s", patternTitle(g_randomChild));
+    return;
+  }
+  if (id == PATTERN_BLACKOUT) {
+    snprintf(out, n, "%02u - %s", (unsigned)PATTERN_BLACKOUT, patternTitle(id));
     return;
   }
   if (id >= PATTERN_COUNT) {
@@ -761,7 +766,7 @@ void patternsSet(PatternId id) {
   g_dir2 = g_cDir[1];
 
   patternsClear();
-  if (id == PATTERN_OFF) return;
+  if (id == PATTERN_OFF || id == PATTERN_BLACKOUT) return;
 }
 
 PatternId patternsCurrent() { return g_pattern; }
@@ -806,13 +811,14 @@ static void resetAnimState() {
 }
 
 void patternsTick() {
-  if (!g_leds || g_pattern == PATTERN_OFF) return;
+  if (!g_leds || g_pattern == PATTERN_OFF || g_pattern == PATTERN_BLACKOUT) return;
   const uint32_t now = millis();
 
   PatternId run = g_pattern;
   if (g_pattern == PATTERN_RANDOM) {
     if ((int32_t)(now - g_randomNextMs) >= 0) {
       uint8_t next = (uint8_t)g_randomChild + 1;
+      // Rotate 1..19 only — never blackout (99) or idle knight_rider (0)
       if (next > (uint8_t)PATTERN_ROLLER_DERBY) next = (uint8_t)PATTERN_AURORA;
       g_randomChild = (PatternId)next;
       g_randomNextMs = now + kRandomRotateMs;
@@ -844,6 +850,7 @@ void patternsTick() {
     case PATTERN_SPARK_SHOWER: tickSparkShower(now); break;
     case PATTERN_COLOR_BOMB: tickColorBomb(now); break;
     case PATTERN_ROLLER_DERBY: tickRollerDerby(now); break;
+    case PATTERN_BLACKOUT: break;
     default: break;
   }
 }
