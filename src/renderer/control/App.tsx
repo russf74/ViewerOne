@@ -10,7 +10,7 @@ import {
 import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import type { AppState, PublicState, SetlistItem } from '../../shared/types'
 import { LED_USB_BRIGHTNESS_CAP } from '../../shared/ledPatterns'
-import { MIDI_PC_LED_IDLE, MIDI_PC_LED_APPLY, MIDI_PC_SONG_MAX } from '../../shared/midiConfig'
+import { MIDI_PC_LED_BLACKOUT, MIDI_PC_LED_IDLE, MIDI_PC_LED_APPLY, MIDI_PC_SONG_MAX } from '../../shared/midiConfig'
 import { SortableRow } from './SortableRow'
 import { Esp32Preview } from './Esp32Preview'
 
@@ -314,7 +314,8 @@ export function App() {
                 Cubase syncs song changes and its own auto-mute to ViewerOne over loopMIDI, and hears ViewerOne's mute
                 changes back so it stays in sync. The mixer talks to ViewerOne directly, two-way, over its own USB
                 MIDI port — mute stays in sync even with Cubase closed. Song PCs are 1–{MIDI_PC_SONG_MAX} (display
-                + queue lights only). <strong>PC {MIDI_PC_LED_IDLE}</strong> = dim knight rider (idle);
+                + queue lights only). <strong>PC {MIDI_PC_LED_BLACKOUT}</strong> = blackout;
+                <strong> PC {MIDI_PC_LED_IDLE}</strong> = dim knight rider (idle);
                 <strong> PC {MIDI_PC_LED_APPLY}</strong> = apply the displayed song’s pattern. Incoming Program
                 Change is accepted on <strong>any MIDI channel</strong>. Cubase track Output must be the{' '}
                 <code>CubaseToViewerOne</code> loopMIDI port.
@@ -369,7 +370,8 @@ export function App() {
                 JSON lines at <strong>115200</strong> baud — same as the preview. Flash <code>firmware/esp32-display</code>{' '}
                 for your board. USB serial uses the CH340 / USB-serial device automatically (or the only COM port if
                 there is just one); unplug and replug without restarting the app. Song select updates the LCD and
-                queues that song’s LED pattern. <strong>PC {MIDI_PC_LED_IDLE}</strong> = dim knight rider (idle);
+                queues that song’s LED pattern. <strong>PC {MIDI_PC_LED_BLACKOUT}</strong> = blackout;
+                <strong> PC {MIDI_PC_LED_IDLE}</strong> = dim knight rider (idle);
                 <strong> PC {MIDI_PC_LED_APPLY}</strong> = apply the queued pattern. Mic mute only affects the
                 display tint + MIDI CC — not the strip.
               </p>
@@ -477,7 +479,8 @@ export function App() {
           {state.setlist.length === 0 ? (
             <p className="setlist-hint">
               Row order = program numbers 1, 2, 3… (max {MIDI_PC_SONG_MAX}). Incoming MIDI PCs select the song
-              (wire 0→PC1, …). PC {MIDI_PC_LED_IDLE}/{MIDI_PC_LED_APPLY} are LED idle / apply overrides — not songs.
+              (wire 0→PC1, …). PC {MIDI_PC_LED_BLACKOUT}/{MIDI_PC_LED_IDLE}/{MIDI_PC_LED_APPLY} are LED
+              blackout / idle / apply — not songs.
             </p>
           ) : (
             <p className="setlist-hint">

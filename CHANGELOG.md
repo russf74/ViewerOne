@@ -1,5 +1,14 @@
 # Changelog
 
+## v5.6.6
+
+- **PC 125 = Blackout:** reserved Cubase-style Program Change 125 (wire 124) applies LED
+  pattern id 99 (`blackout`) immediately — same push path as preview/apply; updates
+  `ledPattern` / preview footer. Handled before setlist lookup (like PC 126/127).
+- Song select capped at **PC 1–124** (`MIDI_PC_SONG_MAX`); PC 126 idle and PC 127 apply unchanged.
+- Control UI: **PC 125 · Blackout** simulate button (flashes on real/simulated receipt);
+  MIDI / ESP settings hints updated.
+
 ## v5.6.5
 
 - **99 - Blackout:** new LED pattern id 99 (`blackout`) — all LEDs solid off. Available in

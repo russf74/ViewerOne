@@ -12,7 +12,7 @@ export type Esp32DisplayPayload = {
 
 export type SetlistItem = {
   id: string
-  /** MIDI program 1–125; equals row index + 1 (recomputed when order changes). PC 126/127 reserved for LED. */
+  /** MIDI program 1–124; equals row index + 1 (recomputed when order changes). PC 125–127 reserved for LED. */
   program: number
   title: string
   /** Release year, typically 4 digits */
@@ -21,7 +21,7 @@ export type SetlistItem = {
    * LED pattern id 0–20 or 99 (blackout) for this song (see shared/ledPatterns.ts).
    * Default is 20 (random — sequential rotate of 1..19 on ESP).
    * Id 0 (knight_rider) is boot / between-songs idle (also PC 126).
-   * Id 99 (blackout) is manual/special only — not in the random rotator.
+   * Id 99 (blackout) is manual/special — also MIDI PC 125; not in the random rotator.
    * Queued when the song is selected for display; applied via MIDI PC 127
    * (or the control UI simulate / pattern preview).
    */
@@ -86,7 +86,7 @@ export type PublicState = AppState & {
    * Last reserved LED Program Change (Cubase/UI numbering) that fired — real MIDI
    * or UI simulate. Renderer pulses the matching test button when {@link ledMidiPulseAt} changes.
    */
-  ledMidiPulse: 126 | 127 | null
+  ledMidiPulse: 125 | 126 | 127 | null
   /** `Date.now()` when {@link ledMidiPulse} was last set (changes on every trigger). */
   ledMidiPulseAt: number
 }

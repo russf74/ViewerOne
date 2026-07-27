@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { PublicState } from '../../shared/types'
 import { buildEsp32DisplayPayload, ESP32_WAITING_TITLE } from '../../shared/esp32Payload'
 import { LED_PATTERNS, clampLedPatternId, formatLedPatternLabel } from '../../shared/ledPatterns'
-import { MIDI_PC_LED_IDLE, MIDI_PC_LED_APPLY } from '../../shared/midiConfig'
+import { MIDI_PC_LED_BLACKOUT, MIDI_PC_LED_IDLE, MIDI_PC_LED_APPLY } from '../../shared/midiConfig'
 
 type Props = {
   state: PublicState
@@ -42,12 +42,17 @@ export function Esp32Preview({ state }: Props) {
       : queuedLabel
     : '—'
 
-  const [flashPc, setFlashPc] = useState<126 | 127 | null>(null)
+  const [flashPc, setFlashPc] = useState<125 | 126 | 127 | null>(null)
 
   useEffect(() => {
     const pc = state.ledMidiPulse
     const at = state.ledMidiPulseAt
-    if (!at || (pc !== MIDI_PC_LED_IDLE && pc !== MIDI_PC_LED_APPLY)) return
+    if (
+      !at ||
+      (pc !== MIDI_PC_LED_BLACKOUT && pc !== MIDI_PC_LED_IDLE && pc !== MIDI_PC_LED_APPLY)
+    ) {
+      return
+    }
     setFlashPc(pc)
     const t = window.setTimeout(() => setFlashPc(null), FLASH_MS)
     return () => window.clearTimeout(t)
@@ -104,11 +109,26 @@ export function Esp32Preview({ state }: Props) {
         Queued: {queuedText}
       </p>
       <p className="esp32-sim-led-hint">
+        <strong>PC {MIDI_PC_LED_BLACKOUT}</strong> = blackout.{' '}
         <strong>PC {MIDI_PC_LED_IDLE}</strong> = dim knight rider (idle).{' '}
         <strong>PC {MIDI_PC_LED_APPLY}</strong> = apply the queued song pattern. Song select and mic mute do not
         change the strip.
       </p>
       <div className="esp32-sim-pc-btns" role="group" aria-label="Simulate reserved LED program changes">
+        <button
+          type="button"
+          key={flashPc === MIDI_PC_LED_BLACKOUT ? `blackout-${state.ledMidiPulseAt}` : 'blackout'}
+          className={`esp32-sim-pc-btn${flashPc === MIDI_PC_LED_BLACKOUT ? ' esp32-sim-pc-btn--flash' : ''}`}
+          title="Simulate PC 125 — LED blackout (all off)"
+          onClick={(e) => {
+            e.currentTarget.classList.remove('btn-click-flash')
+            void e.currentTarget.offsetWidth
+            e.currentTarget.classList.add('btn-click-flash')
+            void window.viewer.ledMidiBlackout()
+          }}
+        >
+          PC 125 · Blackout
+        </button>
         <button
           type="button"
           key={flashPc === MIDI_PC_LED_IDLE ? `idle-${state.ledMidiPulseAt}` : 'idle'}

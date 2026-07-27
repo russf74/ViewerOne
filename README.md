@@ -103,6 +103,7 @@ Create two virtual cables whose names include both Cubase and ViewerOne (order m
 - **ViewerOne → Cubase:** e.g. `ViewerOneToCubase`
 
 Program Change / mute CC conventions are fixed in `src/shared/midiConfig.ts` (no per-machine secrets).
+Song select uses Cubase-style PC **1–124**; reserved **PC 125** = LED blackout, **PC 126** = idle dim knight rider, **PC 127** = apply current song pattern.
 
 ### 7. After restore — app checklist
 

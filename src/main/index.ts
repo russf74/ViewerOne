@@ -33,6 +33,7 @@ import {
   MIXER_MUTE_CC,
   MIXER_MUTE_INVERTED,
   MIDI_PC_SONG_MAX,
+  MIDI_PC_LED_BLACKOUT,
   MIDI_PC_LED_IDLE,
   MIDI_PC_LED_APPLY,
   LED_IDLE_DIM_BRIGHTNESS
@@ -154,8 +155,8 @@ let ledPattern = 'knight_rider'
 /** True while PC 126 idle dim is active — brightness slider is held until PC 127 / apply. */
 let ledIdleDimActive = false
 
-/** Last reserved LED PC (126/127) for UI flash — real MIDI or simulate buttons. */
-let ledMidiPulse: 126 | 127 | null = null
+/** Last reserved LED PC (125/126/127) for UI flash — real MIDI or simulate buttons. */
+let ledMidiPulse: 125 | 126 | 127 | null = null
 let ledMidiPulseAt = 0
 
 function buildPublicState(): PublicState {
@@ -192,7 +193,7 @@ function buildPublicState(): PublicState {
   }
 }
 
-function noteLedMidiPulse(pc: 126 | 127): void {
+function noteLedMidiPulse(pc: 125 | 126 | 127): void {
   ledMidiPulse = pc
   ledMidiPulseAt = Date.now()
 }
@@ -209,6 +210,22 @@ function pushEsp32BrightnessFromSettings(): void {
   const st = getState(store)
   if (!st.esp32Enabled || ledIdleDimActive) return
   pushEsp32LedBrightness(st.ledBrightness)
+}
+
+/**
+ * Full LED blackout (pattern id 99). Same path as MIDI PC 125 / UI simulate / preview.
+ * Clears idle dim and restores settings brightness (strip stays off via blackout pattern).
+ */
+function applyLedBlackout(): void {
+  noteLedMidiPulse(MIDI_PC_LED_BLACKOUT)
+  const st = getState(store)
+  ledIdleDimActive = false
+  ledPattern = ledPatternName(99)
+  if (st.esp32Enabled) {
+    pushEsp32LedPattern(99)
+    pushEsp32LedBrightness(st.ledBrightness)
+  }
+  broadcastUiState()
 }
 
 /**
@@ -261,7 +278,7 @@ function previewLedPattern(rawId: unknown): void {
   broadcastUiState()
 }
 
-/** Push current song/mute JSON only — board keeps its own LED state until PC 126/127. */
+/** Push current song/mute JSON only — board keeps its own LED state until PC 125/126/127. */
 function onEsp32SerialOpened(): void {
   broadcastEsp32DisplayIfEnabled()
 }
@@ -308,7 +325,7 @@ function applyFxMuted(muted: boolean, opts: { sendToCubase: boolean; sendToMixer
   if (opts.sendToCubase) sendMuteCcToCubase(muted)
   if (opts.sendToMixer) sendMuteCcToMixer(muted)
   if (changed) {
-    // Mute updates display tint + CC only — LEDs stay on PC 126/127 (and pattern preview).
+    // Mute updates display tint + CC only — LEDs stay on PC 125/126/127 (and pattern preview).
     broadcastState()
   }
 }
@@ -331,7 +348,7 @@ function handleEsp32Line(msg: Esp32FromDeviceMsg): void {
   if (evt === 'mute_toggle') toggleFxMutedFromEsp()
   if (evt === 'boot') {
     applyLedPatternFromEsp(msg['led'])
-    // Board reset — resend display JSON only; strip keeps firmware boot KR until PC 126/127.
+    // Board reset — resend display JSON only; strip keeps firmware boot KR until PC 125/126/127.
     console.log('[ViewerOne] ESP32 reported boot/reset — resending display state')
     broadcastEsp32DisplayIfEnabled()
   }
@@ -398,6 +415,11 @@ function connectMidi(): void {
       broadcastUiState()
 
       // Cubase/UI PC = wire + 1 (see shared/midiConfig.ts). Match reserved LED PCs by exact wire.
+      if (wireProgram === MIDI_PC_LED_BLACKOUT - 1) {
+        console.log(`[ViewerOne] MIDI: PC ${MIDI_PC_LED_BLACKOUT} (LED blackout) ch ${channel0 + 1}`)
+        applyLedBlackout()
+        return
+      }
       if (wireProgram === MIDI_PC_LED_IDLE - 1) {
         console.log(`[ViewerOne] MIDI: PC ${MIDI_PC_LED_IDLE} (LED idle) ch ${channel0 + 1}`)
         applyLedIdle()
@@ -416,7 +438,7 @@ function connectMidi(): void {
       const s = getState(store)
       const row = s.setlist.find((r) => r.program === pc)
       if (row) {
-        // Display + queue only — LEDs change via PC 126/127.
+        // Display + queue only — LEDs change via PC 125/126/127.
         console.log(`[ViewerOne] MIDI: song PC ${pc} → "${row.title}" (ch ${channel0 + 1})`)
         setState(store, { currentSongId: row.id })
         broadcastState()
@@ -640,6 +662,12 @@ function registerIpc(): void {
     return buildPublicState()
   })
 
+  /** Simulate Cubase PC 125 (LED blackout) — same path as real MIDI. */
+  ipcMain.handle('led:midiBlackout', () => {
+    applyLedBlackout()
+    return buildPublicState()
+  })
+
   /** Simulate Cubase PC 126 (LED idle) — same path as real MIDI. */
   ipcMain.handle('led:midiIdle', () => {
     applyLedIdle()
@@ -734,7 +762,7 @@ function registerIpc(): void {
   })
 }
 
-/** Program numbers follow setlist order: row i → PC = min(i + 1, MIDI_PC_SONG_MAX). PC 126/127 reserved for LED. */
+/** Program numbers follow setlist order: row i → PC = min(i + 1, MIDI_PC_SONG_MAX). PC 125–127 reserved for LED. */
 function assignProgramsByOrder(items: SetlistItem[]): SetlistItem[] {
   return items.map((row, i) => ({
     ...row,

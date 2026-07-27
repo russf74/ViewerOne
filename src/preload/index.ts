@@ -19,6 +19,8 @@ const api = {
   patchSettings: (patch: Partial<AppState>): Promise<PublicState> =>
     ipcRenderer.invoke('settings:patch', patch),
   refreshMidi: (): Promise<PublicState> => ipcRenderer.invoke('midi:refresh'),
+  /** Simulate Cubase PC 125 — LED blackout (pattern id 99). */
+  ledMidiBlackout: (): Promise<PublicState> => ipcRenderer.invoke('led:midiBlackout'),
   /** Simulate Cubase PC 126 — dim knight rider (idle lights). */
   ledMidiIdle: (): Promise<PublicState> => ipcRenderer.invoke('led:midiIdle'),
   /** Simulate Cubase PC 127 — apply current song pattern. */

@@ -85,7 +85,7 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
       <div className="drag-handle" {...attributes} {...listeners} title="Drag to reorder">
         ⋮⋮
       </div>
-      <span className="prog-label" title="Cubase program number for this row (wire PC = this − 1). Songs use 1–125; 126/127 are LED idle/apply.">
+      <span className="prog-label" title="Cubase program number for this row (wire PC = this − 1). Songs use 1–124; 125–127 are LED blackout/idle/apply.">
         {item.program}
       </span>
       <input
