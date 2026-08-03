@@ -318,7 +318,11 @@ export function App() {
                 <strong> PC {MIDI_PC_LED_IDLE}</strong> = dim knight rider (idle);
                 <strong> PC {MIDI_PC_LED_APPLY}</strong> = apply the displayed song’s pattern. Incoming Program
                 Change is accepted on <strong>any MIDI channel</strong>. Cubase track Output must be the{' '}
-                <code>CubaseToViewerOne</code> loopMIDI port.
+                <code>CubaseToViewerOne</code> loopMIDI port. Arranger commands use the existing{' '}
+                <code>ViewerOneToCubase</code> output; defaults are <strong>Note On, channel 16, note 62 Prev,
+                note 63 Next</strong>. In Cubase, map these to the same Arranger previous/next commands used by
+                your USB keyboard. Song identity still arrives by the existing Cubase Program Change on{' '}
+                <code>CubaseToViewerOne</code>; scanning adds no new inbound protocol.
               </p>
               <div className="midi-status-list">
                 <p className={`midi-status-row midi-status-row--${cubaseStatus?.tone ?? 'warn'}`}>
@@ -360,6 +364,73 @@ export function App() {
                   >
                     Reconnect MIDI
                   </button>
+                </div>
+                <div className="field">
+                  <label htmlFor="arranger-mode">Arranger message</label>
+                  <select
+                    id="arranger-mode"
+                    value={state.arrangerMidi.mode}
+                    disabled={state.arrangerScan.active}
+                    onChange={(e) =>
+                      void patchSettings({
+                        arrangerMidi: {
+                          ...state.arrangerMidi,
+                          mode: e.target.value === 'cc' ? 'cc' : 'note'
+                        }
+                      })
+                    }
+                  >
+                    <option value="note">Note On pulse</option>
+                    <option value="cc">Control Change 127</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label htmlFor="arranger-channel">Channel</label>
+                  <input
+                    id="arranger-channel"
+                    type="number"
+                    min={1}
+                    max={16}
+                    value={state.arrangerMidi.channel}
+                    disabled={state.arrangerScan.active}
+                    onChange={(e) =>
+                      void patchSettings({
+                        arrangerMidi: { ...state.arrangerMidi, channel: Number(e.target.value) }
+                      })
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="arranger-prev-number">Prev {state.arrangerMidi.mode === 'note' ? 'note' : 'CC'}</label>
+                  <input
+                    id="arranger-prev-number"
+                    type="number"
+                    min={0}
+                    max={127}
+                    value={state.arrangerMidi.prevNumber}
+                    disabled={state.arrangerScan.active}
+                    onChange={(e) =>
+                      void patchSettings({
+                        arrangerMidi: { ...state.arrangerMidi, prevNumber: Number(e.target.value) }
+                      })
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="arranger-next-number">Next {state.arrangerMidi.mode === 'note' ? 'note' : 'CC'}</label>
+                  <input
+                    id="arranger-next-number"
+                    type="number"
+                    min={0}
+                    max={127}
+                    value={state.arrangerMidi.nextNumber}
+                    disabled={state.arrangerScan.active}
+                    onChange={(e) =>
+                      void patchSettings({
+                        arrangerMidi: { ...state.arrangerMidi, nextNumber: Number(e.target.value) }
+                      })
+                    }
+                  />
                 </div>
               </div>
             </div>
@@ -451,9 +522,62 @@ export function App() {
             </button>
             <span className="setlist-preview-hint">Preview · row click or ↑↓ when not typing</span>
           </div>
+          <div className="setlist-preview-nav arranger-controls">
+            <button
+              type="button"
+              className="setlist-step-btn"
+              disabled={state.arrangerScan.active || !state.midi.cubaseOutputOpen}
+              onClick={(e) => {
+                flashButton(e.currentTarget)
+                void window.viewer.arrangerPrev().then(apply)
+              }}
+            >
+              Arranger Prev
+            </button>
+            <button
+              type="button"
+              className="setlist-step-btn"
+              disabled={state.arrangerScan.active || !state.midi.cubaseOutputOpen}
+              onClick={(e) => {
+                flashButton(e.currentTarget)
+                void window.viewer.arrangerNext().then(apply)
+              }}
+            >
+              Arranger Next
+            </button>
+            {state.arrangerScan.active ? (
+              <button
+                type="button"
+                className="setlist-step-btn"
+                onClick={(e) => {
+                  flashButton(e.currentTarget)
+                  void window.viewer.cancelArrangerScan().then(apply)
+                }}
+              >
+                Cancel Scan
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="primary setlist-step-btn"
+                disabled={!state.midi.cubaseInputOpen || !state.midi.cubaseOutputOpen}
+                onClick={(e) => {
+                  flashButton(e.currentTarget)
+                  void window.viewer.scanArranger().then(apply)
+                }}
+              >
+                Scan Arranger
+              </button>
+            )}
+            <span className={`arranger-progress arranger-progress--${state.arrangerScan.phase}`} role="status">
+              {state.arrangerScan.message}
+              {state.arrangerScan.active ? ` (${state.arrangerScan.collected} found)` : ''}
+            </span>
+          </div>
         </div>
         <div className="setlist-header">
           <span />
+          <span title="Saved Arranger position">#</span>
           <span>PC</span>
           <span>Title</span>
           <span>Year</span>
@@ -463,10 +587,11 @@ export function App() {
         <div className="setlist-scroll" ref={setlistScrollRef}>
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={(e) => void onDragEnd(e)}>
             <SortableContext items={state.setlist.map((r) => r.id)} strategy={verticalListSortingStrategy}>
-              {state.setlist.map((item) => (
+              {state.setlist.map((item, index) => (
                 <SortableRow
                   key={item.id}
                   item={item}
+                  order={index + 1}
                   isCurrent={item.id === state.currentSongId}
                   onChange={(patch) => updateRow(item.id, patch)}
                   onRemove={() => void window.viewer.removeSong(item.id).then(apply)}
@@ -479,13 +604,13 @@ export function App() {
         <div className="setlist-footer">
           {state.setlist.length === 0 ? (
             <p className="setlist-hint">
-              Row order = program numbers 1, 2, 3… (max {MIDI_PC_SONG_MAX}). Incoming MIDI PCs select the song
-              (wire 0→PC1, …). PC {MIDI_PC_LED_BLACKOUT}/{MIDI_PC_LED_IDLE}/{MIDI_PC_LED_APPLY} are LED
+              Add songs manually or use Scan Arranger. Incoming MIDI PCs select by the stable PC field
+              (wire 0→PC1, max {MIDI_PC_SONG_MAX}). PC {MIDI_PC_LED_BLACKOUT}/{MIDI_PC_LED_IDLE}/{MIDI_PC_LED_APPLY} are LED
               blackout / idle / apply — not songs.
             </p>
           ) : (
             <p className="setlist-hint">
-              Reorder with ⋮⋮ to change PCs (1–{MIDI_PC_SONG_MAX}). Year is a 4-digit release year shown on the ESP.
+              Reorder with ⋮⋮ without changing each song’s Cubase PC (1–{MIDI_PC_SONG_MAX}). Year is a 4-digit release year shown on the ESP.
               Preview updates the display and queues lights — applied with PC{' '}
               {MIDI_PC_LED_APPLY}. Preview controls do not send MIDI to Cubase.
             </p>

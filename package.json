@@ -1,6 +1,6 @@
 {
   "name": "viewer-one",
-  "version": "5.7.1",
+  "version": "5.8.0",
   "description": "Live setlist display + MIDI control for Cubase",
   "author": "ViewerOne",
   "main": "out/main/index.js",

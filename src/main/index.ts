@@ -4,7 +4,7 @@ import { setupAppMenu } from './menu.js'
 import { existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createAppStore, getState, setState, newSetlistItem, assignLedPatternsByOrder } from './store.js'
+import { createAppStore, getState, setState, newSetlistItem } from './store.js'
 import { MidiService, listInputs, listOutputs } from './midi.js'
 import {
   pushEsp32Payload,
@@ -46,7 +46,13 @@ import {
   MIDI_PC_LED_APPLY,
   LED_IDLE_DIM_BRIGHTNESS
 } from '../shared/midiConfig.js'
-import type { AppState, Esp32DisplayStatus, PublicState, SetlistItem } from '../shared/types.js'
+import type {
+  AppState,
+  ArrangerScanState,
+  Esp32DisplayStatus,
+  PublicState,
+  SetlistItem
+} from '../shared/types.js'
 
 // Must run before any MIDI/serial traffic — EPIPE on stdout used to kill the main process mid-gig.
 installProcessGuards()
@@ -182,6 +188,18 @@ let prompt2On = false
 let promptMidiPulse: 120 | 121 | 122 | 123 | null = null
 let promptMidiPulseAt = 0
 
+const ARRANGER_CHANGE_TIMEOUT_MS = 1400
+const ARRANGER_NO_CHANGE_ATTEMPTS = 3
+let latestSongProgram: number | null = null
+let songIdentityRevision = 0
+let arrangerScanCancelled = false
+let arrangerScan: ArrangerScanState = {
+  active: false,
+  phase: 'idle',
+  collected: 0,
+  message: 'Ready'
+}
+
 function buildPublicState(): PublicState {
   const base = getState(store)
   const queuedRow = base.currentSongId
@@ -199,6 +217,7 @@ function buildPublicState(): PublicState {
     prompt2On,
     promptMidiPulse,
     promptMidiPulseAt,
+    arrangerScan,
     midi: {
       cubaseInputName,
       cubaseInputOpen,
@@ -524,6 +543,8 @@ function connectMidi(): void {
         console.log(`[ViewerOne] MIDI: ignoring out-of-range PC wire=${wireProgram} (UI ${pc}) ch ${channel0 + 1}`)
         return
       }
+      latestSongProgram = pc
+      songIdentityRevision++
       const s = getState(store)
       const row = s.setlist.find((r) => r.program === pc)
       if (row) {
@@ -587,6 +608,186 @@ function disconnectMidi(): void {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function setArrangerScan(patch: Partial<ArrangerScanState>): void {
+  arrangerScan = { ...arrangerScan, ...patch }
+  broadcastUiState()
+}
+
+function sendArrangerCommand(direction: 'prev' | 'next'): void {
+  const mapping = getState(store).arrangerMidi
+  const number = direction === 'prev' ? mapping.prevNumber : mapping.nextNumber
+  console.log(
+    `[ViewerOne] MIDI: Arranger ${direction} → ${mapping.mode === 'note' ? 'Note' : 'CC'} ${number}, ch ${mapping.channel}, port "${cubaseOutputName ?? '(no output port)'}"`
+  )
+  if (mapping.mode === 'note') midi.sendNotePulse(mapping.channel, number)
+  else midi.sendControlChange(mapping.channel, number, 127)
+}
+
+async function waitForSongIdentityChange(
+  fromProgram: number,
+  revisionAtSend: number,
+  respectCancel: boolean
+): Promise<number | null> {
+  const deadline = Date.now() + ARRANGER_CHANGE_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    if (respectCancel && arrangerScanCancelled) return null
+    if (
+      songIdentityRevision > revisionAtSend &&
+      latestSongProgram !== null &&
+      latestSongProgram !== fromProgram
+    ) {
+      return latestSongProgram
+    }
+    await sleep(50)
+  }
+  return null
+}
+
+async function stepArrangerUntilChanged(
+  direction: 'prev' | 'next',
+  fromProgram: number,
+  respectCancel: boolean
+): Promise<number | null> {
+  for (let attempt = 1; attempt <= ARRANGER_NO_CHANGE_ATTEMPTS; attempt++) {
+    if (respectCancel && arrangerScanCancelled) return null
+    const revisionAtSend = songIdentityRevision
+    sendArrangerCommand(direction)
+    const changed = await waitForSongIdentityChange(fromProgram, revisionAtSend, respectCancel)
+    if (changed !== null) return changed
+    if (respectCancel && arrangerScanCancelled) return null
+    console.log(
+      `[ViewerOne] Arranger scan: ${direction} produced no song change (${attempt}/${ARRANGER_NO_CHANGE_ATTEMPTS})`
+    )
+  }
+  return null
+}
+
+function buildScannedSetlist(programs: number[], previous: SetlistItem[]): SetlistItem[] {
+  const byProgram = new Map<number, SetlistItem>()
+  for (const row of previous) {
+    if (!byProgram.has(row.program)) byProgram.set(row.program, row)
+  }
+  const usedIds = new Set<string>()
+  return programs.map((program) => {
+    const old = byProgram.get(program)
+    const canReuseId = old && !usedIds.has(old.id)
+    const id = canReuseId ? old.id : crypto.randomUUID()
+    usedIds.add(id)
+    return {
+      id,
+      program,
+      title: old?.title || `Song PC ${program}`,
+      year: old?.year ?? '',
+      // Preserve every custom pick keyed by Cubase's stable song program.
+      ledPattern: clampLedPatternId(old?.ledPattern ?? songLedPatternForIndex())
+    }
+  })
+}
+
+async function runArrangerScan(): Promise<void> {
+  if (arrangerScan.active) return
+  const before = getState(store)
+  const currentRow = before.currentSongId
+    ? before.setlist.find((row) => row.id === before.currentSongId)
+    : null
+  const startProgram = latestSongProgram ?? currentRow?.program ?? null
+  if (startProgram === null || startProgram < 1 || startProgram > MIDI_PC_SONG_MAX) {
+    setArrangerScan({
+      active: false,
+      phase: 'error',
+      collected: 0,
+      message: 'No current song identity. Select an Arranger step so Cubase sends its normal song Program Change, then scan again.'
+    })
+    return
+  }
+  if (!cubaseInputOpen || !cubaseOutputOpen) {
+    setArrangerScan({
+      active: false,
+      phase: 'error',
+      collected: 0,
+      message: 'Cubase MIDI input and output must both be connected before scanning.'
+    })
+    return
+  }
+
+  arrangerScanCancelled = false
+  const programs = [startProgram]
+  let currentProgram = startProgram
+  let wrapped = false
+  setArrangerScan({
+    active: true,
+    phase: 'scanning',
+    collected: 1,
+    message: `Scanning from PC ${startProgram}…`
+  })
+
+  while (!arrangerScanCancelled && programs.length < MIDI_PC_SONG_MAX) {
+    const nextProgram = await stepArrangerUntilChanged('next', currentProgram, true)
+    if (arrangerScanCancelled) break
+    if (nextProgram === null) break
+    currentProgram = nextProgram
+    if (currentProgram === startProgram) {
+      wrapped = true
+      break
+    }
+    programs.push(currentProgram)
+    setArrangerScan({
+      collected: programs.length,
+      message: `Collected ${programs.length} songs · latest PC ${currentProgram}`
+    })
+  }
+
+  const wasCancelled = arrangerScanCancelled
+  if (wasCancelled) {
+    // Allow an already-sent Next command to deliver its normal song PC before restoring.
+    await sleep(250)
+    if (latestSongProgram !== null) currentProgram = latestSongProgram
+  }
+
+  let restored = currentProgram === startProgram || wrapped
+  if (!restored) {
+    setArrangerScan({
+      active: true,
+      phase: 'returning',
+      collected: programs.length,
+      message: `Returning to start PC ${startProgram}…`
+    })
+    const maxPrevSteps = Math.max(2, programs.length + 2)
+    for (let step = 0; step < maxPrevSteps && currentProgram !== startProgram; step++) {
+      const previousProgram = await stepArrangerUntilChanged('prev', currentProgram, false)
+      if (previousProgram === null) break
+      currentProgram = previousProgram
+    }
+    restored = currentProgram === startProgram
+  }
+
+  if (wasCancelled) {
+    setArrangerScan({
+      active: false,
+      phase: 'cancelled',
+      collected: programs.length,
+      message: restored ? 'Scan cancelled; Arranger returned to the starting song.' : 'Scan cancelled; could not confirm return to the starting song.'
+    })
+    return
+  }
+
+  const scanned = buildScannedSetlist(programs, before.setlist)
+  const startRow = scanned.find((row) => row.program === startProgram)
+  setState(store, {
+    setlist: scanned,
+    currentSongId: startRow?.id ?? null
+  })
+  broadcastState()
+  setArrangerScan({
+    active: false,
+    phase: restored ? 'complete' : 'error',
+    collected: scanned.length,
+    message: restored
+      ? `Scan complete: saved ${scanned.length} songs and returned to PC ${startProgram}.`
+      : `Saved ${scanned.length} songs, but could not confirm return to PC ${startProgram}.`
+  })
 }
 
 /**
@@ -665,30 +866,33 @@ function registerIpc(): void {
     if (!Array.isArray(items)) return buildPublicState()
     const withIds = items.map((row) => ({
       id: typeof row.id === 'string' ? row.id : crypto.randomUUID(),
-      program: 0,
+      program: Math.max(1, Math.min(MIDI_PC_SONG_MAX, Math.round(Number(row.program) || 1))),
       title: String(row.title ?? ''),
       year: String(
         row.year ?? (row as SetlistItem & { chords?: string }).chords ?? ''
       ),
       ledPattern: clampLedPatternId(row.ledPattern)
     }))
-    const normalized = assignProgramsByOrder(withIds)
     const st = getState(store)
     const still =
-      st.currentSongId && normalized.some((r) => r.id === st.currentSongId)
+      st.currentSongId && withIds.some((r) => r.id === st.currentSongId)
         ? st.currentSongId
         : null
-    setState(store, { setlist: normalized, currentSongId: still })
+    setState(store, { setlist: withIds, currentSongId: still })
     broadcastState()
     return buildPublicState()
   })
 
   ipcMain.handle('setlist:add', () => {
     const st = getState(store)
-    const next = assignProgramsByOrder([
+    const usedPrograms = new Set(st.setlist.map((row) => row.program))
+    let program = 1
+    while (program <= MIDI_PC_SONG_MAX && usedPrograms.has(program)) program++
+    if (program > MIDI_PC_SONG_MAX) return buildPublicState()
+    const next = [
       ...st.setlist,
-      newSetlistItem({ ledPattern: songLedPatternForIndex(st.setlist.length) })
-    ])
+      newSetlistItem({ program, ledPattern: songLedPatternForIndex(st.setlist.length) })
+    ]
     setState(store, { setlist: next })
     broadcastState()
     return buildPublicState()
@@ -696,8 +900,7 @@ function registerIpc(): void {
 
   ipcMain.handle('setlist:remove', (_e, id: string) => {
     const st = getState(store)
-    const filtered = st.setlist.filter((r) => r.id !== id)
-    const next = assignProgramsByOrder(filtered)
+    const next = st.setlist.filter((r) => r.id !== id)
     const nextSong = st.currentSongId === id ? null : st.currentSongId
     setState(store, { setlist: next, currentSongId: nextSong })
     broadcastState()
@@ -712,6 +915,15 @@ function registerIpc(): void {
     const mutedToApply = patch.fxMuted !== undefined ? Boolean(patch.fxMuted) : undefined
     if (patch.allMuted !== undefined) allowed.allMuted = Boolean(patch.allMuted)
     if (patch.esp32Enabled !== undefined) allowed.esp32Enabled = Boolean(patch.esp32Enabled)
+    if (patch.arrangerMidi && typeof patch.arrangerMidi === 'object') {
+      const raw = patch.arrangerMidi
+      allowed.arrangerMidi = {
+        mode: raw.mode === 'cc' ? 'cc' : 'note',
+        channel: Math.max(1, Math.min(16, Math.round(Number(raw.channel) || st.arrangerMidi.channel))),
+        prevNumber: Math.max(0, Math.min(127, Math.round(Number(raw.prevNumber) || 0))),
+        nextNumber: Math.max(0, Math.min(127, Math.round(Number(raw.nextNumber) || 0)))
+      }
+    }
 
     let nextExternal =
       patch.ledExternalPower !== undefined ? Boolean(patch.ledExternalPower) : st.ledExternalPower
@@ -749,6 +961,29 @@ function registerIpc(): void {
       mixerOutputName = null
     }
     broadcastState()
+    return buildPublicState()
+  })
+
+  ipcMain.handle('arranger:prev', () => {
+    if (!arrangerScan.active) sendArrangerCommand('prev')
+    return buildPublicState()
+  })
+
+  ipcMain.handle('arranger:next', () => {
+    if (!arrangerScan.active) sendArrangerCommand('next')
+    return buildPublicState()
+  })
+
+  ipcMain.handle('arranger:scan', () => {
+    if (!arrangerScan.active) void runArrangerScan()
+    return buildPublicState()
+  })
+
+  ipcMain.handle('arranger:cancelScan', () => {
+    if (arrangerScan.active) {
+      arrangerScanCancelled = true
+      setArrangerScan({ message: 'Cancelling; returning to the starting song…' })
+    }
     return buildPublicState()
   })
 
@@ -865,18 +1100,6 @@ function registerIpc(): void {
   })
 }
 
-/** Program numbers follow setlist order; PCs 120–127 are reserved for prompts and LEDs. */
-function assignProgramsByOrder(items: SetlistItem[]): SetlistItem[] {
-  return items.map((row, i) => ({
-    ...row,
-    program: Math.min(MIDI_PC_SONG_MAX, i + 1)
-  }))
-}
-
-function programsMatchListOrder(items: SetlistItem[]): boolean {
-  return items.every((row, i) => row.program === Math.min(MIDI_PC_SONG_MAX, i + 1))
-}
-
 const gotTheLock = app.requestSingleInstanceLock()
 
 if (!gotTheLock) {
@@ -905,15 +1128,6 @@ if (!gotTheLock) {
       if (!isQuitting) broadcastUiState()
     })
     registerIpc()
-    const initial = getState(store)
-    // Programs by order; every song defaults to random (20).
-    setState(store, {
-      setlist: assignLedPatternsByOrder(
-        programsMatchListOrder(initial.setlist)
-          ? initial.setlist
-          : assignProgramsByOrder(initial.setlist)
-      )
-    })
     connectMidi()
     syncEsp32SerialFromStore()
     setupAppMenu()

@@ -1,5 +1,5 @@
 import Store from 'electron-store'
-import type { AppState, SetlistItem } from '../shared/types.js'
+import type { AppState, ArrangerMidiMapping, SetlistItem } from '../shared/types.js'
 import {
   clampLedBrightness,
   clampLedPatternId,
@@ -17,7 +17,13 @@ const defaults: AppState = {
   currentSongId: null,
   esp32Enabled: false,
   ledBrightness: LED_DEFAULT_BRIGHTNESS,
-  ledExternalPower: false
+  ledExternalPower: false,
+  arrangerMidi: {
+    mode: 'note',
+    channel: 16,
+    prevNumber: 62,
+    nextNumber: 63
+  }
 }
 
 export function createAppStore(): AppStore {
@@ -44,6 +50,21 @@ function normalizeSetlist(list: unknown): SetlistItem[] {
   })
 }
 
+function clampMidi7(value: unknown, fallback: number): number {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) ? Math.max(0, Math.min(127, Math.round(parsed))) : fallback
+}
+
+function normalizeArrangerMidi(value: unknown): ArrangerMidiMapping {
+  const raw = value && typeof value === 'object' ? (value as Partial<ArrangerMidiMapping>) : {}
+  return {
+    mode: raw.mode === 'cc' ? 'cc' : 'note',
+    channel: Math.max(1, Math.min(16, Math.round(Number(raw.channel) || 16))),
+    prevNumber: clampMidi7(raw.prevNumber, 62),
+    nextNumber: clampMidi7(raw.nextNumber, 63)
+  }
+}
+
 /** Assign every song to random (20) — sequential rotate of busy patterns on ESP. */
 export function assignLedPatternsByOrder(items: SetlistItem[]): SetlistItem[] {
   return items.map((row) => ({
@@ -65,7 +86,8 @@ export function getState(store: AppStore): AppState {
     currentSongId: (store.get('currentSongId') as string | null | undefined) ?? null,
     esp32Enabled: Boolean(store.get('esp32Enabled')),
     ledBrightness,
-    ledExternalPower
+    ledExternalPower,
+    arrangerMidi: normalizeArrangerMidi(store.get('arrangerMidi'))
   }
 }
 

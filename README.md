@@ -117,7 +117,31 @@ Create two virtual cables whose names include both Cubase and ViewerOne (order m
 - **ViewerOne → Cubase:** e.g. `ViewerOneToCubase`
 
 Program Change / mute CC conventions are fixed in `src/shared/midiConfig.ts` (no per-machine secrets).
-Song select uses Cubase-style PC **1–124**; reserved **PC 125** = LED blackout, **PC 126** = idle dim knight rider, **PC 127** = apply current song pattern.
+Song select uses Cubase-style PC **1–119**; PCs 120–123 are prompt indicators, and reserved
+**PC 125** = LED blackout, **PC 126** = idle dim knight rider, **PC 127** = apply current song pattern.
+
+#### Cubase Arranger controls and scan
+
+ViewerOne sends Arranger Prev/Next through the existing **`ViewerOneToCubase`** output. Defaults:
+
+- Message: **Note On pulse**
+- Channel: **16**
+- **Prev: note 62**
+- **Next: note 63**
+
+The message type (Note On or CC), channel, and Prev/Next note/CC numbers are configurable in
+ViewerOne's MIDI panel. In Cubase, map these messages to the same Arranger previous/next commands
+already used by the USB keyboard.
+
+**Scan Arranger** snapshots the current song, steps forward while Cubase sends its normal song
+Program Changes, detects the end/wrap, and steps back to the starting song. Song identity still
+comes into ViewerOne through the existing **`CubaseToViewerOne`** input; scanning does not add a
+new inbound MIDI protocol.
+
+The scanned order is saved immediately by `electron-store` and loaded unchanged after app or PC
+restart. A later scan replaces the order. Each row shows both its saved Arranger position (`#`)
+and its stable Cubase song Program Change (`PC`); existing title, year, and LED pattern are merged
+by PC so custom LED choices survive rescans.
 
 ### 7. After restore — app checklist
 

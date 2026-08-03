@@ -25,7 +25,7 @@ export type Esp32DisplayStatus = {
 
 export type SetlistItem = {
   id: string
-  /** MIDI program 1–119; equals row index + 1 (recomputed when order changes). PCs 120–127 are reserved. */
+  /** Stable Cubase song Program Change, 1–119. Row order may differ after an Arranger scan. */
   program: number
   title: string
   /** Release year, typically 4 digits */
@@ -39,6 +39,24 @@ export type SetlistItem = {
    * (or the control UI simulate / pattern preview).
    */
   ledPattern: number
+}
+
+export type ArrangerMidiMapping = {
+  /** Note On pulse or CC 127 on ViewerOne's existing Cubase output. */
+  mode: 'note' | 'cc'
+  /** MIDI channel 1–16. */
+  channel: number
+  /** MIDI note/CC number 0–127. */
+  prevNumber: number
+  /** MIDI note/CC number 0–127. */
+  nextNumber: number
+}
+
+export type ArrangerScanState = {
+  active: boolean
+  phase: 'idle' | 'scanning' | 'returning' | 'complete' | 'cancelled' | 'error'
+  collected: number
+  message: string
 }
 
 export type AppState = {
@@ -55,6 +73,8 @@ export type AppState = {
   ledBrightness: number
   /** When false, strip is assumed powered from ESP32/USB — brightness hard-capped. */
   ledExternalPower: boolean
+  /** Cubase Generic Remote mapping used for Arranger Prev / Next. */
+  arrangerMidi: ArrangerMidiMapping
 }
 
 /** Live MIDI connection status, so the UI isn't "blind" even though ports are auto-detected/hardcoded. */
@@ -113,4 +133,6 @@ export type PublicState = AppState & {
   promptMidiPulse: 120 | 121 | 122 | 123 | null
   /** `Date.now()` when {@link promptMidiPulse} was last set. */
   promptMidiPulseAt: number
+  /** Ephemeral progress for the Cubase Arranger setlist scan. */
+  arrangerScan: ArrangerScanState
 }

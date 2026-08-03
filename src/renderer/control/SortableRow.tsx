@@ -7,6 +7,8 @@ import { LED_PATTERNS } from '../../shared/ledPatterns'
 
 type Props = {
   item: SetlistItem
+  /** 1-based position in the saved/scanned Arranger order. */
+  order: number
   isCurrent: boolean
   onChange: (patch: Partial<Pick<SetlistItem, 'title' | 'year' | 'ledPattern'>>) => void
   onRemove: () => void
@@ -14,7 +16,7 @@ type Props = {
   onActivateRow?: () => void
 }
 
-export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow }: Props) {
+export function SortableRow({ item, order, isCurrent, onChange, onRemove, onActivateRow }: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.id
   })
@@ -85,6 +87,9 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
       <div className="drag-handle" {...attributes} {...listeners} title="Drag to reorder">
         ⋮⋮
       </div>
+      <span className="order-label" title="Position in saved Arranger order">
+        {order}
+      </span>
       <span className="prog-label" title="Cubase program number for this row (wire PC = this − 1). Songs use 1–119; 120–123 are prompt indicators and 125–127 are LED controls.">
         {item.program}
       </span>

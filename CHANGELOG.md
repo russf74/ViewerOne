@@ -1,5 +1,19 @@
 # Changelog
 
+## v5.8.0
+
+- Added configurable Cubase Arranger Prev/Next output on the existing `ViewerOneToCubase` port.
+  Defaults are Note On pulses on channel 16: note 62 Prev and note 63 Next; Note/CC mode,
+  channel, and numbers are editable in the MIDI panel.
+- Added **Scan Arranger** with progress and cancel. It collects the normal incoming song PCs,
+  retries unchanged steps, detects end/wrap, returns to the starting song, and saves the scanned
+  order. No new inbound protocol is required (`CubaseToViewerOne` remains the song input).
+- Scanned order persists in `electron-store` across restarts and is only replaced by a later scan
+  or normal explicit setlist edits. Existing IDs, titles, years, and custom LED patterns are
+  merged by stable song PC.
+- Setlist rows now show both Arranger position (`#`) and Cubase song program (`PC`). Dragging
+  changes saved order without renumbering stable Cubase programs.
+
 ## v5.7.1
 
 - CrowPanel right column now has four double-height items: pressable ALL/FX mute controls and

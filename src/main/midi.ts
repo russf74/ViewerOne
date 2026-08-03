@@ -314,4 +314,32 @@ export class MidiService {
       this.dropCubaseOutput(err)
     }
   }
+
+  /** Short Note On/Off pulse on the existing Cubase output; suitable for Generic Remote commands. */
+  sendNotePulse(channel1to16: number, note: number, velocity = 127): void {
+    if (!this.output) return
+    const ch = Math.max(0, Math.min(15, channel1to16 - 1))
+    const n = Math.max(0, Math.min(127, note))
+    const v = Math.max(1, Math.min(127, velocity))
+    try {
+      if (!this.output.isPortOpen()) {
+        this.dropCubaseOutput('port not open before note send')
+        return
+      }
+      const output = this.output
+      output.send('noteon', { note: n, velocity: v, channel: ch })
+      setTimeout(() => {
+        try {
+          if (output === this.output && output.isPortOpen()) {
+            output.send('noteoff', { note: n, velocity: 0, channel: ch })
+          }
+        } catch (err) {
+          if (output === this.output) this.dropCubaseOutput(err)
+        }
+      }, 60)
+    } catch (err) {
+      console.warn('[ViewerOne] MIDI: Cubase note send failed —', err)
+      this.dropCubaseOutput(err)
+    }
+  }
 }

@@ -19,6 +19,10 @@ const api = {
   patchSettings: (patch: Partial<AppState>): Promise<PublicState> =>
     ipcRenderer.invoke('settings:patch', patch),
   refreshMidi: (): Promise<PublicState> => ipcRenderer.invoke('midi:refresh'),
+  arrangerPrev: (): Promise<PublicState> => ipcRenderer.invoke('arranger:prev'),
+  arrangerNext: (): Promise<PublicState> => ipcRenderer.invoke('arranger:next'),
+  scanArranger: (): Promise<PublicState> => ipcRenderer.invoke('arranger:scan'),
+  cancelArrangerScan: (): Promise<PublicState> => ipcRenderer.invoke('arranger:cancelScan'),
   /** Simulate an absolute CrowPanel prompt PC (120–123). */
   promptMidi: (pc: 120 | 121 | 122 | 123): Promise<PublicState> =>
     ipcRenderer.invoke('prompt:midi', pc),
