@@ -14,6 +14,11 @@ export const CROWPANEL_7_DISPLAY = {
   height: 600
 }
 
+/** Use CrowPanel for simulation unless hardware positively identifies as CYD. */
+export function getEsp32PreviewDisplay(status: Esp32DisplayStatus) {
+  return status.device === 'cyd' ? CYD_DISPLAY : CROWPANEL_7_DISPLAY
+}
+
 function positiveInt(value: unknown): number | null {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null
 }

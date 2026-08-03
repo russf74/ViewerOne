@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { PublicState } from '../../shared/types'
 import { buildEsp32DisplayPayload, ESP32_WAITING_TITLE } from '../../shared/esp32Payload'
+import { getEsp32PreviewDisplay } from '../../shared/esp32Device'
 import { LED_PATTERNS, clampLedPatternId, formatLedPatternLabel } from '../../shared/ledPatterns'
 import {
   MIDI_PC_PROMPT_1_ON,
@@ -44,14 +45,15 @@ export function Esp32Preview({ state }: Props) {
   const isWaiting = payload.t === ESP32_WAITING_TITLE && !payload.c
   const patternLabel = formatLedPatternLabel(state.ledPattern)
   const selectedId = activePatternId(state.ledPattern)
-  const isCrowPanel = state.esp32Display.device === 'crowpanel7'
+  const previewDisplay = getEsp32PreviewDisplay(state.esp32Display)
+  const isCrowPanel = previewDisplay.device === 'crowpanel7'
   const serialStatus =
     state.esp32Display.connection === 'disabled'
-      ? 'Serial off — CYD fallback'
+      ? 'Serial off — CrowPanel 7" fallback (1024×600)'
       : state.esp32Display.connection === 'searching'
-        ? 'Searching for display — CYD fallback'
+        ? 'Searching for display — CrowPanel 7" fallback (1024×600)'
         : state.esp32Display.device === 'unknown'
-          ? 'Connected — identifying… CYD fallback'
+          ? 'Connected — identifying… CrowPanel 7" fallback (1024×600)'
           : `${state.esp32Display.model ?? (isCrowPanel ? 'CrowPanel 7"' : 'CYD 2.8"')} · ${state.esp32Display.width}×${state.esp32Display.height}`
 
   const queuedLabel =
@@ -105,7 +107,9 @@ export function Esp32Preview({ state }: Props) {
   return (
     <div className="esp32-sim">
       <div className="esp32-sim-chrome">
-        <span className="esp32-sim-label">{isCrowPanel ? 'CrowPanel 7" (simulated)' : 'CYD 2.8" (simulated)'}</span>
+        <span className="esp32-sim-label">
+          {isCrowPanel ? 'CrowPanel 7" · 1024×600 (simulated)' : 'CYD 2.8" · 320×240 (simulated)'}
+        </span>
         <span className="esp32-sim-status">{serialStatus}</span>
       </div>
       <div

@@ -166,7 +166,7 @@ let cubaseLastPcAtMs: number | null = null
 /** Mirrors ESP LED pattern for the desktop preview (synced via boot / led serial events / MIDI LED PCs). */
 let ledPattern = 'knight_rider'
 
-/** Ephemeral hardware identity. Unknown/disconnected UI intentionally uses the CYD preview fallback. */
+/** Ephemeral hardware identity. The renderer simulates CrowPanel unless hardware identifies as CYD. */
 let esp32Display: Esp32DisplayStatus = {
   connection: 'disabled',
   device: 'unknown',
