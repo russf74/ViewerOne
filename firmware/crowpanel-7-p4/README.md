@@ -34,11 +34,39 @@ Board env uses `esp32-p4-evboard` (16 MB flash) with PSRAM enabled.
 
 ```powershell
 Set-Location <path-to-ViewerOne>\firmware\crowpanel-7-p4
+$env:PYTHONUTF8 = "1"
+python -m platformio run -e crowpanel-7-p4
 python -m platformio run -e crowpanel-7-p4 -t upload --upload-port COMx
 python -m platformio device monitor -e crowpanel-7-p4 --port COMx
 ```
 
-First build downloads the pioarduino platform and libs (several minutes).
+The first build downloads and unpacks the pioarduino platform, Arduino core, P4 RISC-V
+toolchain, and libraries. On Windows this can take 10–20 minutes and may sit on an
+`Installing ...` line while another package is unpacked. Let one build finish; do not
+start concurrent PlatformIO builds because they share `%USERPROFILE%\.platformio` and
+can wait on the same package/cache locks.
+
+The configuration was verified with pioarduino platform `55.3.311`, Arduino-ESP32
+`3.3.11`, board `esp32-p4-evboard`, and PlatformIO Core `6.1.19` or newer. Stock
+PlatformIO `espressif32` still does not provide this Arduino ESP32-P4 toolchain.
+
+If a first install stops making progress:
+
+```powershell
+# Stop any other PlatformIO build first, then retry with verbose package progress.
+$env:PYTHONUTF8 = "1"
+python -m platformio run -e crowpanel-7-p4 -v
+
+# If an interrupted download left a corrupt cache, preview and then clear cache only.
+python -m platformio system prune --cache --dry-run
+python -m platformio system prune --cache -f
+python -m platformio run -e crowpanel-7-p4
+```
+
+Do not delete the whole global `.platformio` directory as a first step; that forces the
+large P4 toolchain to download again. To reset only this project's build and libraries,
+remove `firmware\crowpanel-7-p4\.pio` and rerun the build. `$env:PYTHONUTF8 = "1"`
+also prevents Windows code-page errors in PlatformIO package/size output.
 
 Hold **BOOT**, tap **RESET**, release **BOOT** if upload fails to enter download mode.
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 /**
  * Optional WS2812B on CrowPanel Advanced 7" (ESP32-P4).
  * Default pin is a free expansion GPIO candidate — verify against your wiring.
