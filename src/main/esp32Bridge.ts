@@ -253,6 +253,11 @@ export function pushEsp32LedBrightness(brightness: number): void {
   writeSerialLine(JSON.stringify({ led: 'brightness', v }) + '\n', 'brightness')
 }
 
+/** Set one CrowPanel prompt indicator; CYD firmware safely ignores this standalone JSON. */
+export function pushEsp32Prompt(prompt: 1 | 2, on: boolean): void {
+  writeSerialLine(JSON.stringify({ prompt, on }) + '\n', `prompt ${prompt}`)
+}
+
 export function shutdownEsp32Serial(): void {
   clearReconnectTimer()
   openGeneration++

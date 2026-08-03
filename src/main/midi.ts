@@ -280,7 +280,7 @@ export class MidiService {
     }
   }
 
-  /** Setlist / UI use program 1–124 (Cubase-style); wire value is program − 1. PC 125–127 are LED reserved. */
+  /** Setlist/UI use programs 1–119; wire value is program − 1. PCs 120–127 are reserved. */
   sendProgramChange(channel1to16: number, program1to127: number): void {
     if (!this.output) return
     const ch = Math.max(0, Math.min(15, channel1to16 - 1))

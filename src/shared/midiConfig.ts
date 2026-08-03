@@ -27,9 +27,12 @@
  *    default; {@link CUBASE_PC_CHANNEL} is only the preferred channel for ViewerOne→Cubase
  *    outbound PC). The control UI shows last received PC + channel.
  *  - MIDI wire is always 0–127. ViewerOne’s setlist / Cubase-style “PC” is wire + 1 (so wire 0
- *    → song PC 1, wire 123 → song PC 124).
- *  - Song select: PC 1–124 only (wire 0–123). Selecting a song updates the display and queues
+ *    → song PC 1, wire 118 → song PC 119).
+ *  - Song select: PC 1–119 only (wire 0–118). Selecting a song updates the display and queues
  *    that song’s LED pattern — it does NOT push LEDs to the ESP.
+ *  - PC 120/121 (wire 119/120): PROMPT 1 indicator on/off (absolute state).
+ *  - PC 122/123 (wire 121/122): PROMPT 2 indicator on/off (absolute state).
+ *  - PC 124 (wire 123): reserved.
  *  - PC 125 (wire 124): LED blackout — all LEDs off (pattern id 99).
  *  - PC 126 (wire 125): LED idle — dim slow knight rider (pattern id 0) between songs.
  *  - PC 127 (wire 126): LED go / apply — push the currently displayed song’s ledPattern
@@ -44,11 +47,18 @@
 export const CUBASE_PC_CHANNEL = 2
 
 /**
- * Highest setlist program (1-based Cubase/UI PC). Songs use 1…{@link MIDI_PC_SONG_MAX}.
- * {@link MIDI_PC_LED_BLACKOUT}, {@link MIDI_PC_LED_IDLE}, and {@link MIDI_PC_LED_APPLY}
- * are reserved and must not be assigned.
+ * Highest setlist program (1-based Cubase/UI PC). Songs use 1…{@link MIDI_PC_SONG_MAX};
+ * PCs 120–127 are reserved for prompt indicators and LEDs.
  */
-export const MIDI_PC_SONG_MAX = 124
+export const MIDI_PC_SONG_MAX = 119
+
+/** PROMPT 1 on/off use absolute Cubase/UI PCs 120/121 (wire 119/120). */
+export const MIDI_PC_PROMPT_1_ON = 120
+export const MIDI_PC_PROMPT_1_OFF = 121
+
+/** PROMPT 2 on/off use absolute Cubase/UI PCs 122/123 (wire 121/122). */
+export const MIDI_PC_PROMPT_2_ON = 122
+export const MIDI_PC_PROMPT_2_OFF = 123
 
 /**
  * LED blackout: all LEDs solid off (pattern id 99).

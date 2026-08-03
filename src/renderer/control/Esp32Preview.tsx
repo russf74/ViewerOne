@@ -2,7 +2,15 @@ import { useEffect, useMemo, useState } from 'react'
 import type { PublicState } from '../../shared/types'
 import { buildEsp32DisplayPayload, ESP32_WAITING_TITLE } from '../../shared/esp32Payload'
 import { LED_PATTERNS, clampLedPatternId, formatLedPatternLabel } from '../../shared/ledPatterns'
-import { MIDI_PC_LED_BLACKOUT, MIDI_PC_LED_IDLE, MIDI_PC_LED_APPLY } from '../../shared/midiConfig'
+import {
+  MIDI_PC_PROMPT_1_ON,
+  MIDI_PC_PROMPT_1_OFF,
+  MIDI_PC_PROMPT_2_ON,
+  MIDI_PC_PROMPT_2_OFF,
+  MIDI_PC_LED_BLACKOUT,
+  MIDI_PC_LED_IDLE,
+  MIDI_PC_LED_APPLY
+} from '../../shared/midiConfig'
 
 type Props = {
   state: PublicState
@@ -16,21 +24,17 @@ function activePatternId(ledPattern: string): number {
 }
 
 const PREVIEW_PADS = [
-  { id: 'all', label: 'ALL', sub: 'Group 1' },
-  { id: 'fx', label: 'FX', sub: 'Group 6' },
-  { id: 'g2', label: 'G2', sub: 'future' },
-  { id: 'g3', label: 'G3', sub: 'future' },
-  { id: 'g4', label: 'G4', sub: 'future' },
-  { id: 'g5', label: 'G5', sub: 'future' },
-  { id: 'ph6', label: '—', sub: 'future' },
-  { id: 'ph7', label: '—', sub: 'future' }
+  { id: 'all', label: 'ALL', kind: 'button' },
+  { id: 'fx', label: 'FX', kind: 'button' },
+  { id: 'prompt1', label: 'PROMPT 1', kind: 'indicator' },
+  { id: 'prompt2', label: 'PROMPT 2', kind: 'indicator' }
 ] as const
 
-/** Mirrors CrowPanel 1024×600 HMI (main stage + 8 mute pads); CYD is 320×240 without pads. */
+/** Mirrors CrowPanel 1024×600 HMI (main stage + two mute buttons + two prompt indicators). */
 export function Esp32Preview({ state }: Props) {
   const payload = useMemo(
     () => buildEsp32DisplayPayload(state),
-    [state.setlist, state.currentSongId, state.fxMuted]
+    [state.setlist, state.currentSongId, state.fxMuted, state.allMuted]
   )
 
   const fxMuted = Boolean(payload.m)
@@ -41,7 +45,6 @@ export function Esp32Preview({ state }: Props) {
   const patternLabel = formatLedPatternLabel(state.ledPattern)
   const selectedId = activePatternId(state.ledPattern)
   const isCrowPanel = state.esp32Display.device === 'crowpanel7'
-  const [localPads, setLocalPads] = useState<Record<string, boolean>>({})
   const serialStatus =
     state.esp32Display.connection === 'disabled'
       ? 'Serial off — CYD fallback'
@@ -64,6 +67,7 @@ export function Esp32Preview({ state }: Props) {
     : '—'
 
   const [flashPc, setFlashPc] = useState<125 | 126 | 127 | null>(null)
+  const [flashPromptPc, setFlashPromptPc] = useState<120 | 121 | 122 | 123 | null>(null)
 
   useEffect(() => {
     const pc = state.ledMidiPulse
@@ -78,6 +82,14 @@ export function Esp32Preview({ state }: Props) {
     const t = window.setTimeout(() => setFlashPc(null), FLASH_MS)
     return () => window.clearTimeout(t)
   }, [state.ledMidiPulseAt, state.ledMidiPulse])
+
+  useEffect(() => {
+    const pc = state.promptMidiPulse
+    if (!state.promptMidiPulseAt || pc === null) return
+    setFlashPromptPc(pc)
+    const t = window.setTimeout(() => setFlashPromptPc(null), FLASH_MS)
+    return () => window.clearTimeout(t)
+  }, [state.promptMidiPulseAt, state.promptMidiPulse])
 
   const applyPreview = (id: number) => {
     void window.viewer.previewLedPattern(clampLedPatternId(id))
@@ -127,31 +139,50 @@ export function Esp32Preview({ state }: Props) {
                 </div>
               </div>
             </div>
-            <div className="esp32-sim-pads" role="group" aria-label="CrowPanel mute pads (preview)">
-              <div className="esp32-sim-pads-title">MUTE PADS</div>
+            <div className="esp32-sim-pads" role="group" aria-label="CrowPanel controls and prompt indicators">
+              <div className="esp32-sim-pads-title">CONTROLS</div>
               {PREVIEW_PADS.map((pad) => {
-                const muted = pad.id === 'fx' ? fxMuted : Boolean(localPads[pad.id])
+                const active =
+                  pad.id === 'fx'
+                    ? fxMuted
+                    : pad.id === 'prompt1'
+                      ? state.prompt1On
+                      : pad.id === 'prompt2'
+                        ? state.prompt2On
+                        : state.allMuted
+                if (pad.kind === 'indicator') {
+                  return (
+                    <div
+                      key={pad.id}
+                      className={`esp32-sim-pad esp32-sim-pad--indicator esp32-sim-pad--${pad.id}${
+                        active ? ' esp32-sim-pad--on' : ' esp32-sim-pad--standby'
+                      }`}
+                      role="status"
+                      aria-label={`${pad.label} ${active ? 'on' : 'off'}`}
+                      title={`${pad.label} — MIDI-controlled status indicator`}
+                    >
+                      <span className="esp32-sim-pad-light" aria-hidden="true" />
+                      <span className="esp32-sim-pad-label">{pad.label}</span>
+                    </div>
+                  )
+                }
                 return (
                   <button
                     key={pad.id}
                     type="button"
-                    className={`esp32-sim-pad${muted ? ' esp32-sim-pad--muted' : ' esp32-sim-pad--live'}${
-                      pad.id !== 'fx' && pad.id !== 'all' ? ' esp32-sim-pad--placeholder' : ''
+                    className={`esp32-sim-pad esp32-sim-pad--button esp32-sim-pad--${pad.id}${
+                      active ? ' esp32-sim-pad--muted' : ' esp32-sim-pad--live'
                     }`}
-                    title={`${pad.sub} — preview only${pad.id === 'fx' ? ' (follows FX mute)' : ''}`}
+                    title={`${pad.label} mute button${pad.id === 'fx' ? ' (follows FX mute)' : ' (preview state)'}`}
                     onClick={() => {
                       if (pad.id === 'fx') {
                         void window.viewer.patchSettings({ fxMuted: !fxMuted })
                         return
                       }
-                      setLocalPads((prev) => ({ ...prev, [pad.id]: !prev[pad.id] }))
+                      void window.viewer.patchSettings({ allMuted: !state.allMuted })
                     }}
                   >
                     <span className="esp32-sim-pad-label">{pad.label}</span>
-                    <span className="esp32-sim-pad-sub">{pad.sub}</span>
-                    <span className="esp32-sim-pad-state">
-                      {muted ? 'MUTED' : pad.id === 'fx' || pad.id === 'all' ? 'LIVE' : 'STANDBY'}
-                    </span>
                   </button>
                 )
               })}
@@ -186,11 +217,35 @@ export function Esp32Preview({ state }: Props) {
         Queued: {queuedText}
       </p>
       <p className="esp32-sim-led-hint">
+        <strong>PC 120/121</strong> = PROMPT 1 on/off. <strong>PC 122/123</strong> = PROMPT 2 on/off.{' '}
         <strong>PC {MIDI_PC_LED_BLACKOUT}</strong> = blackout.{' '}
         <strong>PC {MIDI_PC_LED_IDLE}</strong> = dim knight rider (idle).{' '}
         <strong>PC {MIDI_PC_LED_APPLY}</strong> = apply the queued song pattern. Song select and mic mute do not
         change the strip.
       </p>
+      <div className="esp32-sim-pc-btns" role="group" aria-label="Simulate prompt program changes">
+        {[
+          [MIDI_PC_PROMPT_1_ON, 'Prompt 1 on'],
+          [MIDI_PC_PROMPT_1_OFF, 'Prompt 1 off'],
+          [MIDI_PC_PROMPT_2_ON, 'Prompt 2 on'],
+          [MIDI_PC_PROMPT_2_OFF, 'Prompt 2 off']
+        ].map(([pc, label]) => (
+          <button
+            type="button"
+            key={flashPromptPc === pc ? `prompt-${pc}-${state.promptMidiPulseAt}` : `prompt-${pc}`}
+            className={`esp32-sim-pc-btn${flashPromptPc === pc ? ' esp32-sim-pc-btn--flash' : ''}`}
+            title={`Simulate PC ${pc} — ${label}`}
+            onClick={(e) => {
+              e.currentTarget.classList.remove('btn-click-flash')
+              void e.currentTarget.offsetWidth
+              e.currentTarget.classList.add('btn-click-flash')
+              void window.viewer.promptMidi(pc as 120 | 121 | 122 | 123)
+            }}
+          >
+            PC {pc} · {label}
+          </button>
+        ))}
+      </div>
       <div className="esp32-sim-pc-btns" role="group" aria-label="Simulate reserved LED program changes">
         <button
           type="button"

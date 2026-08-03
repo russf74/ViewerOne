@@ -725,66 +725,90 @@ button:disabled {
 .esp32-sim-pad {
   flex: 1 1 0;
   min-height: 0;
-  display: grid;
-  grid-template-columns: 22px 1fr;
-  grid-template-rows: auto auto;
-  column-gap: 4px;
+  width: 100%;
+  display: flex;
   align-items: center;
+  justify-content: center;
+  gap: 7px;
   border-radius: 5px;
   border: 1px solid #2a3340;
   background: #141820;
   color: #d1d5db;
-  padding: 2px 4px;
-  cursor: pointer;
-  text-align: left;
+  padding: 4px 5px;
+  text-align: center;
 }
 
 .esp32-sim-pad-label {
-  grid-row: 1 / span 2;
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.55rem;
+  font-size: 0.68rem;
   font-weight: 700;
-  border: 1px solid currentColor;
-}
-
-.esp32-sim-pad-sub {
-  font-size: 0.52rem;
-  color: #9ca3af;
-}
-
-.esp32-sim-pad-state {
-  font-size: 0.48rem;
   letter-spacing: 0.04em;
 }
 
-.esp32-sim-pad--live .esp32-sim-pad-label {
+.esp32-sim-pad--button {
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 2px 4px rgba(0, 0, 0, 0.45);
+}
+
+.esp32-sim-pad--live {
   color: #b8f5c8;
   border-color: #2ecc71;
-  background: #0f2a18;
+  background: linear-gradient(180deg, #173721, #0f2a18);
 }
 
 .esp32-sim-pad--muted {
-  border-color: #ff6a00;
-  background: #5c1a1a;
-}
-
-.esp32-sim-pad--muted .esp32-sim-pad-label {
   color: #ffcc66;
   border-color: #ff6a00;
-  background: #3a1010;
+  background: linear-gradient(180deg, #6d2222, #5c1a1a);
 }
 
-.esp32-sim-pad--muted .esp32-sim-pad-state {
-  color: #ff8a4c;
+.esp32-sim-pad--fx.esp32-sim-pad--muted {
+  color: #eaf4ff;
+  border-color: #2e8bff;
+  background: #000088;
 }
 
-.esp32-sim-pad--placeholder {
-  opacity: 0.85;
+.esp32-sim-pad--indicator {
+  cursor: default;
+  box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.6);
+}
+
+.esp32-sim-pad-light {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  border-radius: 50%;
+  background: #303744;
+  border: 1px solid #596170;
+}
+
+.esp32-sim-pad--standby {
+  color: #737d8e;
+  background: #11151c;
+  border-color: #252c37;
+}
+
+.esp32-sim-pad--on {
+  color: #fff;
+}
+
+.esp32-sim-pad--on .esp32-sim-pad-light {
+  background: currentColor;
+  border-color: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 9px currentColor;
+}
+
+.esp32-sim-pad--prompt1.esp32-sim-pad--on {
+  background: #ff1493;
+  border-color: #ff9ad1;
+}
+
+.esp32-sim-pad--prompt2.esp32-sim-pad--on {
+  color: #171300;
+  background: #ffd600;
+  border-color: #fff176;
 }
 
 /* Match ESP: unmuted black; muted deep navy (RGB565 0x0011 ≈ #000088) */

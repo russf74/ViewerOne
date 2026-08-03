@@ -4,11 +4,12 @@
 
 /**
  * Optional WS2812B on CrowPanel Advanced 7" (ESP32-P4).
- * Default pin is a free expansion GPIO candidate — verify against your wiring.
+ * Recommended/default output is UART1 TX1 (GPIO47), which is exposed on the
+ * expansion header. Override PIN_LED_DATA at build time for other wiring.
  * LED support is off unless built with -e crowpanel-7-p4-led.
  */
 #ifndef PIN_LED_DATA
-#define PIN_LED_DATA 20
+#define PIN_LED_DATA 47
 #endif
 
 #ifndef NUM_LEDS

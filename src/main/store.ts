@@ -12,6 +12,7 @@ type AppStore = Store<AppState>
 
 const defaults: AppState = {
   fxMuted: false,
+  allMuted: false,
   setlist: [],
   currentSongId: null,
   esp32Enabled: false,
@@ -59,6 +60,7 @@ export function getState(store: AppStore): AppState {
   )
   return {
     fxMuted: Boolean(store.get('fxMuted')),
+    allMuted: Boolean(store.get('allMuted')),
     setlist: normalizeSetlist(store.get('setlist')),
     currentSongId: (store.get('currentSongId') as string | null | undefined) ?? null,
     esp32Enabled: Boolean(store.get('esp32Enabled')),

@@ -19,6 +19,9 @@ const api = {
   patchSettings: (patch: Partial<AppState>): Promise<PublicState> =>
     ipcRenderer.invoke('settings:patch', patch),
   refreshMidi: (): Promise<PublicState> => ipcRenderer.invoke('midi:refresh'),
+  /** Simulate an absolute CrowPanel prompt PC (120–123). */
+  promptMidi: (pc: 120 | 121 | 122 | 123): Promise<PublicState> =>
+    ipcRenderer.invoke('prompt:midi', pc),
   /** Simulate Cubase PC 125 — LED blackout (pattern id 99). */
   ledMidiBlackout: (): Promise<PublicState> => ipcRenderer.invoke('led:midiBlackout'),
   /** Simulate Cubase PC 126 — dim knight rider (idle lights). */

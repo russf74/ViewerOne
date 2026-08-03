@@ -8,6 +8,8 @@ export type Esp32DisplayPayload = {
   l: boolean
   /** FX mute — yellow on navy when true; green on black when false */
   m?: boolean
+  /** Group1 / ALL mute; CrowPanel only (CYD ignores unknown fields). */
+  a?: boolean
 }
 
 export type Esp32DeviceType = 'cyd' | 'crowpanel7' | 'unknown'
@@ -23,7 +25,7 @@ export type Esp32DisplayStatus = {
 
 export type SetlistItem = {
   id: string
-  /** MIDI program 1–124; equals row index + 1 (recomputed when order changes). PC 125–127 reserved for LED. */
+  /** MIDI program 1–119; equals row index + 1 (recomputed when order changes). PCs 120–127 are reserved. */
   program: number
   title: string
   /** Release year, typically 4 digits */
@@ -42,6 +44,8 @@ export type SetlistItem = {
 export type AppState = {
   /** Cubase / mixer ↔ ViewerOne / ESP: muted = tint + CC 0/127 out (see shared/midiConfig.ts) */
   fxMuted: boolean
+  /** CrowPanel Group1 / ALL mute, independent from Group6 / FX. */
+  allMuted: boolean
   setlist: SetlistItem[]
   /** Row id from last matched program change; null until first PC */
   currentSongId: string | null
@@ -102,4 +106,11 @@ export type PublicState = AppState & {
   ledMidiPulse: 125 | 126 | 127 | null
   /** `Date.now()` when {@link ledMidiPulse} was last set (changes on every trigger). */
   ledMidiPulseAt: number
+  /** Absolute CrowPanel PROMPT indicator state (PC 120/121 and 122/123). */
+  prompt1On: boolean
+  prompt2On: boolean
+  /** Last prompt PC fired by Cubase or the simulate controls. */
+  promptMidiPulse: 120 | 121 | 122 | 123 | null
+  /** `Date.now()` when {@link promptMidiPulse} was last set. */
+  promptMidiPulseAt: number
 }

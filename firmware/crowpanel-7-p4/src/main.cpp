@@ -2,14 +2,15 @@
  * ViewerOne — CrowPanel Advanced 7" ESP32-P4 (EK79007 MIPI-DSI 1024×600 + GT911)
  *
  * PC @ 115200 — display (unchanged):
- *   {"t":"Title","c":"1999","l":true,"m":false}
+ *   {"t":"Title","c":"1999","l":true,"m":false,"a":false}
  *
  * PC @ 115200 — LED (optional, crowpanel-7-p4-led env):
  *   {"led":"pattern","id":0} / brightness / off / status
+ * PC @ 115200 — prompt indicators:
+ *   {"prompt":1,"on":true} / {"prompt":2,"on":false}
  *
  * ESP→PC touch:
- *   {"evt":"mute_toggle"}                  FX pad (Group6) — CYD-compatible
- *   {"evt":"mute_toggle","group":"fx"}     same, extended
+ *   {"evt":"mute_toggle","group":"fx"}     FX pad / main text stage (Group6)
  *   {"evt":"mute_toggle","group":"all"}    Group1 / ALL pad
  * Boot/identity: {"evt":"boot","device":"crowpanel7","model":"Elecrow CrowPanel Advanced 7","w":1024,"h":600,...}
  * PC may request it again with {"cmd":"hello"}.
@@ -41,15 +42,42 @@ static CRGB s_leds[NUM_LEDS];
 using namespace esp_panel::drivers;
 using namespace esp_panel::board;
 
-static constexpr const char *VIEWERONE_FW_VERSION = "5.7.0";
+static constexpr const char *VIEWERONE_FW_VERSION = "5.7.6";
 static constexpr uint32_t WDT_TIMEOUT_S = 8;
 
 static constexpr int SCREEN_W = H_size;
 static constexpr int SCREEN_H = V_size;
 static constexpr int PAD_COL_W = 260;
 static constexpr int MAIN_W = SCREEN_W - PAD_COL_W;
-static constexpr int PAD_COUNT = 8;
-static constexpr uint32_t PAD_COOLDOWN_MS = 220;
+static constexpr int PAD_COUNT = 4;
+static constexpr uint32_t PAD_COOLDOWN_MS = 120;
+
+static constexpr int kMainPad = 18;
+static constexpr int kBrandH = 34;
+static constexpr int kFooterH = 38;
+static constexpr int kTextBoxPad = 16;
+static constexpr int kTextBoxTopGap = 14;  // below brand — keeps title clear of header
+static constexpr int kTextBoxBotGap = 10;
+
+/** LVGL built-in Montserrat tops out at 48px; zoom (256 = 1x) matches PC preview proportions on 1024×600. */
+static constexpr uint16_t kTitleZoom = 400;  // ~75px visual
+static constexpr uint16_t kYearZoom = 460;   // ~86px visual
+static constexpr uint16_t kIdleZoom = 400;   // ~75px visual
+
+/** Grow down/right from top-left so left-justified layout stays inside the text box. */
+static void applyTextZoom(lv_obj_t *obj, uint16_t zoom) {
+  lv_obj_set_style_transform_zoom(obj, zoom, 0);
+  lv_obj_set_style_transform_pivot_x(obj, 0, 0);
+  lv_obj_set_style_transform_pivot_y(obj, 0, 0);
+}
+
+/** Logical label width so post-zoom text fits the faint text box. */
+static int textBoxLabelW(uint16_t zoom) {
+  const int main_w = MAIN_W - 12;
+  const int box_w = main_w - 2 * kMainPad;
+  const int content_w = box_w - 2 * kTextBoxPad;
+  return content_w * 256 / (int)zoom;
+}
 
 // GPIO29 = LCD_BK_POWER on CrowPanel Advanced (wiki); EN/PWM is IO31 via panel lib.
 static constexpr int PIN_LCD_BK_POWER = 29;
@@ -57,28 +85,24 @@ static constexpr int PIN_LCD_BK_POWER = 29;
 enum PadId : uint8_t {
   PAD_ALL = 0,
   PAD_FX = 1,
-  PAD_G2 = 2,
-  PAD_G3 = 3,
-  PAD_G4 = 4,
-  PAD_G5 = 5,
-  PAD_PH6 = 6,
-  PAD_PH7 = 7,
+  PAD_PROMPT_1 = 2,
+  PAD_PROMPT_2 = 3,
 };
 
-static const char *const kPadLabels[PAD_COUNT] = {"ALL", "FX", "G2", "G3", "G4", "G5", "—", "—"};
-static const char *const kPadSub[PAD_COUNT] = {"Group 1", "Group 6", "future", "future",
-                                               "future",  "future",  "future", "future"};
+static const char *const kPadLabels[PAD_COUNT] = {"ALL", "FX", "PROMPT 1", "PROMPT 2"};
 
 static char s_title[160] = "Waiting";
 static char s_year[24] = "";
 static bool s_fx_muted = false;
 static bool s_showing_waiting = true;
-static bool s_pad_muted[PAD_COUNT] = {false, false, false, false, false, false, false, false};
+/** ALL/FX: muted state. PROMPT 1/2: illuminated state. */
+static bool s_pad_muted[PAD_COUNT] = {false, false, false, false};
 static PatternId s_pattern = DEFAULT_PATTERN;
 
 static lv_obj_t *s_scr = nullptr;
 static lv_obj_t *s_main = nullptr;
 static lv_obj_t *s_brand = nullptr;
+static lv_obj_t *s_text_box = nullptr;
 static lv_obj_t *s_title_lbl = nullptr;
 static lv_obj_t *s_year_lbl = nullptr;
 static lv_obj_t *s_footer_lbl = nullptr;
@@ -107,16 +131,28 @@ static void applyMainTheme(bool muted) {
 
 static void refreshPadVisual(int idx) {
   if (idx < 0 || idx >= PAD_COUNT || !s_pad_btns[idx]) return;
-  const bool muted = s_pad_muted[idx];
-  const bool placeholder = idx >= 2;
+  const bool active = s_pad_muted[idx];
+  const bool indicator = idx == PAD_PROMPT_1 || idx == PAD_PROMPT_2;
   lv_color_t bg;
   lv_color_t border;
   lv_color_t fg;
-  if (placeholder && !muted) {
-    bg = col_hex(0x141820);
-    border = col_hex(0x2A3340);
-    fg = col_hex(0x6B7280);
-  } else if (muted) {
+  if (idx == PAD_PROMPT_1 && active) {
+    bg = col_hex(0xFF1493);
+    border = col_hex(0xFF9AD1);
+    fg = col_hex(0xFFFFFF);
+  } else if (idx == PAD_PROMPT_2 && active) {
+    bg = col_hex(0xFFD600);
+    border = col_hex(0xFFF176);
+    fg = col_hex(0x171300);
+  } else if (indicator) {
+    bg = col_hex(0x11151C);
+    border = col_hex(0x252C37);
+    fg = col_hex(0x737D8E);
+  } else if (idx == PAD_FX && active) {
+    bg = col_hex(0x000088);
+    border = col_hex(0x2E8BFF);
+    fg = col_hex(0xEAF4FF);
+  } else if (active) {
     bg = col_hex(0x5C1A1A);
     border = col_hex(0xFF6A00);
     fg = col_hex(0xFFCC66);
@@ -129,8 +165,19 @@ static void refreshPadVisual(int idx) {
   lv_obj_set_style_border_color(s_pad_btns[idx], border, 0);
   lv_obj_set_style_text_color(s_pad_btns[idx], fg, 0);
   if (s_pad_status[idx]) {
-    lv_label_set_text(s_pad_status[idx], muted ? "MUTED" : (placeholder ? "STANDBY" : "LIVE"));
-    lv_obj_set_style_text_color(s_pad_status[idx], muted ? col_hex(0xFF8A4C) : col_hex(0x5CDE8A), 0);
+    lv_label_set_text(s_pad_status[idx],
+                      indicator ? (active ? "ON" : "STANDBY") : (active ? "MUTED" : "LIVE"));
+    lv_obj_set_style_text_color(
+        s_pad_status[idx],
+        idx == PAD_PROMPT_1 && active
+            ? col_hex(0xFFFFFF)
+            : idx == PAD_PROMPT_2 && active
+                  ? col_hex(0x171300)
+                  : indicator
+                        ? col_hex(0x596170)
+                        : (active ? (idx == PAD_FX ? col_hex(0x9DCEFF) : col_hex(0xFF8A4C))
+                                  : col_hex(0x5CDE8A)),
+        0);
   }
 }
 
@@ -167,8 +214,18 @@ static void showWaitingUi(bool waiting) {
   }
 }
 
+/** Keep year about half one zoomed title line below the actual (possibly wrapped) title. */
+static void positionYearBelowTitle() {
+  if (!s_title_lbl || !s_year_lbl) return;
+  lv_obj_update_layout(s_title_lbl);
+  const int title_y = 28;
+  const int title_visual_h = lv_obj_get_height(s_title_lbl) * (int)kTitleZoom / 256;
+  const int title_visual_font_h = 48 * (int)kTitleZoom / 256;
+  lv_obj_set_y(s_year_lbl, title_y + title_visual_h + title_visual_font_h / 2);
+}
+
 static void drawSongUi(const char *title, const char *year, bool muted) {
-  strncpy(s_title, title && title[0] ? title : "—", sizeof(s_title) - 1);
+  strncpy(s_title, title && title[0] ? title : "-", sizeof(s_title) - 1);
   s_title[sizeof(s_title) - 1] = '\0';
   strncpy(s_year, year ? year : "", sizeof(s_year) - 1);
   s_year[sizeof(s_year) - 1] = '\0';
@@ -176,7 +233,8 @@ static void drawSongUi(const char *title, const char *year, bool muted) {
   s_pad_muted[PAD_FX] = muted;
   showWaitingUi(false);
   if (s_title_lbl) lv_label_set_text(s_title_lbl, s_title);
-  if (s_year_lbl) lv_label_set_text(s_year_lbl, s_year[0] ? s_year : "—");
+  if (s_year_lbl) lv_label_set_text(s_year_lbl, s_year[0] ? s_year : "-");
+  positionYearBelowTitle();
   applyMainTheme(muted);
   refreshPadVisual(PAD_FX);
   refreshFooter();
@@ -203,6 +261,11 @@ static void sendMuteEvent(const char *group) {
   Serial.printf("{\"evt\":\"mute_toggle\",\"group\":\"%s\"}\n", group);
 }
 
+/** Present optimistic mute styling before notifying the desktop over serial. */
+static void presentLocalUiNow() {
+  lv_refr_now(lv_disp_get_default());
+}
+
 static void sendDeviceIdentity(const char *evt) {
   Serial.printf(
       "{\"evt\":\"%s\",\"device\":\"crowpanel7\",\"model\":\"Elecrow CrowPanel Advanced 7\","
@@ -219,6 +282,7 @@ static void onPadPressed(int idx) {
   if (idx == PAD_ALL) {
     s_pad_muted[PAD_ALL] = !s_pad_muted[PAD_ALL];
     refreshPadVisual(PAD_ALL);
+    presentLocalUiNow();
     sendMuteEvent("all");
     return;
   }
@@ -228,18 +292,23 @@ static void onPadPressed(int idx) {
     s_fx_muted = s_pad_muted[PAD_FX];
     applyMainTheme(s_fx_muted);
     refreshPadVisual(PAD_FX);
+    presentLocalUiNow();
     sendMuteEvent("fx");
     return;
   }
-  // Placeholder pads — local visual only
-  s_pad_muted[idx] = !s_pad_muted[idx];
-  refreshPadVisual(idx);
+  // PROMPT indicators are serial-driven and deliberately non-clickable.
 }
 
 static void pad_event_cb(lv_event_t *e) {
-  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (lv_event_get_code(e) != LV_EVENT_PRESSED) return;
   const int idx = (int)(intptr_t)lv_event_get_user_data(e);
   onPadPressed(idx);
+}
+
+/** Whole left stage / text box — same as CYD screen tap (Group 6 / FX). */
+static void stage_mute_cb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_PRESSED) return;
+  onPadPressed(PAD_FX);
 }
 
 static void buildUi() {
@@ -248,46 +317,84 @@ static void buildUi() {
   lv_obj_set_style_bg_opa(s_scr, LV_OPA_COVER, 0);
   lv_obj_clear_flag(s_scr, LV_OBJ_FLAG_SCROLLABLE);
 
+  const int main_w = MAIN_W - 12;
+  const int main_h = SCREEN_H - 16;
+  const int box_w = main_w - 2 * kMainPad;
+  const int box_h =
+      main_h - 2 * kMainPad - kBrandH - kTextBoxTopGap - kFooterH - kTextBoxBotGap;
+
   // Left / main stage
   s_main = lv_obj_create(s_scr);
-  lv_obj_set_size(s_main, MAIN_W - 12, SCREEN_H - 16);
+  lv_obj_set_size(s_main, main_w, main_h);
   lv_obj_set_pos(s_main, 8, 8);
   lv_obj_set_style_radius(s_main, 18, 0);
   lv_obj_set_style_border_width(s_main, 1, 0);
   lv_obj_set_style_border_color(s_main, col_hex(0x1E2430), 0);
-  lv_obj_set_style_pad_all(s_main, 22, 0);
+  lv_obj_set_style_pad_all(s_main, kMainPad, 0);
   lv_obj_set_style_shadow_width(s_main, 24, 0);
   lv_obj_set_style_shadow_opa(s_main, LV_OPA_40, 0);
   lv_obj_set_style_shadow_color(s_main, col_hex(0x000000), 0);
   lv_obj_clear_flag(s_main, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(s_main, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(s_main, stage_mute_cb, LV_EVENT_PRESSED, nullptr);
 
   s_brand = lv_label_create(s_main);
-  lv_label_set_text(s_brand, "VIEWERONE  ·  LIVE HMI");
-  lv_obj_set_style_text_font(s_brand, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_letter_space(s_brand, 2, 0);
+  lv_label_set_text(s_brand, "VIEWERONE  -  LIVE HMI");
+  lv_obj_set_style_text_font(s_brand, &lv_font_montserrat_22, 0);
+  lv_obj_set_style_text_letter_space(s_brand, 3, 0);
   lv_obj_align(s_brand, LV_ALIGN_TOP_LEFT, 0, 0);
-
-  s_idle_lbl = lv_label_create(s_main);
-  lv_label_set_text(s_idle_lbl, "Waiting for signal");
-  lv_obj_set_style_text_font(s_idle_lbl, &lv_font_montserrat_36, 0);
-  lv_obj_align(s_idle_lbl, LV_ALIGN_CENTER, 0, -10);
-
-  s_title_lbl = lv_label_create(s_main);
-  lv_label_set_long_mode(s_title_lbl, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(s_title_lbl, MAIN_W - 70);
-  lv_obj_set_style_text_font(s_title_lbl, &lv_font_montserrat_42, 0);
-  lv_obj_set_style_text_align(s_title_lbl, LV_TEXT_ALIGN_LEFT, 0);
-  lv_obj_align(s_title_lbl, LV_ALIGN_TOP_LEFT, 0, 36);
-  lv_obj_add_flag(s_title_lbl, LV_OBJ_FLAG_HIDDEN);
-
-  s_year_lbl = lv_label_create(s_main);
-  lv_obj_set_style_text_font(s_year_lbl, &lv_font_montserrat_48, 0);
-  lv_obj_align(s_year_lbl, LV_ALIGN_LEFT_MID, 0, 36);
-  lv_obj_add_flag(s_year_lbl, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(s_brand, LV_OBJ_FLAG_CLICKABLE);
 
   s_footer_lbl = lv_label_create(s_main);
-  lv_obj_set_style_text_font(s_footer_lbl, &lv_font_montserrat_18, 0);
+  lv_obj_set_style_text_font(s_footer_lbl, &lv_font_montserrat_28, 0);
   lv_obj_align(s_footer_lbl, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+  lv_obj_clear_flag(s_footer_lbl, LV_OBJ_FLAG_CLICKABLE);
+
+  // Faint content box — song/idle text lives only inside these edges
+  s_text_box = lv_obj_create(s_main);
+  lv_obj_set_size(s_text_box, box_w, box_h);
+  lv_obj_align(s_text_box, LV_ALIGN_TOP_LEFT, 0, kBrandH + kTextBoxTopGap);
+  lv_obj_set_style_bg_opa(s_text_box, LV_OPA_10, 0);
+  lv_obj_set_style_bg_color(s_text_box, col_hex(0xFFFFFF), 0);
+  lv_obj_set_style_border_width(s_text_box, 1, 0);
+  lv_obj_set_style_border_color(s_text_box, col_hex(0x6B7280), 0);
+  lv_obj_set_style_border_opa(s_text_box, LV_OPA_40, 0);
+  lv_obj_set_style_radius(s_text_box, 12, 0);
+  lv_obj_set_style_pad_all(s_text_box, kTextBoxPad, 0);
+  lv_obj_clear_flag(s_text_box, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(s_text_box, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+  lv_obj_add_flag(s_text_box, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(s_text_box, stage_mute_cb, LV_EVENT_PRESSED, nullptr);
+
+  s_idle_lbl = lv_label_create(s_text_box);
+  lv_label_set_text(s_idle_lbl, "Waiting for signal");
+  lv_label_set_long_mode(s_idle_lbl, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(s_idle_lbl, textBoxLabelW(kIdleZoom));
+  lv_obj_set_style_text_font(s_idle_lbl, &lv_font_montserrat_48, 0);
+  applyTextZoom(s_idle_lbl, kIdleZoom);
+  lv_obj_set_style_text_align(s_idle_lbl, LV_TEXT_ALIGN_LEFT, 0);
+  lv_obj_align(s_idle_lbl, LV_ALIGN_TOP_LEFT, 0, 56);
+  lv_obj_clear_flag(s_idle_lbl, LV_OBJ_FLAG_CLICKABLE);
+
+  s_title_lbl = lv_label_create(s_text_box);
+  lv_label_set_long_mode(s_title_lbl, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(s_title_lbl, textBoxLabelW(kTitleZoom));
+  lv_obj_set_style_text_font(s_title_lbl, &lv_font_montserrat_48, 0);
+  applyTextZoom(s_title_lbl, kTitleZoom);
+  lv_obj_set_style_text_align(s_title_lbl, LV_TEXT_ALIGN_LEFT, 0);
+  lv_obj_align(s_title_lbl, LV_ALIGN_TOP_LEFT, 0, 28);
+  lv_obj_add_flag(s_title_lbl, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(s_title_lbl, LV_OBJ_FLAG_CLICKABLE);
+
+  s_year_lbl = lv_label_create(s_text_box);
+  lv_label_set_long_mode(s_year_lbl, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(s_year_lbl, textBoxLabelW(kYearZoom));
+  lv_obj_set_style_text_font(s_year_lbl, &lv_font_montserrat_48, 0);
+  applyTextZoom(s_year_lbl, kYearZoom);
+  lv_obj_set_style_text_align(s_year_lbl, LV_TEXT_ALIGN_LEFT, 0);
+  lv_obj_align(s_year_lbl, LV_ALIGN_TOP_LEFT, 0, 200);
+  lv_obj_add_flag(s_year_lbl, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(s_year_lbl, LV_OBJ_FLAG_CLICKABLE);
 
   // Right pad column
   lv_obj_t *col = lv_obj_create(s_scr);
@@ -304,52 +411,41 @@ static void buildUi() {
   lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
 
   lv_obj_t *col_title = lv_label_create(col);
-  lv_label_set_text(col_title, "MUTE PADS");
-  lv_obj_set_style_text_font(col_title, &lv_font_montserrat_12, 0);
+  lv_label_set_text(col_title, "CONTROLS");
+  lv_obj_set_style_text_font(col_title, &lv_font_montserrat_16, 0);
   lv_obj_set_style_text_color(col_title, col_hex(0x8B92A0), 0);
   lv_obj_set_style_text_letter_space(col_title, 2, 0);
 
-  const int pad_side = 56;
+  const int item_w = PAD_COL_W - 36;
+  const int item_h = 116;
   for (int i = 0; i < PAD_COUNT; i++) {
-    lv_obj_t *row = lv_obj_create(col);
-    lv_obj_set_size(row, PAD_COL_W - 36, pad_side + 4);
-    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(row, 0, 0);
-    lv_obj_set_style_pad_all(row, 0, 0);
-    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-
-    s_pad_btns[i] = lv_btn_create(row);
-    lv_obj_set_size(s_pad_btns[i], pad_side, pad_side);
-    lv_obj_align(s_pad_btns[i], LV_ALIGN_LEFT_MID, 0, 0);
+    const bool indicator = i == PAD_PROMPT_1 || i == PAD_PROMPT_2;
+    s_pad_btns[i] = indicator ? lv_obj_create(col) : lv_btn_create(col);
+    lv_obj_set_size(s_pad_btns[i], item_w, item_h);
     lv_obj_set_style_radius(s_pad_btns[i], 12, 0);
     lv_obj_set_style_border_width(s_pad_btns[i], 2, 0);
-    lv_obj_set_style_shadow_width(s_pad_btns[i], 10, 0);
-    lv_obj_set_style_shadow_opa(s_pad_btns[i], LV_OPA_50, 0);
+    lv_obj_set_style_pad_all(s_pad_btns[i], 8, 0);
+    lv_obj_clear_flag(s_pad_btns[i], LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_shadow_width(s_pad_btns[i], indicator ? 3 : 12, 0);
+    lv_obj_set_style_shadow_opa(s_pad_btns[i], indicator ? LV_OPA_20 : LV_OPA_50, 0);
     lv_obj_set_style_shadow_color(s_pad_btns[i], col_hex(0x000000), 0);
-    lv_obj_add_event_cb(s_pad_btns[i], pad_event_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    if (indicator) {
+      lv_obj_clear_flag(s_pad_btns[i], LV_OBJ_FLAG_CLICKABLE);
+    } else {
+      lv_obj_add_event_cb(s_pad_btns[i], pad_event_cb, LV_EVENT_PRESSED, (void *)(intptr_t)i);
+    }
 
     lv_obj_t *lbl = lv_label_create(s_pad_btns[i]);
     lv_label_set_text(lbl, kPadLabels[i]);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
-    lv_obj_center(lbl);
+    lv_obj_set_style_text_font(lbl, indicator ? &lv_font_montserrat_24 : &lv_font_montserrat_28, 0);
+    lv_obj_align(lbl, LV_ALIGN_CENTER, 0, -10);
+    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
 
-    lv_obj_t *meta = lv_obj_create(row);
-    lv_obj_set_size(meta, PAD_COL_W - 36 - pad_side - 10, pad_side);
-    lv_obj_align(meta, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_set_style_bg_opa(meta, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(meta, 0, 0);
-    lv_obj_set_style_pad_all(meta, 2, 0);
-    lv_obj_clear_flag(meta, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *name = lv_label_create(meta);
-    lv_label_set_text(name, kPadSub[i]);
-    lv_obj_set_style_text_font(name, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(name, col_hex(0xD1D5DB), 0);
-    lv_obj_align(name, LV_ALIGN_TOP_LEFT, 4, 6);
-
-    s_pad_status[i] = lv_label_create(meta);
-    lv_obj_set_style_text_font(s_pad_status[i], &lv_font_montserrat_12, 0);
-    lv_obj_align(s_pad_status[i], LV_ALIGN_BOTTOM_LEFT, 4, -6);
+    s_pad_status[i] = lv_label_create(s_pad_btns[i]);
+    lv_obj_set_style_text_font(s_pad_status[i], &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_letter_space(s_pad_status[i], 2, 0);
+    lv_obj_align(s_pad_status[i], LV_ALIGN_BOTTOM_MID, 0, -8);
+    lv_obj_clear_flag(s_pad_status[i], LV_OBJ_FLAG_CLICKABLE);
 
     refreshPadVisual(i);
   }
@@ -358,7 +454,7 @@ static void buildUi() {
   char vbuf[40];
   snprintf(vbuf, sizeof(vbuf), "v%s", VIEWERONE_FW_VERSION);
   lv_label_set_text(ver, vbuf);
-  lv_obj_set_style_text_font(ver, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_font(ver, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(ver, col_hex(0x4B5563), 0);
 
   drawWaitingUi();
@@ -460,6 +556,23 @@ static void handleLedCommand(JsonDocument &doc) {
 }
 #endif
 
+static void handlePromptCommand(JsonDocument &doc) {
+  const int prompt = doc["prompt"] | 0;
+  if ((prompt != 1 && prompt != 2) || doc["on"].isNull()) {
+    Serial.println("{\"evt\":\"prompt\",\"ok\":false,\"err\":\"prompt_needs_1_or_2_and_on\"}");
+    return;
+  }
+  const bool on = doc["on"].as<bool>();
+  const int idx = prompt == 1 ? PAD_PROMPT_1 : PAD_PROMPT_2;
+  if (lvgl_port_lock(-1)) {
+    s_pad_muted[idx] = on;
+    refreshPadVisual(idx);
+    lvgl_port_unlock();
+  }
+  Serial.printf("{\"evt\":\"prompt\",\"ok\":true,\"prompt\":%d,\"on\":%s}\n", prompt,
+                on ? "true" : "false");
+}
+
 static void handleSerialLine(const String &line) {
   JsonDocument doc;
   if (deserializeJson(doc, line)) return;
@@ -470,6 +583,10 @@ static void handleSerialLine(const String &line) {
     return;
   }
 
+  if (!doc["prompt"].isNull()) {
+    handlePromptCommand(doc);
+    return;
+  }
   if (!doc["led"].isNull()) {
     handleLedCommand(doc);
     return;
@@ -479,9 +596,15 @@ static void handleSerialLine(const String &line) {
   const char *t = doc["t"] | "";
   const char *c = doc["c"] | "";
   bool m = doc["m"] | false;
+  const bool has_all = !doc["a"].isNull();
+  const bool all_muted = doc["a"] | false;
 
   if (lvgl_port_lock(-1)) {
     drawSongUi(t, c, m);
+    if (has_all) {
+      s_pad_muted[PAD_ALL] = all_muted;
+      refreshPadVisual(PAD_ALL);
+    }
     lvgl_port_unlock();
   }
 }

@@ -11,6 +11,7 @@ import {
   pushEsp32HelloRequest,
   pushEsp32LedPattern,
   pushEsp32LedBrightness,
+  pushEsp32Prompt,
   setEsp32ConnectionHandler,
   setEsp32LineHandler,
   setEsp32SerialPort,
@@ -36,6 +37,10 @@ import {
   MIXER_MUTE_CC,
   MIXER_MUTE_INVERTED,
   MIDI_PC_SONG_MAX,
+  MIDI_PC_PROMPT_1_ON,
+  MIDI_PC_PROMPT_1_OFF,
+  MIDI_PC_PROMPT_2_ON,
+  MIDI_PC_PROMPT_2_OFF,
   MIDI_PC_LED_BLACKOUT,
   MIDI_PC_LED_IDLE,
   MIDI_PC_LED_APPLY,
@@ -171,6 +176,12 @@ let ledIdleDimActive = false
 let ledMidiPulse: 125 | 126 | 127 | null = null
 let ledMidiPulseAt = 0
 
+/** Absolute prompt-light state; retained across serial reconnects for deterministic resync. */
+let prompt1On = false
+let prompt2On = false
+let promptMidiPulse: 120 | 121 | 122 | 123 | null = null
+let promptMidiPulseAt = 0
+
 function buildPublicState(): PublicState {
   const base = getState(store)
   const queuedRow = base.currentSongId
@@ -184,6 +195,10 @@ function buildPublicState(): PublicState {
     queuedLedPattern: queuedRow ? clampLedPatternId(queuedRow.ledPattern) : null,
     ledMidiPulse,
     ledMidiPulseAt,
+    prompt1On,
+    prompt2On,
+    promptMidiPulse,
+    promptMidiPulseAt,
     midi: {
       cubaseInputName,
       cubaseInputOpen,
@@ -209,6 +224,17 @@ function buildPublicState(): PublicState {
 function noteLedMidiPulse(pc: 125 | 126 | 127): void {
   ledMidiPulse = pc
   ledMidiPulseAt = Date.now()
+}
+
+function applyPromptPc(pc: 120 | 121 | 122 | 123): void {
+  const prompt: 1 | 2 = pc === MIDI_PC_PROMPT_1_ON || pc === MIDI_PC_PROMPT_1_OFF ? 1 : 2
+  const on = pc === MIDI_PC_PROMPT_1_ON || pc === MIDI_PC_PROMPT_2_ON
+  if (prompt === 1) prompt1On = on
+  else prompt2On = on
+  promptMidiPulse = pc
+  promptMidiPulseAt = Date.now()
+  if (getState(store).esp32Enabled) pushEsp32Prompt(prompt, on)
+  broadcastUiState()
 }
 
 /** Song title/year/mute JSON only — does not change LEDs. */
@@ -295,6 +321,11 @@ function previewLedPattern(rawId: unknown): void {
 function onEsp32SerialOpened(): void {
   pushEsp32HelloRequest()
   broadcastEsp32DisplayIfEnabled()
+  const st = getState(store)
+  if (st.esp32Enabled) {
+    pushEsp32Prompt(1, prompt1On)
+    pushEsp32Prompt(2, prompt2On)
+  }
 }
 
 function ccValueToFxMuted(value: number, inverted = false): boolean {
@@ -349,6 +380,13 @@ function toggleFxMutedFromEsp(): void {
   applyFxMuted(!st.fxMuted, { sendToCubase: true, sendToMixer: true })
 }
 
+/** Group1 / ALL is a separate CrowPanel state and must never enter the Group6 / FX CC path. */
+function toggleAllMutedFromEsp(): void {
+  const st = getState(store)
+  setState(store, { allMuted: !st.allMuted })
+  broadcastState()
+}
+
 function applyLedPatternFromEsp(name: unknown): void {
   if (typeof name !== 'string' || !name.trim()) return
   const next = name.trim()
@@ -369,14 +407,12 @@ function handleEsp32Line(msg: Esp32FromDeviceMsg): void {
 
   const evt = msg['evt']
   if (evt === 'mute_toggle') {
-    // CrowPanel pads may send group:"fx" | "all". FX (and legacy bare events) toggle mic/FX mute.
-    // ALL currently shares the same FX mute path until dedicated group routing exists.
+    // CrowPanel groups are independent: ALL = Group1 state; FX/legacy bare = Group6 CC path.
     const group = typeof msg['group'] === 'string' ? msg['group'].toLowerCase() : ''
-    if (!group || group === 'fx' || group === 'all') {
-      if (group === 'all') {
-        console.log('[ViewerOne] ESP32 mute_toggle group=all (mapped to FX mute for now)')
-      }
+    if (!group || group === 'fx') {
       toggleFxMutedFromEsp()
+    } else if (group === 'all') {
+      toggleAllMutedFromEsp()
     } else {
       console.log(`[ViewerOne] ESP32 mute_toggle ignored for group=${group}`)
     }
@@ -457,6 +493,17 @@ function connectMidi(): void {
       broadcastUiState()
 
       // Cubase/UI PC = wire + 1 (see shared/midiConfig.ts). Match reserved LED PCs by exact wire.
+      const promptPc = wireProgram + 1
+      if (
+        promptPc === MIDI_PC_PROMPT_1_ON ||
+        promptPc === MIDI_PC_PROMPT_1_OFF ||
+        promptPc === MIDI_PC_PROMPT_2_ON ||
+        promptPc === MIDI_PC_PROMPT_2_OFF
+      ) {
+        console.log(`[ViewerOne] MIDI: PC ${promptPc} (prompt indicator) ch ${channel0 + 1}`)
+        applyPromptPc(promptPc)
+        return
+      }
       if (wireProgram === MIDI_PC_LED_BLACKOUT - 1) {
         console.log(`[ViewerOne] MIDI: PC ${MIDI_PC_LED_BLACKOUT} (LED blackout) ch ${channel0 + 1}`)
         applyLedBlackout()
@@ -663,6 +710,7 @@ function registerIpc(): void {
     const allowed: Partial<AppState> = {}
     // fxMuted goes through applyFxMuted for CC out + display tint (not LEDs).
     const mutedToApply = patch.fxMuted !== undefined ? Boolean(patch.fxMuted) : undefined
+    if (patch.allMuted !== undefined) allowed.allMuted = Boolean(patch.allMuted)
     if (patch.esp32Enabled !== undefined) allowed.esp32Enabled = Boolean(patch.esp32Enabled)
 
     let nextExternal =
@@ -701,6 +749,19 @@ function registerIpc(): void {
       mixerOutputName = null
     }
     broadcastState()
+    return buildPublicState()
+  })
+
+  /** Simulate absolute CrowPanel prompt PCs 120–123 through the real receive/serial path. */
+  ipcMain.handle('prompt:midi', (_e, pc: unknown) => {
+    if (
+      pc === MIDI_PC_PROMPT_1_ON ||
+      pc === MIDI_PC_PROMPT_1_OFF ||
+      pc === MIDI_PC_PROMPT_2_ON ||
+      pc === MIDI_PC_PROMPT_2_OFF
+    ) {
+      applyPromptPc(pc)
+    }
     return buildPublicState()
   })
 
@@ -804,7 +865,7 @@ function registerIpc(): void {
   })
 }
 
-/** Program numbers follow setlist order: row i → PC = min(i + 1, MIDI_PC_SONG_MAX). PC 125–127 reserved for LED. */
+/** Program numbers follow setlist order; PCs 120–127 are reserved for prompts and LEDs. */
 function assignProgramsByOrder(items: SetlistItem[]): SetlistItem[] {
   return items.map((row, i) => ({
     ...row,

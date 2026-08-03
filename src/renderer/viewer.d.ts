@@ -13,6 +13,7 @@ export type ViewerApi = {
   selectSong: (id: string | null) => Promise<PublicState>
   patchSettings: (patch: Partial<AppState>) => Promise<PublicState>
   refreshMidi: () => Promise<PublicState>
+  promptMidi: (pc: 120 | 121 | 122 | 123) => Promise<PublicState>
   ledMidiBlackout: () => Promise<PublicState>
   ledMidiIdle: () => Promise<PublicState>
   ledMidiApply: () => Promise<PublicState>

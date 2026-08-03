@@ -3,8 +3,8 @@ import { BrowserWindow, Menu, app, dialog } from 'electron'
 const startHelp =
   '1. ESP32: Flash firmware/esp32-display, enable USB serial below (COM autodetect).\n\n' +
   '2. MIDI: Cubase ↔ ViewerOne over loopMIDI (auto-detected). Program Change channel is fixed (see midiConfig).\n\n' +
-  '3. Setlist: Order = program numbers 1…124. Add songs; drag ⋮⋮ to reorder.\n\n' +
-  '4. Cubase: Song PC updates the display only. PC 125 = blackout. PC 126 = dim knight rider (between songs). PC 127 = apply lights for the displayed song.\n\n' +
+  '3. Setlist: Order = program numbers 1…119. Add songs; drag ⋮⋮ to reorder.\n\n' +
+  '4. Cubase: Song PC updates the display only. PC 120/121 = PROMPT 1 on/off; PC 122/123 = PROMPT 2 on/off. PC 125 = blackout. PC 126 = dim knight rider (between songs). PC 127 = apply lights for the displayed song.\n\n' +
   'Tip: View → Toggle Developer Tools if something looks wrong.'
 
 export function setupAppMenu(): void {

@@ -1,5 +1,19 @@
 # Changelog
 
+## v5.7.1
+
+- CrowPanel right column now has four double-height items: pressable ALL/FX mute controls and
+  non-clickable PROMPT 1/PROMPT 2 status indicators.
+- Reserved absolute prompt PCs: 120/121 = PROMPT 1 on/off; 122/123 = PROMPT 2 on/off. ViewerOne
+  updates its preview and sends `{"prompt":N,"on":true|false}` over serial, including reconnect
+  resynchronization. Song PCs are now limited to 1–119.
+- Added PROMPT PC simulate controls alongside the existing LED PC 125/126/127 controls.
+- CrowPanel firmware v5.7.5 parses prompt JSON and spaces the year about half a zoomed title
+  line below the rendered song title. CYD firmware remains unchanged and ignores prompt JSON.
+- Firmware v5.7.6 and desktop state keep Group1/ALL independent from Group6/FX. Active FX uses
+  the stage navy-blue fill; PROMPT 1 uses bright pink and PROMPT 2 bright yellow, on device and
+  in the simulated CrowPanel preview.
+
 ## v5.7.0
 
 - **CrowPanel Advanced 7″ ESP32-P4 firmware** (`firmware/crowpanel-7-p4`): 1024×600 LVGL HMI

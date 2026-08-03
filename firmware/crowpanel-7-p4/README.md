@@ -73,15 +73,21 @@ Hold **BOOT**, tap **RESET**, release **BOOT** if upload fails to enter download
 ## UI
 
 - **Left (~75%)**: song title + year, mute colours (muted = yellow on navy, live = lime on black), LED pattern footer, polished idle “Waiting for signal”.
-- **Right**: 8 square mute pads — **ALL** (Group1), **FX** (Group6, same as CYD touch mute), **G2–G5 / —** placeholders.
+- **Right**: four double-height items — pressable **ALL** (Group1) and **FX** (Group6, same as CYD/main-stage touch), followed by non-clickable **PROMPT 1** and **PROMPT 2** status lights.
+- PROMPT PCs use absolute LED-style state: **120 = PROMPT 1 on**, **121 = off**, **122 = PROMPT 2 on**, **123 = off**. ViewerOne translates these to serial JSON.
+- Mute feedback is optimistic: touch-down updates and presents the local LVGL frame first, then sends the serial event to ViewerOne. The desktop echo remains authoritative for later synchronization.
 
 ## Serial protocol (compatible with ViewerOne desktop)
 
-PC → ESP (unchanged):
+PC → ESP:
 
 ```json
-{"t":"Title","c":"1999","l":true,"m":false}
+{"t":"Title","c":"1999","l":true,"m":false,"a":false}
 {"cmd":"hello"}
+{"prompt":1,"on":true}
+{"prompt":1,"on":false}
+{"prompt":2,"on":true}
+{"prompt":2,"on":false}
 ```
 
 ESP → PC:
@@ -90,8 +96,9 @@ ESP → PC:
 {"evt":"mute_toggle"}
 {"evt":"mute_toggle","group":"fx"}
 {"evt":"mute_toggle","group":"all"}
-{"evt":"boot","device":"crowpanel7","model":"Elecrow CrowPanel Advanced 7","w":1024,"h":600,"fw":"5.7.0",...}
-{"evt":"hello","device":"crowpanel7","model":"Elecrow CrowPanel Advanced 7","w":1024,"h":600,"fw":"5.7.0",...}
+{"evt":"prompt","ok":true,"prompt":1,"on":true}
+{"evt":"boot","device":"crowpanel7","model":"Elecrow CrowPanel Advanced 7","w":1024,"h":600,"fw":"5.7.6",...}
+{"evt":"hello","device":"crowpanel7","model":"Elecrow CrowPanel Advanced 7","w":1024,"h":600,"fw":"5.7.6",...}
 ```
 
 Each pad press emits one event. FX/ALL include `group`; the desktop accepts grouped and legacy ungrouped
@@ -100,16 +107,17 @@ depend on catching the boot line.
 
 ## Optional WS2812 LEDs
 
-Default build **stubs** LED strip control (`led` JSON replies `led_disabled`). Pattern footer still shows the last known / default label.
+Default `crowpanel-7-p4` build **stubs** LED strip control (`led` JSON replies `led_disabled`). Pattern footer still shows the last known / default label.
 
-To enable FastLED on a free header GPIO (default **GPIO20** — confirm your wiring):
+The `crowpanel-7-p4-led` environment uses **UART1 TX1 (GPIO47)** on the expansion header for the data signal. This pin is configured as ordinary GPIO output by FastLED; RX1 and 3V3 are unused. Flash the LED-enabled environment:
 
 ```powershell
-python -m platformio run -e crowpanel-7-p4-led -t upload --upload-port COMx
+$env:PYTHONUTF8 = "1"
+python -m platformio run -j 1 -e crowpanel-7-p4-led -t upload --upload-port COMx
 ```
 
-Override pin: build flag `-D PIN_LED_DATA=nn`. FastLED/RMT on ESP32-P4 is experimental; prefer validating on hardware before a gig.
+Wire **TX1 → 3.3 V-to-5 V level shifter → strip DIN**, and join the strip, PSU, and CrowPanel grounds. Power the strip from a suitably sized external 5 V supply; **do not parallel the external PSU's 5 V rail with USB 5 V**. RX1 and the header's 3V3 pin are not used. To use different wiring, override the pin with build flag `-D PIN_LED_DATA=nn`. FastLED/RMT on ESP32-P4 is experimental; validate on hardware before a gig.
 
 ## Version
 
-Firmware reports `VIEWERONE_FW_VERSION` in `src/main.cpp` (**5.7.0**).
+Firmware reports `VIEWERONE_FW_VERSION` in `src/main.cpp` (**5.7.6**).
