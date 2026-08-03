@@ -38,9 +38,14 @@ function normalizeSetlist(list: unknown): SetlistItem[] {
   return list.map((row) => {
     const r = row as SetlistItem & { chords?: string; live?: boolean }
     const year = String(r.year ?? r.chords ?? '')
+    const arrangerIndex =
+      typeof r.arrangerIndex === 'number' && Number.isFinite(r.arrangerIndex)
+        ? Math.max(1, Math.round(r.arrangerIndex))
+        : null
     return {
       id: typeof r.id === 'string' ? r.id : crypto.randomUUID(),
       program: typeof r.program === 'number' ? r.program : 0,
+      arrangerIndex,
       title: String(r.title ?? ''),
       year,
       ledPattern: clampLedPatternId(
@@ -102,6 +107,7 @@ export function newSetlistItem(partial?: Partial<SetlistItem>): SetlistItem {
   return {
     id: crypto.randomUUID(),
     program: partial?.program ?? 0,
+    arrangerIndex: partial?.arrangerIndex ?? null,
     title: partial?.title ?? '',
     year: partial?.year ?? '',
     ledPattern: clampLedPatternId(partial?.ledPattern ?? RANDOM_LED_PATTERN_ID)

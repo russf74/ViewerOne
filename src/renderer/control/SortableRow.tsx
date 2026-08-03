@@ -7,8 +7,6 @@ import { LED_PATTERNS } from '../../shared/ledPatterns'
 
 type Props = {
   item: SetlistItem
-  /** 1-based position in the saved/scanned Arranger order. */
-  order: number
   isCurrent: boolean
   onChange: (patch: Partial<Pick<SetlistItem, 'title' | 'year' | 'ledPattern'>>) => void
   onRemove: () => void
@@ -16,7 +14,7 @@ type Props = {
   onActivateRow?: () => void
 }
 
-export function SortableRow({ item, order, isCurrent, onChange, onRemove, onActivateRow }: Props) {
+export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow }: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.id
   })
@@ -80,15 +78,29 @@ export function SortableRow({ item, order, isCurrent, onChange, onRemove, onActi
     <div
       ref={setNodeRef}
       style={style}
-      className={`setlist-row${isCurrent ? ' current' : ''}${onActivateRow ? ' setlist-row-selectable' : ''}`}
+      className={`setlist-row${item.arrangerIndex === null ? ' setlist-row--not-in-arranger' : ''}${isCurrent ? ' current' : ''}${onActivateRow ? ' setlist-row-selectable' : ''}`}
       onClick={onRowClick}
       title={onActivateRow ? 'Click row (not fields) to preview on ESP — no MIDI to Cubase' : undefined}
     >
       <div className="drag-handle" {...attributes} {...listeners} title="Drag to reorder">
         ⋮⋮
       </div>
-      <span className="order-label" title="Position in saved Arranger order">
-        {order}
+      <span
+        className={`order-label${item.arrangerIndex === null ? ' order-label--not-in-arranger' : ''}`}
+        title={
+          item.arrangerIndex === null
+            ? 'Not visited during the last successful Arranger scan'
+            : `Arranger position #${item.arrangerIndex}`
+        }
+      >
+        {item.arrangerIndex === null ? (
+          <>
+            <span aria-hidden>—</span>
+            <span className="order-status">not in arranger</span>
+          </>
+        ) : (
+          `#${item.arrangerIndex}`
+        )}
       </span>
       <span className="prog-label" title="Cubase program number for this row (wire PC = this − 1). Songs use 1–119; 120–123 are prompt indicators and 125–127 are LED controls.">
         {item.program}

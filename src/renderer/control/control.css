@@ -548,7 +548,7 @@ button:disabled {
 .setlist-header {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: 22px 30px 34px minmax(72px, 1fr) minmax(56px, 0.55fr) minmax(110px, 0.85fr) 26px;
+  grid-template-columns: 22px 88px 34px minmax(72px, 1fr) minmax(56px, 0.55fr) minmax(110px, 0.85fr) 26px;
   gap: 2px 4px;
   font-size: 0.58rem;
   color: var(--muted);
@@ -565,7 +565,7 @@ button:disabled {
 
 .setlist-row {
   display: grid;
-  grid-template-columns: 22px 30px 34px minmax(72px, 1fr) minmax(56px, 0.55fr) minmax(110px, 0.85fr) 26px;
+  grid-template-columns: 22px 88px 34px minmax(72px, 1fr) minmax(56px, 0.55fr) minmax(110px, 0.85fr) 26px;
   gap: 2px 4px;
   align-items: center;
   padding: 1px 2px;
@@ -578,6 +578,14 @@ button:disabled {
 .setlist-row.current {
   background: var(--current);
   border-color: #3d5a3d;
+}
+
+.setlist-row--not-in-arranger:not(.current) {
+  background: #0e1117;
+}
+
+.setlist-row--not-in-arranger:not(.current) > :not(.order-label) {
+  opacity: 0.68;
 }
 
 .setlist-row-selectable {
@@ -626,6 +634,23 @@ button:disabled {
   color: var(--text);
   background: rgba(105, 180, 255, 0.08);
   border-color: rgba(105, 180, 255, 0.22);
+}
+
+.order-label--not-in-arranger {
+  flex-direction: column;
+  gap: 0;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.025);
+  border-color: rgba(255, 255, 255, 0.08);
+  line-height: 0.82;
+}
+
+.order-status {
+  font-size: 0.43rem;
+  font-weight: 500;
+  letter-spacing: 0.015em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .drag-handle:active {

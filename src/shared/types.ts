@@ -27,6 +27,8 @@ export type SetlistItem = {
   id: string
   /** Stable Cubase song Program Change, 1–119. Row order may differ after an Arranger scan. */
   program: number
+  /** 1-based position from the last successful Arranger scan; null when not visited by that scan. */
+  arrangerIndex: number | null
   title: string
   /** Release year, typically 4 digits */
   year: string

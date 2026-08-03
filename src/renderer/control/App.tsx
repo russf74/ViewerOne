@@ -548,7 +548,7 @@ export function App() {
         </div>
         <div className="setlist-header">
           <span />
-          <span title="Saved Arranger position">#</span>
+          <span title="Position from the last successful Arranger scan">Arranger</span>
           <span>PC</span>
           <span>Title</span>
           <span>Year</span>
@@ -558,11 +558,10 @@ export function App() {
         <div className="setlist-scroll" ref={setlistScrollRef}>
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={(e) => void onDragEnd(e)}>
             <SortableContext items={state.setlist.map((r) => r.id)} strategy={verticalListSortingStrategy}>
-              {state.setlist.map((item, index) => (
+              {state.setlist.map((item) => (
                 <SortableRow
                   key={item.id}
                   item={item}
-                  order={index + 1}
                   isCurrent={item.id === state.currentSongId}
                   onChange={(patch) => updateRow(item.id, patch)}
                   onRemove={() => void window.viewer.removeSong(item.id).then(apply)}

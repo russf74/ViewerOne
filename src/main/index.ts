@@ -188,8 +188,9 @@ let prompt2On = false
 let promptMidiPulse: 120 | 121 | 122 | 123 | null = null
 let promptMidiPulseAt = 0
 
-const ARRANGER_CHANGE_TIMEOUT_MS = 1400
+const ARRANGER_CHANGE_TIMEOUT_MS = 1800
 const ARRANGER_NO_CHANGE_ATTEMPTS = 3
+const ARRANGER_SETTLE_MS = 400
 let latestSongProgram: number | null = null
 let songIdentityRevision = 0
 let arrangerScanCancelled = false
@@ -645,6 +646,15 @@ async function waitForSongIdentityChange(
   return null
 }
 
+async function waitForArrangerSettle(respectCancel: boolean): Promise<boolean> {
+  const deadline = Date.now() + ARRANGER_SETTLE_MS
+  while (Date.now() < deadline) {
+    if (respectCancel && arrangerScanCancelled) return false
+    await sleep(Math.min(50, deadline - Date.now()))
+  }
+  return true
+}
+
 async function stepArrangerUntilChanged(
   direction: 'prev' | 'next',
   fromProgram: number,
@@ -655,7 +665,12 @@ async function stepArrangerUntilChanged(
     const revisionAtSend = songIdentityRevision
     sendArrangerCommand(direction)
     const changed = await waitForSongIdentityChange(fromProgram, revisionAtSend, respectCancel)
-    if (changed !== null) return changed
+    if (changed !== null) {
+      // Give Cubase's Arranger selection, title, and related automation time to settle
+      // before issuing another Next/Prev command.
+      if (!(await waitForArrangerSettle(respectCancel))) return null
+      return changed
+    }
     if (respectCancel && arrangerScanCancelled) return null
     console.log(
       `[ViewerOne] Arranger scan: ${direction} produced no song change (${attempt}/${ARRANGER_NO_CHANGE_ATTEMPTS})`
@@ -671,7 +686,7 @@ function buildScannedSetlist(programs: number[], previous: SetlistItem[]): Setli
   }
   const usedIds = new Set<string>()
   const scannedPrograms = new Set(programs)
-  const scanned = programs.map((program) => {
+  const scanned = programs.map((program, index) => {
     const old = byProgram.get(program)
     const canReuseId = old && !usedIds.has(old.id)
     const id = canReuseId ? old.id : crypto.randomUUID()
@@ -679,6 +694,7 @@ function buildScannedSetlist(programs: number[], previous: SetlistItem[]): Setli
     return {
       id,
       program,
+      arrangerIndex: index + 1,
       title: old?.title || `Song PC ${program}`,
       year: old?.year ?? '',
       // Preserve every custom pick keyed by Cubase's stable song program.
@@ -687,9 +703,9 @@ function buildScannedSetlist(programs: number[], previous: SetlistItem[]): Setli
   })
   // A scan only proves the order of songs Cubase actually visited. Keep every
   // unvisited row at the bottom so a partial Arranger chain can never erase it.
-  const unvisited = previous.filter(
-    (row) => !scannedPrograms.has(row.program) && !usedIds.has(row.id)
-  )
+  const unvisited = previous
+    .filter((row) => !scannedPrograms.has(row.program) && !usedIds.has(row.id))
+    .map((row) => ({ ...row, arrangerIndex: null }))
   return [...scanned, ...unvisited]
 }
 
@@ -810,8 +826,8 @@ async function runArrangerScan(): Promise<void> {
     phase: restored ? 'complete' : 'error',
     collected: programs.length,
     message: restored
-      ? `Scan complete: ordered ${programs.length} scanned songs; kept ${scanned.length - programs.length} unvisited songs.`
-      : `Ordered ${programs.length} scanned songs and kept ${scanned.length - programs.length} unvisited songs, but could not confirm return to PC ${startProgram}.`
+      ? `Scan complete: ${programs.length} in arranger order (top); ${scanned.length - programs.length} not in arranger (below).`
+      : `Found ${programs.length} in arranger order and kept ${scanned.length - programs.length} not in arranger, but could not confirm return to PC ${startProgram}.`
   })
 }
 
@@ -892,6 +908,10 @@ function registerIpc(): void {
     const withIds = items.map((row) => ({
       id: typeof row.id === 'string' ? row.id : crypto.randomUUID(),
       program: Math.max(1, Math.min(MIDI_PC_SONG_MAX, Math.round(Number(row.program) || 1))),
+      arrangerIndex:
+        typeof row.arrangerIndex === 'number' && Number.isFinite(row.arrangerIndex)
+          ? Math.max(1, Math.round(row.arrangerIndex))
+          : null,
       title: String(row.title ?? ''),
       year: String(
         row.year ?? (row as SetlistItem & { chords?: string }).chords ?? ''
