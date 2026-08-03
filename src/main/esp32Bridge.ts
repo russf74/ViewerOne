@@ -22,9 +22,24 @@ export type Esp32FromDeviceMsg = Record<string, unknown>
 export type Esp32LineHandler = (msg: Esp32FromDeviceMsg) => void
 
 let lineHandler: Esp32LineHandler | null = null
+let connectionHandler: ((connected: boolean, path: string | null) => void) | null = null
 
 export function setEsp32LineHandler(handler: Esp32LineHandler | null): void {
   lineHandler = handler
+}
+
+export function setEsp32ConnectionHandler(
+  handler: ((connected: boolean, path: string | null) => void) | null
+): void {
+  connectionHandler = handler
+}
+
+function notifyConnection(connected: boolean, path: string | null): void {
+  try {
+    connectionHandler?.(connected, path)
+  } catch (err) {
+    console.warn('[ViewerOne] ESP32 connection handler threw (swallowed):', err)
+  }
 }
 
 function clearReconnectTimer(): void {
@@ -63,6 +78,7 @@ function attachDisconnectHandlers(p: SerialPort, gen: number): void {
     if (port !== p) return
     console.warn('[ViewerOne] ESP32 serial disconnected:', openPath ?? desiredPath)
     disposeCurrentPort()
+    notifyConnection(false, null)
     if (desiredPath) scheduleReconnect(gen)
   }
   p.on('error', (err: Error & { message?: string }) => {
@@ -156,6 +172,7 @@ async function openDesiredPath(): Promise<void> {
       reconnectAttempt = 0
       attachSerialReader(p)
       attachDisconnectHandlers(p, gen)
+      notifyConnection(true, concretePath)
       const mode = desiredPath === ESP32_SERIAL_PORT_AUTO ? ' (auto)' : ''
       console.log('[ViewerOne] ESP32 serial:', concretePath, '@ 115200' + mode)
       try {
@@ -179,6 +196,7 @@ export function setEsp32SerialPort(path: string | null, onOpened?: () => void): 
     onOpenedCb = null
     reconnectAttempt = 0
     disposeCurrentPort()
+    notifyConnection(false, null)
     return
   }
   if (path === desiredPath && port?.isOpen) return
@@ -201,12 +219,14 @@ function writeSerialLine(line: string, label: string): void {
       console.warn(`[ViewerOne] ESP32 ${label} write:`, err.message)
       if (port !== p) return
       disposeCurrentPort()
+      notifyConnection(false, null)
       if (desiredPath) scheduleReconnect(openGeneration)
     })
   } catch (e) {
     console.warn(`[ViewerOne] ESP32 ${label} write threw:`, e)
     if (port === p) {
       disposeCurrentPort()
+      notifyConnection(false, null)
       if (desiredPath) scheduleReconnect(openGeneration)
     }
   }
@@ -214,6 +234,11 @@ function writeSerialLine(line: string, label: string): void {
 
 export function pushEsp32Payload(payload: Esp32DisplayPayload): void {
   writeSerialLine(JSON.stringify(payload) + '\n', 'serial')
+}
+
+/** Ask current firmware to announce its model and physical display resolution. */
+export function pushEsp32HelloRequest(): void {
+  writeSerialLine('{"cmd":"hello"}\n', 'hello')
 }
 
 /** Trigger an LED pattern on the merged ViewerOne firmware (`{"led":"pattern","id":N}`). */
@@ -235,4 +260,5 @@ export function shutdownEsp32Serial(): void {
   onOpenedCb = null
   reconnectAttempt = 0
   disposeCurrentPort()
+  notifyConnection(false, null)
 }

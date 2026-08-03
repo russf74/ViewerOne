@@ -13,7 +13,9 @@
  * Replies: {"evt":"led", ...} — ViewerOne desktop ignores unknown evt (only mute_toggle/boot).
  *
  * To PC (touch): {"evt":"mute_toggle"}
- * To PC (boot):  {"evt":"boot"}
+ * To PC (boot/identity):
+ *   {"evt":"boot","device":"cyd","model":"ESP32-2432S028R","w":320,"h":240,...}
+ * PC may request it again with {"cmd":"hello"}.
  *
  * Auto-recovery: task WDT reboots if the main loop stalls > WDT_TIMEOUT_S.
  */
@@ -24,6 +26,7 @@
 #include <cstdio>
 #include <cstring>
 #include <driver/spi_common.h>
+#include <esp_idf_version.h>
 #include <esp_task_wdt.h>
 #include <LovyanGFX.hpp>
 
@@ -32,7 +35,7 @@
 #include "patterns.h"
 
 /** Keep in sync with repository root `package.json` version when releasing the app. */
-static constexpr const char *VIEWERONE_FW_VERSION = "5.6.5";
+static constexpr const char *VIEWERONE_FW_VERSION = "5.7.0";
 
 /** Seconds the main loop may go without feeding the watchdog before it force-reboots the board. */
 static constexpr uint32_t WDT_TIMEOUT_S = 5;
@@ -314,6 +317,13 @@ static void replyLedErr(const char *msg) {
   Serial.printf("{\"evt\":\"led\",\"ok\":false,\"err\":\"%s\"}\n", msg);
 }
 
+static void sendDeviceIdentity(const char *evt) {
+  Serial.printf(
+      "{\"evt\":\"%s\",\"device\":\"cyd\",\"model\":\"ESP32-2432S028R\",\"w\":320,\"h\":240,"
+      "\"fw\":\"%s\",\"led_id\":%u,\"led\":\"%s\"}\n",
+      evt, VIEWERONE_FW_VERSION, (unsigned)patternsCurrent(), patternName(patternsCurrent()));
+}
+
 static void handleLedCommand(JsonDocument &doc) {
   const char *cmd = doc["led"] | "";
   if (!cmd[0]) {
@@ -381,6 +391,12 @@ static void handleSerialLine(const String &line) {
     return;
   }
 
+  const char *cmd = doc["cmd"] | "";
+  if (strcasecmp(cmd, "hello") == 0) {
+    sendDeviceIdentity("hello");
+    return;
+  }
+
   // LED commands must not be treated as song payloads (would blank the TFT).
   if (!doc["led"].isNull()) {
     handleLedCommand(doc);
@@ -403,7 +419,16 @@ void setup() {
   Serial.begin(115200);
   lineBuf.reserve(512);
 
+#if ESP_IDF_VERSION_MAJOR >= 5
+  const esp_task_wdt_config_t wdtConfig = {
+      .timeout_ms = WDT_TIMEOUT_S * 1000,
+      .idle_core_mask = (1U << portNUM_PROCESSORS) - 1U,
+      .trigger_panic = true,
+  };
+  esp_task_wdt_init(&wdtConfig);
+#else
   esp_task_wdt_init(WDT_TIMEOUT_S, true);
+#endif
   esp_task_wdt_add(NULL);
 
   pinMode(PIN_TFT_BL, OUTPUT);
@@ -430,8 +455,7 @@ void setup() {
 #endif
   Serial.printf(", LED GPIO%d x%u)\n", (int)PIN_LED_DATA, (unsigned)NUM_LEDS);
 
-  Serial.printf("{\"evt\":\"boot\",\"led_id\":%u,\"led\":\"%s\"}\n", (unsigned)patternsCurrent(),
-                patternName(patternsCurrent()));
+  sendDeviceIdentity("boot");
 }
 
 void loop() {

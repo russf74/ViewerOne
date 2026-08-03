@@ -1,6 +1,6 @@
 # ViewerOne
 
-Live setlist display + MIDI control for Cubase, with an optional ESP32 “Cheap Yellow Display” (ILI9341) and WS2812B LED strip.
+Live setlist display + MIDI control for Cubase, with optional ESP displays: classic CYD 2.8″ (ILI9341) and **CrowPanel Advanced 7″ ESP32-P4** (1024×600), plus WS2812B LED strip on the CYD.
 
 **GitHub:** https://github.com/russf74/ViewerOne
 
@@ -8,7 +8,7 @@ Live setlist display + MIDI control for Cubase, with an optional ESP32 “Cheap 
 
 | What | Where |
 |------|--------|
-| This app + CYD firmware | https://github.com/russf74/ViewerOne |
+| This app + CYD + CrowPanel firmware | https://github.com/russf74/ViewerOne |
 | Earlier ESP32-S3 LED experiments / USB scripts | https://github.com/russf74/LED-Driver |
 | Setlist + app settings backup (in-repo) | [`backup/viewer-one-config.json`](backup/viewer-one-config.json) |
 | Board MAC table + identify steps | [`firmware/esp32-display/HARDWARE.md`](firmware/esp32-display/HARDWARE.md) |
@@ -16,8 +16,9 @@ Live setlist display + MIDI control for Cubase, with an optional ESP32 “Cheap 
 | Piece | Location |
 |-------|----------|
 | Windows Electron app | this repo root (`npm run launch` / `npm run dist`) |
-| ESP32 firmware + LED (production) | [`firmware/esp32-display`](firmware/esp32-display/) |
-| Board MAC inventory | [`firmware/esp32-display/HARDWARE.md`](firmware/esp32-display/HARDWARE.md) |
+| ESP32 CYD firmware + LED (production) | [`firmware/esp32-display`](firmware/esp32-display/) |
+| CrowPanel 7″ ESP32-P4 HMI firmware | [`firmware/crowpanel-7-p4`](firmware/crowpanel-7-p4/) |
+| Board MAC inventory (CYD) | [`firmware/esp32-display/HARDWARE.md`](firmware/esp32-display/HARDWARE.md) |
 | Standalone S3 LED lab (older) | [russf74/LED-Driver](https://github.com/russf74/LED-Driver) |
 
 ---
@@ -67,16 +68,29 @@ git commit -m "Update viewer-one config backup."
 git push
 ```
 
-### 4. Flash ESP32 firmware
+### 4. Flash ESP display firmware
 
-Board env: **`esp32-diy8-ili9341`**. Close ViewerOne USB serial (or disable “Enable USB serial”) so the COM port is free.
+Close ViewerOne USB serial (or disable “Enable USB serial”) so the COM port is free.
+
+**CYD 2.8″** — env **`esp32-diy8-ili9341`**:
 
 ```powershell
 cd firmware\esp32-display
 python -m platformio run -e esp32-diy8-ili9341 -t upload --upload-port COMx
 ```
 
-Replace `COMx` with the board’s port (Device Manager). Details, LED JSON, and alternate envs: [`firmware/esp32-display/README.md`](firmware/esp32-display/README.md).
+**CrowPanel Advanced 7″ ESP32-P4** — env **`crowpanel-7-p4`** (needs [pioarduino](https://github.com/pioarduino/platform-espressif32); see project README):
+
+```powershell
+cd firmware\crowpanel-7-p4
+python -m platformio run -e crowpanel-7-p4 -t upload --upload-port COMx
+```
+
+Replace `COMx` with the board’s port (Device Manager). Details: [`firmware/esp32-display/README.md`](firmware/esp32-display/README.md) · [`firmware/crowpanel-7-p4/README.md`](firmware/crowpanel-7-p4/README.md).
+
+Both firmwares announce `device`, `model`, `w`, and `h` in boot JSON and answer `{"cmd":"hello"}`.
+The Windows app requests that identity whenever serial opens and switches its simulated display automatically.
+Unknown, older, disconnected, and disabled devices use the CYD preview as a clearly labelled fallback.
 
 Identify Main vs Backup by MAC: [`firmware/esp32-display/HARDWARE.md`](firmware/esp32-display/HARDWARE.md).
 

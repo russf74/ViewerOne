@@ -1,5 +1,16 @@
 # Changelog
 
+## v5.7.0
+
+- **CrowPanel Advanced 7″ ESP32-P4 firmware** (`firmware/crowpanel-7-p4`): 1024×600 LVGL HMI
+  with song stage + 8 mute pads (ALL / FX / placeholders). Uses pioarduino for ESP32-P4
+  Arduino; EK79007 MIPI-DSI + GT911. CYD 2.8″ display/LED behavior remains compatible.
+- Serial protocol accepts legacy `{"evt":"mute_toggle"}` and CrowPanel grouped
+  `{"evt":"mute_toggle","group":"fx"|"all"}`. Desktop maps `all` to FX mute for now.
+- Firmware boot/hello identity (`device`, `model`, `w`, `h`) switches Esp32Preview automatically
+  between the CYD 320×240 UI and CrowPanel 1024×600 wide stage + pad column.
+- Optional LED strip env `crowpanel-7-p4-led` (FastLED on a free GPIO; default build stubs LEDs).
+
 ## v5.6.6
 
 - **PC 125 = Blackout:** reserved Cubase-style Program Change 125 (wire 124) applies LED

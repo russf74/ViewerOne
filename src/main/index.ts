@@ -8,8 +8,10 @@ import { createAppStore, getState, setState, newSetlistItem, assignLedPatternsBy
 import { MidiService, listInputs, listOutputs } from './midi.js'
 import {
   pushEsp32Payload,
+  pushEsp32HelloRequest,
   pushEsp32LedPattern,
   pushEsp32LedBrightness,
+  setEsp32ConnectionHandler,
   setEsp32LineHandler,
   setEsp32SerialPort,
   shutdownEsp32Serial,
@@ -23,6 +25,7 @@ import {
   songLedPatternForIndex
 } from '../shared/ledPatterns.js'
 import { ESP32_SERIAL_PORT_AUTO } from '../shared/esp32Serial.js'
+import { parseEsp32DisplayIdentity } from '../shared/esp32Device.js'
 import { ensureLoopMidiRunning } from './loopMidi.js'
 import { detectCubasePorts, detectMixerPorts } from '../shared/midiAutoDetect.js'
 import {
@@ -38,7 +41,7 @@ import {
   MIDI_PC_LED_APPLY,
   LED_IDLE_DIM_BRIGHTNESS
 } from '../shared/midiConfig.js'
-import type { AppState, PublicState, SetlistItem } from '../shared/types.js'
+import type { AppState, Esp32DisplayStatus, PublicState, SetlistItem } from '../shared/types.js'
 
 // Must run before any MIDI/serial traffic — EPIPE on stdout used to kill the main process mid-gig.
 installProcessGuards()
@@ -152,6 +155,15 @@ let cubaseLastPcAtMs: number | null = null
 /** Mirrors ESP LED pattern for the desktop preview (synced via boot / led serial events / MIDI LED PCs). */
 let ledPattern = 'knight_rider'
 
+/** Ephemeral hardware identity. Unknown/disconnected UI intentionally uses the CYD preview fallback. */
+let esp32Display: Esp32DisplayStatus = {
+  connection: 'disabled',
+  device: 'unknown',
+  model: null,
+  width: null,
+  height: null
+}
+
 /** True while PC 126 idle dim is active — brightness slider is held until PC 127 / apply. */
 let ledIdleDimActive = false
 
@@ -168,6 +180,7 @@ function buildPublicState(): PublicState {
     ...base,
     appVersion: app.getVersion(),
     ledPattern,
+    esp32Display,
     queuedLedPattern: queuedRow ? clampLedPatternId(queuedRow.ledPattern) : null,
     ledMidiPulse,
     ledMidiPulseAt,
@@ -280,6 +293,7 @@ function previewLedPattern(rawId: unknown): void {
 
 /** Push current song/mute JSON only — board keeps its own LED state until PC 125/126/127. */
 function onEsp32SerialOpened(): void {
+  pushEsp32HelloRequest()
   broadcastEsp32DisplayIfEnabled()
 }
 
@@ -344,8 +358,29 @@ function applyLedPatternFromEsp(name: unknown): void {
 }
 
 function handleEsp32Line(msg: Esp32FromDeviceMsg): void {
+  const identity = parseEsp32DisplayIdentity(msg)
+  if (identity) {
+    esp32Display = identity
+    console.log(
+      `[ViewerOne] ESP32 identity: ${identity.device} ${identity.model ?? ''} ${identity.width ?? '?'}x${identity.height ?? '?'}`
+    )
+    broadcastUiState()
+  }
+
   const evt = msg['evt']
-  if (evt === 'mute_toggle') toggleFxMutedFromEsp()
+  if (evt === 'mute_toggle') {
+    // CrowPanel pads may send group:"fx" | "all". FX (and legacy bare events) toggle mic/FX mute.
+    // ALL currently shares the same FX mute path until dedicated group routing exists.
+    const group = typeof msg['group'] === 'string' ? msg['group'].toLowerCase() : ''
+    if (!group || group === 'fx' || group === 'all') {
+      if (group === 'all') {
+        console.log('[ViewerOne] ESP32 mute_toggle group=all (mapped to FX mute for now)')
+      }
+      toggleFxMutedFromEsp()
+    } else {
+      console.log(`[ViewerOne] ESP32 mute_toggle ignored for group=${group}`)
+    }
+  }
   if (evt === 'boot') {
     applyLedPatternFromEsp(msg['led'])
     // Board reset — resend display JSON only; strip keeps firmware boot KR until PC 125/126/127.
@@ -359,6 +394,13 @@ function handleEsp32Line(msg: Esp32FromDeviceMsg): void {
 
 function syncEsp32SerialFromStore(): void {
   const st = getState(store)
+  esp32Display = {
+    connection: st.esp32Enabled ? 'searching' : 'disabled',
+    device: 'unknown',
+    model: null,
+    width: null,
+    height: null
+  }
   if (st.esp32Enabled) {
     setEsp32SerialPort(ESP32_SERIAL_PORT_AUTO, () => onEsp32SerialOpened())
   } else {
@@ -790,6 +832,17 @@ if (!gotTheLock) {
   app.whenReady().then(() => {
     ensureLoopMidiRunning()
     setEsp32LineHandler(handleEsp32Line)
+    setEsp32ConnectionHandler((connected) => {
+      const enabled = getState(store).esp32Enabled
+      esp32Display = {
+        connection: !enabled ? 'disabled' : connected ? 'connected' : 'searching',
+        device: 'unknown',
+        model: null,
+        width: null,
+        height: null
+      }
+      if (!isQuitting) broadcastUiState()
+    })
     registerIpc()
     const initial = getState(store)
     // Programs by order; every song defaults to random (20).

@@ -3,6 +3,7 @@ out/
 dist/
 release/
 firmware/**/.pio/
+_ref/
 *.log
 .DS_Store
 *.tsbuildinfo

@@ -367,10 +367,11 @@ export function App() {
             <div className="settings-card">
               <h2 className="settings-card-title">ESP32 display + LEDs</h2>
               <p className="settings-card-lead">
-                JSON lines at <strong>115200</strong> baud — same as the preview. Flash <code>firmware/esp32-display</code>{' '}
-                for your board. USB serial uses the CH340 / USB-serial device automatically (or the only COM port if
-                there is just one); unplug and replug without restarting the app. Song select updates the LCD and
-                queues that song’s LED pattern. <strong>PC {MIDI_PC_LED_BLACKOUT}</strong> = blackout;
+                JSON lines at <strong>115200</strong> baud — same as the preview. Firmware identifies its model and
+                resolution on connect, switching the preview between CYD 320×240 and CrowPanel 1024×600. USB serial
+                uses the matching USB-serial device automatically (or the only COM port if there is just one); unplug
+                and replug without restarting the app. Song select updates the LCD and queues that song’s LED pattern.{' '}
+                <strong>PC {MIDI_PC_LED_BLACKOUT}</strong> = blackout;
                 <strong> PC {MIDI_PC_LED_IDLE}</strong> = dim knight rider (idle);
                 <strong> PC {MIDI_PC_LED_APPLY}</strong> = apply the queued pattern. Mic mute only affects the
                 display tint + MIDI CC — not the strip.

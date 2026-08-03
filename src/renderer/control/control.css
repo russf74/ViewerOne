@@ -670,6 +670,123 @@ button:disabled {
   container-name: esp-lcd;
 }
 
+/* CrowPanel Advanced 7" preview — 1024×600 stage + mute pad column */
+.esp32-sim-lcd--crowpanel {
+  width: min(420px, 96vw);
+  aspect-ratio: 1024 / 600;
+  display: flex;
+  flex-direction: row;
+  background: #0a0c10;
+}
+
+.esp32-sim-lcd--crowpanel .esp32-sim-inner {
+  position: relative;
+  flex: 1 1 auto;
+  inset: auto;
+}
+
+.esp32-sim-stage {
+  flex: 1 1 72%;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.esp32-sim-brand {
+  flex: 0 0 auto;
+  padding: 6px 8px 0;
+  font-size: 0.55rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #6b7280;
+}
+
+.esp32-sim-pads {
+  flex: 0 0 28%;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px;
+  border-left: 1px solid #222833;
+  background: #0c0e14;
+  overflow: hidden;
+}
+
+.esp32-sim-pads-title {
+  font-size: 0.5rem;
+  letter-spacing: 0.1em;
+  color: #8b92a0;
+  text-align: center;
+  margin-bottom: 2px;
+}
+
+.esp32-sim-pad {
+  flex: 1 1 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 4px;
+  align-items: center;
+  border-radius: 5px;
+  border: 1px solid #2a3340;
+  background: #141820;
+  color: #d1d5db;
+  padding: 2px 4px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.esp32-sim-pad-label {
+  grid-row: 1 / span 2;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.55rem;
+  font-weight: 700;
+  border: 1px solid currentColor;
+}
+
+.esp32-sim-pad-sub {
+  font-size: 0.52rem;
+  color: #9ca3af;
+}
+
+.esp32-sim-pad-state {
+  font-size: 0.48rem;
+  letter-spacing: 0.04em;
+}
+
+.esp32-sim-pad--live .esp32-sim-pad-label {
+  color: #b8f5c8;
+  border-color: #2ecc71;
+  background: #0f2a18;
+}
+
+.esp32-sim-pad--muted {
+  border-color: #ff6a00;
+  background: #5c1a1a;
+}
+
+.esp32-sim-pad--muted .esp32-sim-pad-label {
+  color: #ffcc66;
+  border-color: #ff6a00;
+  background: #3a1010;
+}
+
+.esp32-sim-pad--muted .esp32-sim-pad-state {
+  color: #ff8a4c;
+}
+
+.esp32-sim-pad--placeholder {
+  opacity: 0.85;
+}
+
 /* Match ESP: unmuted black; muted deep navy (RGB565 0x0011 ≈ #000088) */
 .esp32-sim-lcd--fx-unmuted {
   background: #000;

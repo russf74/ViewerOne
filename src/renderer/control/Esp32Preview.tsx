@@ -15,7 +15,18 @@ function activePatternId(ledPattern: string): number {
   return found ? found.id : 0
 }
 
-/** Mirrors payload + 50/50 title/year (landscape 320×240 on device), plus LED pattern footer. */
+const PREVIEW_PADS = [
+  { id: 'all', label: 'ALL', sub: 'Group 1' },
+  { id: 'fx', label: 'FX', sub: 'Group 6' },
+  { id: 'g2', label: 'G2', sub: 'future' },
+  { id: 'g3', label: 'G3', sub: 'future' },
+  { id: 'g4', label: 'G4', sub: 'future' },
+  { id: 'g5', label: 'G5', sub: 'future' },
+  { id: 'ph6', label: '—', sub: 'future' },
+  { id: 'ph7', label: '—', sub: 'future' }
+] as const
+
+/** Mirrors CrowPanel 1024×600 HMI (main stage + 8 mute pads); CYD is 320×240 without pads. */
 export function Esp32Preview({ state }: Props) {
   const payload = useMemo(
     () => buildEsp32DisplayPayload(state),
@@ -29,6 +40,16 @@ export function Esp32Preview({ state }: Props) {
   const isWaiting = payload.t === ESP32_WAITING_TITLE && !payload.c
   const patternLabel = formatLedPatternLabel(state.ledPattern)
   const selectedId = activePatternId(state.ledPattern)
+  const isCrowPanel = state.esp32Display.device === 'crowpanel7'
+  const [localPads, setLocalPads] = useState<Record<string, boolean>>({})
+  const serialStatus =
+    state.esp32Display.connection === 'disabled'
+      ? 'Serial off — CYD fallback'
+      : state.esp32Display.connection === 'searching'
+        ? 'Searching for display — CYD fallback'
+        : state.esp32Display.device === 'unknown'
+          ? 'Connected — identifying… CYD fallback'
+          : `${state.esp32Display.model ?? (isCrowPanel ? 'CrowPanel 7"' : 'CYD 2.8"')} · ${state.esp32Display.width}×${state.esp32Display.height}`
 
   const queuedLabel =
     state.queuedLedPattern !== null && state.queuedLedPattern !== undefined
@@ -72,35 +93,91 @@ export function Esp32Preview({ state }: Props) {
   return (
     <div className="esp32-sim">
       <div className="esp32-sim-chrome">
-        <span className="esp32-sim-label">ESP32 (simulated)</span>
-        <span className="esp32-sim-status">
-          {!state.esp32Enabled ? 'Serial off' : 'USB serial — same JSON as device'}
-        </span>
+        <span className="esp32-sim-label">{isCrowPanel ? 'CrowPanel 7" (simulated)' : 'CYD 2.8" (simulated)'}</span>
+        <span className="esp32-sim-status">{serialStatus}</span>
       </div>
       <div
-        className={`esp32-sim-lcd ${!state.esp32Enabled ? 'esp32-sim-lcd--dim' : ''} ${
+        className={`esp32-sim-lcd ${isCrowPanel ? 'esp32-sim-lcd--crowpanel' : 'esp32-sim-lcd--cyd'} ${
+          !state.esp32Enabled ? 'esp32-sim-lcd--dim' : ''
+        } ${
           fxMuted ? 'esp32-sim-lcd--fx-muted' : 'esp32-sim-lcd--fx-unmuted'
         }`}
       >
-        <div className="esp32-sim-inner">
-          <div className="esp32-sim-half esp32-sim-half--title">
-            <div
-              className="esp32-sim-title-fill"
-              style={{ color: textColor }}
-              title={isWaiting ? 'Idle text matches firmware + PC default' : undefined}
-            >
-              {payload.t || '—'}
+        {isCrowPanel ? (
+          <>
+            <div className="esp32-sim-stage">
+              <div className="esp32-sim-brand">VIEWERONE · LIVE HMI</div>
+              <div className="esp32-sim-inner">
+                <div className="esp32-sim-half esp32-sim-half--title">
+                  <div
+                    className="esp32-sim-title-fill"
+                    style={{ color: textColor }}
+                    title={isWaiting ? 'Idle text matches firmware + PC default' : undefined}
+                  >
+                    {isWaiting ? 'Waiting for signal' : payload.t || '—'}
+                  </div>
+                </div>
+                <div className="esp32-sim-half esp32-sim-half--year">
+                  <div className="esp32-sim-year-fill" style={{ color: textColor }}>
+                    {isWaiting && !payload.c ? '' : !payload.c.trim() ? '—' : payload.c}
+                  </div>
+                  <div className="esp32-sim-pattern" style={{ color: footerColor }} title="Active LED pattern on strip">
+                    {patternLabel}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="esp32-sim-pads" role="group" aria-label="CrowPanel mute pads (preview)">
+              <div className="esp32-sim-pads-title">MUTE PADS</div>
+              {PREVIEW_PADS.map((pad) => {
+                const muted = pad.id === 'fx' ? fxMuted : Boolean(localPads[pad.id])
+                return (
+                  <button
+                    key={pad.id}
+                    type="button"
+                    className={`esp32-sim-pad${muted ? ' esp32-sim-pad--muted' : ' esp32-sim-pad--live'}${
+                      pad.id !== 'fx' && pad.id !== 'all' ? ' esp32-sim-pad--placeholder' : ''
+                    }`}
+                    title={`${pad.sub} — preview only${pad.id === 'fx' ? ' (follows FX mute)' : ''}`}
+                    onClick={() => {
+                      if (pad.id === 'fx') {
+                        void window.viewer.patchSettings({ fxMuted: !fxMuted })
+                        return
+                      }
+                      setLocalPads((prev) => ({ ...prev, [pad.id]: !prev[pad.id] }))
+                    }}
+                  >
+                    <span className="esp32-sim-pad-label">{pad.label}</span>
+                    <span className="esp32-sim-pad-sub">{pad.sub}</span>
+                    <span className="esp32-sim-pad-state">
+                      {muted ? 'MUTED' : pad.id === 'fx' || pad.id === 'all' ? 'LIVE' : 'STANDBY'}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </>
+        ) : (
+          <div className="esp32-sim-inner">
+            <div className="esp32-sim-half esp32-sim-half--title">
+              <div
+                className="esp32-sim-title-fill"
+                style={{ color: textColor }}
+                title={isWaiting ? 'Idle text matches firmware + PC default' : undefined}
+              >
+                {isWaiting ? 'Waiting for signal' : payload.t || '—'}
+              </div>
+            </div>
+            <div className="esp32-sim-half esp32-sim-half--year">
+              <div className="esp32-sim-year-fill" style={{ color: textColor }}>
+                {isWaiting && !payload.c ? '' : !payload.c.trim() ? '—' : payload.c}
+              </div>
+              <div className="esp32-sim-pattern" style={{ color: footerColor }} title="Active LED pattern on strip">
+                {patternLabel}
+              </div>
             </div>
           </div>
-          <div className="esp32-sim-half esp32-sim-half--year">
-            <div className="esp32-sim-year-fill" style={{ color: textColor }}>
-              {isWaiting && !payload.c ? '' : !payload.c.trim() ? '—' : payload.c}
-            </div>
-            <div className="esp32-sim-pattern" style={{ color: footerColor }} title="Active LED pattern on strip">
-              {patternLabel}
-            </div>
-          </div>
-        </div>
+        )}
       </div>
       <p
         className={`esp32-sim-queued-line${queuedLabel && !queuedMatchesActive ? ' esp32-sim-queued-line--pending' : ''}`}

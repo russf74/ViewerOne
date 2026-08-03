@@ -5,6 +5,8 @@ Firmware for the ESP32-2432S028R-style board (**Cheap Yellow Display**):
 - USB serial at **115200**
 - Display JSON: `{"t":"Title","c":"1999","l":true,"m":false}` (unchanged)
 - LED JSON: `{"led":"pattern","id":0}` etc. (WS2812B)
+- Identity: boot and `{"cmd":"hello"}` reply with
+  `{"evt":"hello","device":"cyd","model":"ESP32-2432S028R","w":320,"h":240,...}`
 
 Board MACs (Main / Backup): see [`HARDWARE.md`](HARDWARE.md).  
 Full PC rebuild (app + flash + MIDI): see the root [`README.md`](../../README.md) **Disaster recovery** section.
@@ -76,4 +78,4 @@ A separate local **LED-Driver** repo (not required for ViewerOne rebuild) can se
 
 ## Version
 
-Firmware reports `VIEWERONE_FW_VERSION` in `src/main.cpp` (**5.6.5** = blackout id 99 + auto footer `(A) - Title`; JSON `name` stays underscored).
+Firmware reports `VIEWERONE_FW_VERSION` in `src/main.cpp` (**5.7.0**; includes serial display identity).

@@ -10,6 +10,17 @@ export type Esp32DisplayPayload = {
   m?: boolean
 }
 
+export type Esp32DeviceType = 'cyd' | 'crowpanel7' | 'unknown'
+
+/** Runtime serial/device identity. This is intentionally not persisted in AppState. */
+export type Esp32DisplayStatus = {
+  connection: 'disabled' | 'searching' | 'connected'
+  device: Esp32DeviceType
+  model: string | null
+  width: number | null
+  height: number | null
+}
+
 export type SetlistItem = {
   id: string
   /** MIDI program 1–124; equals row index + 1 (recomputed when order changes). PC 125–127 reserved for LED. */
@@ -76,6 +87,8 @@ export type PublicState = AppState & {
   midi: MidiStatus
   /** Active WS2812 pattern id/name from the ESP (e.g. knight_rider, off). */
   ledPattern: string
+  /** Connected physical display identity; unknown/disconnected previews fall back to CYD. */
+  esp32Display: Esp32DisplayStatus
   /**
    * LED pattern id queued for the currently displayed song (applied via MIDI PC 127
    * or the control UI simulate / pattern preview).
