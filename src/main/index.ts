@@ -670,7 +670,8 @@ function buildScannedSetlist(programs: number[], previous: SetlistItem[]): Setli
     if (!byProgram.has(row.program)) byProgram.set(row.program, row)
   }
   const usedIds = new Set<string>()
-  return programs.map((program) => {
+  const scannedPrograms = new Set(programs)
+  const scanned = programs.map((program) => {
     const old = byProgram.get(program)
     const canReuseId = old && !usedIds.has(old.id)
     const id = canReuseId ? old.id : crypto.randomUUID()
@@ -684,6 +685,12 @@ function buildScannedSetlist(programs: number[], previous: SetlistItem[]): Setli
       ledPattern: clampLedPatternId(old?.ledPattern ?? songLedPatternForIndex())
     }
   })
+  // A scan only proves the order of songs Cubase actually visited. Keep every
+  // unvisited row at the bottom so a partial Arranger chain can never erase it.
+  const unvisited = previous.filter(
+    (row) => !scannedPrograms.has(row.program) && !usedIds.has(row.id)
+  )
+  return [...scanned, ...unvisited]
 }
 
 async function runArrangerScan(): Promise<void> {
@@ -714,6 +721,7 @@ async function runArrangerScan(): Promise<void> {
 
   arrangerScanCancelled = false
   const programs = [startProgram]
+  const seenPrograms = new Set(programs)
   let currentProgram = startProgram
   let wrapped = false
   setArrangerScan({
@@ -732,7 +740,14 @@ async function runArrangerScan(): Promise<void> {
       wrapped = true
       break
     }
+    if (seenPrograms.has(currentProgram)) {
+      console.warn(
+        `[ViewerOne] Arranger scan: stopped at repeated PC ${currentProgram} before returning to start`
+      )
+      break
+    }
     programs.push(currentProgram)
+    seenPrograms.add(currentProgram)
     setArrangerScan({
       collected: programs.length,
       message: `Collected ${programs.length} songs · latest PC ${currentProgram}`
@@ -773,6 +788,16 @@ async function runArrangerScan(): Promise<void> {
     return
   }
 
+  if (programs.length < 2) {
+    setArrangerScan({
+      active: false,
+      phase: 'error',
+      collected: programs.length,
+      message: 'No song changes received — is Cubase connected? Previous setlist kept.'
+    })
+    return
+  }
+
   const scanned = buildScannedSetlist(programs, before.setlist)
   const startRow = scanned.find((row) => row.program === startProgram)
   setState(store, {
@@ -783,10 +808,10 @@ async function runArrangerScan(): Promise<void> {
   setArrangerScan({
     active: false,
     phase: restored ? 'complete' : 'error',
-    collected: scanned.length,
+    collected: programs.length,
     message: restored
-      ? `Scan complete: saved ${scanned.length} songs and returned to PC ${startProgram}.`
-      : `Saved ${scanned.length} songs, but could not confirm return to PC ${startProgram}.`
+      ? `Scan complete: ordered ${programs.length} scanned songs; kept ${scanned.length - programs.length} unvisited songs.`
+      : `Ordered ${programs.length} scanned songs and kept ${scanned.length - programs.length} unvisited songs, but could not confirm return to PC ${startProgram}.`
   })
 }
 
