@@ -10,7 +10,6 @@ import {
 import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import type { AppState, PublicState, SetlistItem } from '../../shared/types'
 import { LED_USB_BRIGHTNESS_CAP } from '../../shared/ledPatterns'
-import { MIDI_PC_LED_BLACKOUT, MIDI_PC_LED_IDLE, MIDI_PC_LED_APPLY, MIDI_PC_SONG_MAX } from '../../shared/midiConfig'
 import { SortableRow } from './SortableRow'
 import { Esp32Preview } from './Esp32Preview'
 
@@ -48,7 +47,7 @@ function midiReconnectFeedback(state: PublicState): StatusLine {
 
   if (!anyOpen) {
     return {
-      text: 'MIDI reconnect: no ports open — start loopMIDI (CubaseToViewerOne / ViewerOneToCubase) and check the mixer USB.',
+      text: 'MIDI reconnect: no ports open.',
       tone: 'error'
     }
   }
@@ -67,10 +66,7 @@ function midiReconnectFeedback(state: PublicState): StatusLine {
 function cubaseStatusLine(state: PublicState): StatusLine {
   const { midi } = state
   if (!midi.cubaseInputName && !midi.cubaseOutputName) {
-    return {
-      text: 'not found — open loopMIDI and create cables named e.g. "CubaseToViewerOne" / "ViewerOneToCubase". Cubase track Output must be CubaseToViewerOne.',
-      tone: 'error'
-    }
+    return { text: 'not found', tone: 'error' }
   }
   if (!midi.cubaseInputName || !midi.cubaseOutputName || !midi.cubaseInputOpen || !midi.cubaseOutputOpen) {
     const inPart = midi.cubaseInputOpen
@@ -96,13 +92,10 @@ function cubaseStatusLine(state: PublicState): StatusLine {
 function cubaseLastPcLine(state: PublicState): StatusLine {
   const { midi } = state
   if (!midi.cubaseInputOpen) {
-    return { text: 'waiting — Cubase input not open (Reconnect MIDI / check loopMIDI).', tone: 'warn' }
+    return { text: 'input not open', tone: 'warn' }
   }
   if (midi.cubaseLastPc == null) {
-    return {
-      text: 'none yet — Cubase must send Program Change to CubaseToViewerOne (any MIDI channel). If this stays empty, Cubase is not routing to that port.',
-      tone: 'warn'
-    }
+    return { text: 'waiting for Program Change', tone: 'warn' }
   }
   const ago = midi.cubaseLastPcAgoMs ?? 0
   const agoText = ago < 1500 ? 'just now' : `${Math.round(ago / 1000)}s ago`
@@ -115,7 +108,7 @@ function cubaseLastPcLine(state: PublicState): StatusLine {
 function mixerStatusLine(state: PublicState): StatusLine {
   const { midi } = state
   if (!midi.mixerInputName && !midi.mixerOutputName) {
-    return { text: 'not found — check the mixer is connected over USB.', tone: 'error' }
+    return { text: 'not found', tone: 'error' }
   }
   if (!midi.mixerInputOpen || !midi.mixerOutputOpen) {
     const parts: string[] = []
@@ -296,9 +289,7 @@ export function App() {
         <header className="top-header">
           <div className="top-header-text">
             <h1 className="app-title">ViewerOne</h1>
-            <p className="sub">
-              v{state.appVersion} · Cubase program change → setlist · USB serial → ESP32 · settings saved automatically
-            </p>
+            <p className="sub">v{state.appVersion} · Live control</p>
           </div>
         </header>
 
@@ -310,20 +301,6 @@ export function App() {
           <div className="top-settings-col">
             <div className="settings-card">
               <h2 className="settings-card-title">MIDI</h2>
-              <p className="settings-card-lead">
-                Cubase syncs song changes and its own auto-mute to ViewerOne over loopMIDI, and hears ViewerOne's mute
-                changes back so it stays in sync. The mixer talks to ViewerOne directly, two-way, over its own USB
-                MIDI port — mute stays in sync even with Cubase closed. Song PCs are 1–{MIDI_PC_SONG_MAX} (display
-                + queue lights only). <strong>PC {MIDI_PC_LED_BLACKOUT}</strong> = blackout;
-                <strong> PC {MIDI_PC_LED_IDLE}</strong> = dim knight rider (idle);
-                <strong> PC {MIDI_PC_LED_APPLY}</strong> = apply the displayed song’s pattern. Incoming Program
-                Change is accepted on <strong>any MIDI channel</strong>. Cubase track Output must be the{' '}
-                <code>CubaseToViewerOne</code> loopMIDI port. Arranger commands use the existing{' '}
-                <code>ViewerOneToCubase</code> output; defaults are <strong>Note On, channel 16, note 62 Prev,
-                note 63 Next</strong>. In Cubase, map these to the same Arranger previous/next commands used by
-                your USB keyboard. Song identity still arrives by the existing Cubase Program Change on{' '}
-                <code>CubaseToViewerOne</code>; scanning adds no new inbound protocol.
-              </p>
               <div className="midi-status-list">
                 <p className={`midi-status-row midi-status-row--${cubaseStatus?.tone ?? 'warn'}`}>
                   <strong>Cubase</strong> {cubaseStatus?.text}
@@ -365,88 +342,83 @@ export function App() {
                     Reconnect MIDI
                   </button>
                 </div>
-                <div className="field">
-                  <label htmlFor="arranger-mode">Arranger message</label>
-                  <select
-                    id="arranger-mode"
-                    value={state.arrangerMidi.mode}
-                    disabled={state.arrangerScan.active}
-                    onChange={(e) =>
-                      void patchSettings({
-                        arrangerMidi: {
-                          ...state.arrangerMidi,
-                          mode: e.target.value === 'cc' ? 'cc' : 'note'
-                        }
-                      })
-                    }
-                  >
-                    <option value="note">Note On pulse</option>
-                    <option value="cc">Control Change 127</option>
-                  </select>
-                </div>
-                <div className="field">
-                  <label htmlFor="arranger-channel">Channel</label>
-                  <input
-                    id="arranger-channel"
-                    type="number"
-                    min={1}
-                    max={16}
-                    value={state.arrangerMidi.channel}
-                    disabled={state.arrangerScan.active}
-                    onChange={(e) =>
-                      void patchSettings({
-                        arrangerMidi: { ...state.arrangerMidi, channel: Number(e.target.value) }
-                      })
-                    }
-                  />
-                </div>
-                <div className="field">
-                  <label htmlFor="arranger-prev-number">Prev {state.arrangerMidi.mode === 'note' ? 'note' : 'CC'}</label>
-                  <input
-                    id="arranger-prev-number"
-                    type="number"
-                    min={0}
-                    max={127}
-                    value={state.arrangerMidi.prevNumber}
-                    disabled={state.arrangerScan.active}
-                    onChange={(e) =>
-                      void patchSettings({
-                        arrangerMidi: { ...state.arrangerMidi, prevNumber: Number(e.target.value) }
-                      })
-                    }
-                  />
-                </div>
-                <div className="field">
-                  <label htmlFor="arranger-next-number">Next {state.arrangerMidi.mode === 'note' ? 'note' : 'CC'}</label>
-                  <input
-                    id="arranger-next-number"
-                    type="number"
-                    min={0}
-                    max={127}
-                    value={state.arrangerMidi.nextNumber}
-                    disabled={state.arrangerScan.active}
-                    onChange={(e) =>
-                      void patchSettings({
-                        arrangerMidi: { ...state.arrangerMidi, nextNumber: Number(e.target.value) }
-                      })
-                    }
-                  />
-                </div>
               </div>
+              <details className="advanced-settings">
+                <summary>Arranger MIDI mapping</summary>
+                <div className="settings-fields settings-fields--midi">
+                  <div className="field">
+                    <label htmlFor="arranger-mode">Message</label>
+                    <select
+                      id="arranger-mode"
+                      value={state.arrangerMidi.mode}
+                      disabled={state.arrangerScan.active}
+                      onChange={(e) =>
+                        void patchSettings({
+                          arrangerMidi: {
+                            ...state.arrangerMidi,
+                            mode: e.target.value === 'cc' ? 'cc' : 'note'
+                          }
+                        })
+                      }
+                    >
+                      <option value="note">Note On pulse</option>
+                      <option value="cc">Control Change 127</option>
+                    </select>
+                  </div>
+                  <div className="field">
+                    <label htmlFor="arranger-channel">Channel</label>
+                    <input
+                      id="arranger-channel"
+                      type="number"
+                      min={1}
+                      max={16}
+                      value={state.arrangerMidi.channel}
+                      disabled={state.arrangerScan.active}
+                      onChange={(e) =>
+                        void patchSettings({
+                          arrangerMidi: { ...state.arrangerMidi, channel: Number(e.target.value) }
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="arranger-prev-number">Prev {state.arrangerMidi.mode === 'note' ? 'note' : 'CC'}</label>
+                    <input
+                      id="arranger-prev-number"
+                      type="number"
+                      min={0}
+                      max={127}
+                      value={state.arrangerMidi.prevNumber}
+                      disabled={state.arrangerScan.active}
+                      onChange={(e) =>
+                        void patchSettings({
+                          arrangerMidi: { ...state.arrangerMidi, prevNumber: Number(e.target.value) }
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="arranger-next-number">Next {state.arrangerMidi.mode === 'note' ? 'note' : 'CC'}</label>
+                    <input
+                      id="arranger-next-number"
+                      type="number"
+                      min={0}
+                      max={127}
+                      value={state.arrangerMidi.nextNumber}
+                      disabled={state.arrangerScan.active}
+                      onChange={(e) =>
+                        void patchSettings({
+                          arrangerMidi: { ...state.arrangerMidi, nextNumber: Number(e.target.value) }
+                        })
+                      }
+                    />
+                  </div>
+                </div>
+              </details>
             </div>
 
-            <div className="settings-card">
-              <h2 className="settings-card-title">ESP32 display + LEDs</h2>
-              <p className="settings-card-lead">
-                JSON lines at <strong>115200</strong> baud — same as the preview. Firmware identifies its model and
-                resolution on connect, switching the preview between CYD 320×240 and CrowPanel 1024×600. USB serial
-                uses the matching USB-serial device automatically (or the only COM port if there is just one); unplug
-                and replug without restarting the app. Song select updates the LCD and queues that song’s LED pattern.{' '}
-                <strong>PC {MIDI_PC_LED_BLACKOUT}</strong> = blackout;
-                <strong> PC {MIDI_PC_LED_IDLE}</strong> = dim knight rider (idle);
-                <strong> PC {MIDI_PC_LED_APPLY}</strong> = apply the queued pattern. Mic mute only affects the
-                display tint + MIDI CC — not the strip.
-              </p>
+            <details className="settings-card hardware-settings">
+              <summary className="settings-card-title">Display + LED settings</summary>
               <div className="settings-fields settings-fields--esp">
                 <label className="esp-enable">
                   <input
@@ -487,14 +459,14 @@ export function App() {
                   ) : null}
                 </div>
               </div>
-            </div>
+            </details>
           </div>
         </div>
       </div>
 
       <section className="setlist-shell" aria-label="Setlist">
         <div className="setlist-toolbar">
-          <h2 className="setlist-heading">Setlist</h2>
+          <h2 className="setlist-heading">Setlist ({state.setlist.length} songs)</h2>
           <div className="setlist-preview-nav">
             <button
               type="button"
@@ -520,7 +492,6 @@ export function App() {
             >
               ↓ Next
             </button>
-            <span className="setlist-preview-hint">Preview · row click or ↑↓ when not typing</span>
           </div>
           <div className="setlist-preview-nav arranger-controls">
             <button
@@ -604,16 +575,10 @@ export function App() {
         <div className="setlist-footer">
           {state.setlist.length === 0 ? (
             <p className="setlist-hint">
-              Add songs manually or use Scan Arranger. Incoming MIDI PCs select by the stable PC field
-              (wire 0→PC1, max {MIDI_PC_SONG_MAX}). PC {MIDI_PC_LED_BLACKOUT}/{MIDI_PC_LED_IDLE}/{MIDI_PC_LED_APPLY} are LED
-              blackout / idle / apply — not songs.
+              Add songs manually or scan the Cubase Arranger.
             </p>
           ) : (
-            <p className="setlist-hint">
-              Reorder with ⋮⋮ without changing each song’s Cubase PC (1–{MIDI_PC_SONG_MAX}). Year is a 4-digit release year shown on the ESP.
-              Preview updates the display and queues lights — applied with PC{' '}
-              {MIDI_PC_LED_APPLY}. Preview controls do not send MIDI to Cubase.
-            </p>
+            <p className="setlist-hint">Drag to reorder · click a row to preview.</p>
           )}
           <button
             type="button"

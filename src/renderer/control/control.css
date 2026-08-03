@@ -41,6 +41,7 @@ body {
   flex-direction: column;
   min-height: 0;
   gap: 0;
+  overflow-y: auto;
 }
 
 .control-root--bare {
@@ -53,8 +54,8 @@ body {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding-bottom: 12px;
+  gap: 6px;
+  padding-bottom: 6px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -69,7 +70,7 @@ body {
 .top-columns {
   display: grid;
   grid-template-columns: minmax(0, auto) minmax(280px, 1fr);
-  gap: 16px 20px;
+  gap: 10px 14px;
   align-items: start;
 }
 
@@ -94,7 +95,34 @@ body {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 7px 9px;
+}
+
+.advanced-settings,
+.preview-tests {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.advanced-settings summary,
+.preview-tests summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.advanced-settings[open] .settings-fields {
+  margin-top: 7px;
+}
+
+.hardware-settings > summary {
+  margin-bottom: 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.hardware-settings[open] > summary {
+  margin-bottom: 7px;
 }
 
 .settings-card-title {
@@ -424,8 +452,8 @@ button:disabled {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px 12px;
-  margin-bottom: 6px;
+  gap: 4px 8px;
+  margin-bottom: 4px;
 }
 
 .setlist-heading {
@@ -462,9 +490,7 @@ button:disabled {
 }
 
 .arranger-controls {
-  flex: 1 1 100%;
-  padding-top: 6px;
-  border-top: 1px solid var(--border);
+  flex: 1 1 auto;
 }
 
 .arranger-progress {
@@ -489,11 +515,11 @@ button:disabled {
 }
 
 .setlist-shell {
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 1 1 0;
+  min-height: 300px;
   display: flex;
   flex-direction: column;
-  margin-top: 10px;
+  margin-top: 6px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -649,13 +675,14 @@ button:disabled {
 
 .setlist-footer {
   flex: 0 0 auto;
-  margin-top: 6px;
-  padding-top: 8px;
+  margin-top: 4px;
+  padding-top: 4px;
   border-top: 1px solid var(--border);
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
 }
 
 .setlist-add-btn {
@@ -695,7 +722,7 @@ button:disabled {
   background: #000;
   border-radius: 6px;
   border: 2px solid #333;
-  width: min(280px, 88vw);
+  width: min(220px, 88vw);
   max-width: 100%;
   aspect-ratio: 320 / 240;
   position: relative;
@@ -706,7 +733,7 @@ button:disabled {
 
 /* CrowPanel Advanced 7" preview — 1024×600 stage + mute pad column */
 .esp32-sim-lcd--crowpanel {
-  width: min(420px, 96vw);
+  width: min(280px, 96vw);
   aspect-ratio: 1024 / 600;
   display: flex;
   flex-direction: row;

@@ -216,36 +216,32 @@ export function Esp32Preview({ state }: Props) {
       >
         Queued: {queuedText}
       </p>
-      <p className="esp32-sim-led-hint">
-        <strong>PC 120/121</strong> = PROMPT 1 on/off. <strong>PC 122/123</strong> = PROMPT 2 on/off.{' '}
-        <strong>PC {MIDI_PC_LED_BLACKOUT}</strong> = blackout.{' '}
-        <strong>PC {MIDI_PC_LED_IDLE}</strong> = dim knight rider (idle).{' '}
-        <strong>PC {MIDI_PC_LED_APPLY}</strong> = apply the queued song pattern. Song select and mic mute do not
-        change the strip.
-      </p>
-      <div className="esp32-sim-pc-btns" role="group" aria-label="Simulate prompt program changes">
-        {[
-          [MIDI_PC_PROMPT_1_ON, 'Prompt 1 on'],
-          [MIDI_PC_PROMPT_1_OFF, 'Prompt 1 off'],
-          [MIDI_PC_PROMPT_2_ON, 'Prompt 2 on'],
-          [MIDI_PC_PROMPT_2_OFF, 'Prompt 2 off']
-        ].map(([pc, label]) => (
-          <button
-            type="button"
-            key={flashPromptPc === pc ? `prompt-${pc}-${state.promptMidiPulseAt}` : `prompt-${pc}`}
-            className={`esp32-sim-pc-btn${flashPromptPc === pc ? ' esp32-sim-pc-btn--flash' : ''}`}
-            title={`Simulate PC ${pc} — ${label}`}
-            onClick={(e) => {
-              e.currentTarget.classList.remove('btn-click-flash')
-              void e.currentTarget.offsetWidth
-              e.currentTarget.classList.add('btn-click-flash')
-              void window.viewer.promptMidi(pc as 120 | 121 | 122 | 123)
-            }}
-          >
-            PC {pc} · {label}
-          </button>
-        ))}
-      </div>
+      <details className="preview-tests">
+        <summary>Prompt tests</summary>
+        <div className="esp32-sim-pc-btns" role="group" aria-label="Simulate prompt program changes">
+          {[
+            [MIDI_PC_PROMPT_1_ON, 'Prompt 1 on'],
+            [MIDI_PC_PROMPT_1_OFF, 'Prompt 1 off'],
+            [MIDI_PC_PROMPT_2_ON, 'Prompt 2 on'],
+            [MIDI_PC_PROMPT_2_OFF, 'Prompt 2 off']
+          ].map(([pc, label]) => (
+            <button
+              type="button"
+              key={flashPromptPc === pc ? `prompt-${pc}-${state.promptMidiPulseAt}` : `prompt-${pc}`}
+              className={`esp32-sim-pc-btn${flashPromptPc === pc ? ' esp32-sim-pc-btn--flash' : ''}`}
+              title={`Simulate PC ${pc} — ${label}`}
+              onClick={(e) => {
+                e.currentTarget.classList.remove('btn-click-flash')
+                void e.currentTarget.offsetWidth
+                e.currentTarget.classList.add('btn-click-flash')
+                void window.viewer.promptMidi(pc as 120 | 121 | 122 | 123)
+              }}
+            >
+              PC {pc} · {label}
+            </button>
+          ))}
+        </div>
+      </details>
       <div className="esp32-sim-pc-btns" role="group" aria-label="Simulate reserved LED program changes">
         <button
           type="button"
