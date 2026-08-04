@@ -106,6 +106,12 @@ function cubaseLastPcLine(state: PublicState): StatusLine {
   }
 }
 
+function transportAgoText(agoMs: number | null | undefined): string {
+  if (agoMs == null) return ''
+  if (agoMs < 1500) return 'just now'
+  return `${Math.round(agoMs / 1000)}s ago`
+}
+
 function mixerStatusLine(state: PublicState): StatusLine {
   const { midi } = state
   if (!midi.mixerInputName && !midi.mixerOutputName) {
@@ -259,14 +265,14 @@ export function App() {
     [state?.setlist]
   )
 
-  // Keep “Ns ago” fresh for last Cubase PC without waiting for another MIDI event.
+  // Keep “Ns ago” fresh for last Cubase PC / transport without waiting for another MIDI event.
   useEffect(() => {
-    if (state?.midi.cubaseLastPc == null) return
+    if (state?.midi.cubaseLastPc == null && state?.transport.lastAtMs == null) return
     const id = window.setInterval(() => {
       void window.viewer.getState().then(setState)
     }, 1000)
     return () => window.clearInterval(id)
-  }, [state?.midi.cubaseLastPc])
+  }, [state?.midi.cubaseLastPc, state?.transport.lastAtMs])
 
   if (!bridgeOk) {
     return (
@@ -369,11 +375,35 @@ export function App() {
               <p className="midi-reconnect-help">
                 Cubase usually does not need restart; use Reconnect MIDI if ports were busy.
               </p>
-              <p className="midi-reconnect-help">
-                Countdown {state.countdown.running ? 'playing' : 'idle/paused'}{' '}
-                {state.countdown.display || '--:--'} · Start resumes; Stop freezes; repeated song
-                PC or Start while already playing resets.
-              </p>
+              <div className="transport-status" role="status" aria-live="polite">
+                <div className="transport-status-row">
+                  <span
+                    className={`transport-pill transport-pill--${
+                      state.transport.playing ? 'playing' : 'stopped'
+                    }`}
+                  >
+                    <i aria-hidden="true" />
+                    Cubase {state.transport.playing ? 'Playing' : 'Stopped'}
+                  </span>
+                  <span className="transport-meta">
+                    {state.transport.lastSource
+                      ? `Last ${state.transport.lastAction ?? 'event'} via ${state.transport.lastSource}${
+                          state.transport.lastAtMs
+                            ? ` · ${transportAgoText(Date.now() - state.transport.lastAtMs)}`
+                            : ''
+                        }`
+                      : 'Waiting for Start/Stop'}
+                  </span>
+                </div>
+                <p className="transport-countdown">
+                  Remaining {state.countdown.display || '--:--'}
+                  {state.countdown.running ? ' · counting' : ' · frozen'}
+                </p>
+                <p className="midi-reconnect-help">
+                  MIDI in <strong>{state.midi.cubaseInputName ?? 'CubaseToViewerOne'}</strong>
+                  {' · '}ch 16 note 60 Start / 61 Stop (also MMC + MIDI realtime)
+                </p>
+              </div>
               <div className="midi-feedback-slot">
                 {midiFeedback ? (
                   <p

@@ -180,6 +180,8 @@ let countdownRunning = false
 let countdownStartedAtMs: number | null = null
 let countdownLastPublishedSecond: number | null = null
 let countdownTimer: ReturnType<typeof setInterval> | null = null
+/** Cubase transport latch — Start/Stop even when no song is selected for countdown. */
+let transportPlaying = false
 let lastTransportEvent: { action: 'start' | 'stop'; source: string; at: number } | null = null
 
 /** Mirrors ESP LED pattern for the desktop preview (synced via boot / led serial events / MIDI LED PCs). */
@@ -278,6 +280,7 @@ function isDuplicateTransportEvent(action: 'start' | 'stop', source: string, now
 function handleTransportStart(source: string): void {
   const now = Date.now()
   if (isDuplicateTransportEvent('start', source, now)) return
+  transportPlaying = true
   const st = getState(store)
   if (countdownSongId !== st.currentSongId) resetCountdownForSong(st.currentSongId)
   if (countdownRunning || countdownRemainingMs <= 0) {
@@ -287,17 +290,22 @@ function handleTransportStart(source: string): void {
   }
   countdownRunning = st.currentSongId !== null
   countdownStartedAtMs = countdownRunning ? now : null
-  console.log(`[ViewerOne] MIDI: transport Start (${source}) — ${countdownSnapshot().display || 'length unknown'}`)
+  console.log(
+    `[ViewerOne] MIDI: transport Start (${source}) — playing=${transportPlaying} countdown=${countdownSnapshot().display || 'length unknown'}`
+  )
   broadcastState()
 }
 
 function handleTransportStop(source: string): void {
   const now = Date.now()
   if (isDuplicateTransportEvent('stop', source, now)) return
+  transportPlaying = false
   countdownRemainingMs = countdownRemainingNowMs(now)
   countdownRunning = false
   countdownStartedAtMs = null
-  console.log(`[ViewerOne] MIDI: transport Stop/Pause (${source}) — froze ${countdownSnapshot().display || 'unknown'}`)
+  console.log(
+    `[ViewerOne] MIDI: transport Stop/Pause (${source}) — playing=${transportPlaying} froze ${countdownSnapshot().display || 'unknown'}`
+  )
   broadcastState()
 }
 
@@ -344,6 +352,12 @@ function buildPublicState(): PublicState {
     promptMidiPulseAt,
     arrangerScan,
     countdown: countdownSnapshot(),
+    transport: {
+      playing: transportPlaying,
+      lastSource: lastTransportEvent?.source ?? null,
+      lastAction: lastTransportEvent?.action ?? null,
+      lastAtMs: lastTransportEvent?.at ?? null
+    },
     midi: {
       cubaseInputName,
       cubaseInputOpen,
@@ -693,9 +707,17 @@ function connectMidi(): void {
       applyFxMuted(muted, { sendToCubase: false, sendToMixer: false })
     },
     onNoteOn: (msg) => {
-      if (msg.channel !== CUBASE_TRANSPORT_CHANNEL - 1) return
-      if (msg.note === CUBASE_TRANSPORT_START_NOTE) handleTransportStart('note')
-      else if (msg.note === CUBASE_TRANSPORT_STOP_NOTE) handleTransportStop('note')
+      const isStart = msg.note === CUBASE_TRANSPORT_START_NOTE
+      const isStop = msg.note === CUBASE_TRANSPORT_STOP_NOTE
+      if (!isStart && !isStop) return
+      if (msg.channel !== CUBASE_TRANSPORT_CHANNEL - 1) {
+        console.log(
+          `[ViewerOne] MIDI: transport note ${msg.note} on ch ${msg.channel + 1} ignored — need ch ${CUBASE_TRANSPORT_CHANNEL} (CubaseToViewerOne Generic Remote)`
+        )
+        return
+      }
+      if (isStart) handleTransportStart('note')
+      else handleTransportStop('note')
     },
     onSystemRealtimeStart: () => handleTransportStart('realtime'),
     onSystemRealtimeStop: () => handleTransportStop('realtime'),

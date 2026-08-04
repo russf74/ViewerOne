@@ -149,4 +149,15 @@ export type PublicState = AppState & {
     remainingSeconds: number | null
     totalSeconds: number | null
   }
+  /**
+   * Last Cubase transport Start/Stop heard on CubaseToViewerOne.
+   * `playing` follows Start/Stop even when no song is selected (countdown may stay idle).
+   */
+  transport: {
+    playing: boolean
+    /** note | MMC | realtime — null until the first transport message. */
+    lastSource: string | null
+    lastAction: 'start' | 'stop' | null
+    lastAtMs: number | null
+  }
 }

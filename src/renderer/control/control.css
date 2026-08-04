@@ -235,6 +235,71 @@ body {
   font-size: 0.68rem;
 }
 
+.transport-status {
+  margin-top: 10px;
+  padding: 8px 9px;
+  border: 1px solid #2a3340;
+  border-radius: 6px;
+  background: #101319;
+}
+
+.transport-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.transport-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 3px 9px;
+  border: 1px solid #303846;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.transport-pill i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+}
+
+.transport-pill--playing {
+  color: #76d492;
+  border-color: rgba(118, 212, 146, 0.35);
+  background: rgba(118, 212, 146, 0.08);
+}
+
+.transport-pill--stopped {
+  color: #d8a657;
+  border-color: rgba(216, 166, 87, 0.35);
+  background: rgba(216, 166, 87, 0.08);
+}
+
+.transport-meta {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.transport-countdown {
+  margin: 6px 0 0;
+  color: #dce8ff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.transport-status .midi-reconnect-help {
+  margin-top: 4px;
+}
+
 .midi-feedback-slot {
   min-height: 0;
   margin-top: 6px;

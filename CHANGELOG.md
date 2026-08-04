@@ -1,5 +1,12 @@
 # Changelog
 
+## v5.10.1
+
+- Live status now shows Cubase transport **Playing/Stopped** plus the last Start/Stop source
+  (`note` / `MMC` / `realtime`) so missing Generic Remote mapping is obvious on the simple view.
+- Remaining-time line and CubaseToViewerOne mapping reminder (ch 16 note 60 Start / 61 Stop) sit
+  under that indicator; wrong-channel transport notes are logged instead of silently dropped.
+
 ## v5.10.0
 
 - ESP display payloads now include `d` for setlist duration / live remaining time. CrowPanel and
