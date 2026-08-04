@@ -189,9 +189,9 @@ let prompt2On = false
 let promptMidiPulse: 120 | 121 | 122 | 123 | null = null
 let promptMidiPulseAt = 0
 
-const ARRANGER_CHANGE_TIMEOUT_MS = 1800
+const ARRANGER_CHANGE_TIMEOUT_MS = 1500
 const ARRANGER_NO_CHANGE_ATTEMPTS = 3
-const ARRANGER_SETTLE_MS = 400
+const ARRANGER_SETTLE_MS = 150
 let latestSongProgram: number | null = null
 let songIdentityRevision = 0
 let arrangerScanCancelled = false
