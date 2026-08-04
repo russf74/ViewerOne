@@ -366,6 +366,9 @@ export function App() {
                   Reconnect MIDI
                 </button>
               </div>
+              <p className="midi-reconnect-help">
+                Cubase usually does not need restart; use Reconnect MIDI if ports were busy.
+              </p>
               <div className="midi-feedback-slot">
                 {midiFeedback ? (
                   <p

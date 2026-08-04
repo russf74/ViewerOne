@@ -229,6 +229,12 @@ body {
   margin: 0;
 }
 
+.midi-reconnect-help {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
 .midi-feedback-slot {
   min-height: 0;
   margin-top: 6px;

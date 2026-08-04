@@ -196,8 +196,6 @@ const ARRANGER_REWIND_PULSES = 100
 const ARRANGER_REWIND_PULSE_INTERVAL_MS = 20
 const ARRANGER_REWIND_NOTE_DURATION_MS = 8
 const ARRANGER_REWIND_SETTLE_MS = 400
-/** Safety bound only; duplicate PCs mean event count is not limited by the 119 song-PC values. */
-const ARRANGER_MAX_SCAN_EVENTS = 256
 let latestSongProgram: number | null = null
 let songIdentityRevision = 0
 let arrangerScanCancelled = false
@@ -668,7 +666,7 @@ async function rewindArrangerToBeginning(respectCancel: boolean): Promise<boolea
 }
 
 async function waitForSongIdentityChange(
-  fromProgram: number,
+  _fromProgram: number,
   revisionAtSend: number,
   respectCancel: boolean
 ): Promise<number | null> {
@@ -677,8 +675,7 @@ async function waitForSongIdentityChange(
     if (respectCancel && arrangerScanCancelled) return null
     if (
       songIdentityRevision > revisionAtSend &&
-      latestSongProgram !== null &&
-      latestSongProgram !== fromProgram
+      latestSongProgram !== null
     ) {
       return latestSongProgram
     }
@@ -721,18 +718,16 @@ async function stepArrangerUntilChanged(
 }
 
 function buildScannedSetlist(programs: number[], previous: SetlistItem[]): SetlistItem[] {
-  const byProgram = new Map<number, SetlistItem[]>()
+  const byProgram = new Map<number, SetlistItem>()
   for (const row of previous) {
-    const rows = byProgram.get(row.program)
-    if (rows) rows.push(row)
-    else byProgram.set(row.program, [row])
+    if (!byProgram.has(row.program)) byProgram.set(row.program, row)
   }
   const usedIds = new Set<string>()
+  const scannedPrograms = new Set(programs)
   const scanned = programs.map((program, index) => {
-    // Consume prior rows in order so duplicate PCs remain distinct setlist entries and retain
-    // their own title/length/year/pattern instead of all inheriting the first matching row.
-    const old = byProgram.get(program)?.shift()
-    const id = old?.id ?? crypto.randomUUID()
+    const old = byProgram.get(program)
+    const canReuseId = old && !usedIds.has(old.id)
+    const id = canReuseId ? old.id : crypto.randomUUID()
     usedIds.add(id)
     return {
       id,
@@ -745,12 +740,22 @@ function buildScannedSetlist(programs: number[], previous: SetlistItem[]): Setli
       ledPattern: clampLedPatternId(old?.ledPattern ?? songLedPatternForIndex())
     }
   })
-  // A scan only proves the individual rows Cubase actually visited. Keep every unused prior
-  // row at the bottom, including extra rows whose PC duplicates a scanned event.
+  // A scan only proves the order of songs Cubase actually visited. Keep every unvisited,
+  // unique-PC row at the bottom so a partial Arranger chain cannot erase unrelated songs.
+  const retainedPrograms = new Set(scannedPrograms)
   const unvisited = previous
-    .filter((row) => !usedIds.has(row.id))
+    .filter((row) => {
+      if (usedIds.has(row.id) || retainedPrograms.has(row.program)) return false
+      retainedPrograms.add(row.program)
+      return true
+    })
     .map((row) => ({ ...row, arrangerIndex: null }))
   return [...scanned, ...unvisited]
+}
+
+function scannedSongTitle(program: number, setlist: SetlistItem[]): string | null {
+  const title = setlist.find((row) => row.program === program)?.title.trim()
+  return title || null
 }
 
 async function runArrangerScan(): Promise<void> {
@@ -776,6 +781,8 @@ async function runArrangerScan(): Promise<void> {
 
   const initialRewindCompleted = await rewindArrangerToBeginning(true)
   if (!initialRewindCompleted || arrangerScanCancelled) {
+    const stopReason = 'Scan stopped: cancelled by user'
+    console.log(`[ViewerOne] Arranger scan: ${stopReason}`)
     // Cancellation remains bounded: finish one deterministic rewind so the user still lands at
     // the beginning rather than wherever the interrupted burst happened to stop.
     setArrangerScan({
@@ -789,7 +796,7 @@ async function runArrangerScan(): Promise<void> {
       active: false,
       phase: 'cancelled',
       collected: 0,
-      message: 'Scan cancelled; Arranger returned to the beginning.'
+      message: `${stopReason} — Arranger returned to the beginning.`
     })
     return
   }
@@ -809,7 +816,9 @@ async function runArrangerScan(): Promise<void> {
   }
 
   const programs = [startProgram]
+  const seenPrograms = new Set(programs)
   let currentProgram = startProgram
+  let stopReason: string | null = null
   setArrangerScan({
     active: true,
     phase: 'scanning',
@@ -817,31 +826,42 @@ async function runArrangerScan(): Promise<void> {
     message: `Scanning from PC ${startProgram}…`
   })
 
-  while (!arrangerScanCancelled && programs.length < ARRANGER_MAX_SCAN_EVENTS) {
+  while (!arrangerScanCancelled && programs.length < MIDI_PC_SONG_MAX) {
     const nextProgram = await stepArrangerUntilChanged('next', currentProgram, true)
     if (arrangerScanCancelled) break
     if (nextProgram === null) {
-      console.log(
-        `[ViewerOne] Arranger scan: end: ${ARRANGER_NO_CHANGE_ATTEMPTS} unchanged Nexts after song PC ${currentProgram}`
-      )
+      const title = scannedSongTitle(currentProgram, before.setlist) ?? `Song PC ${currentProgram}`
+      stopReason =
+        `Scan stopped: ${ARRANGER_NO_CHANGE_ATTEMPTS}× Next with no song change after ` +
+        `'${title}' (PC ${currentProgram}) — Cubase may be at end, or next event sends no ViewerOne MIDI`
+      console.log(`[ViewerOne] Arranger scan: ${stopReason}`)
       break
     }
     currentProgram = nextProgram
-    // Repeated PCs are valid: the same program/title may appear more than once in a setlist.
+    if (seenPrograms.has(currentProgram)) {
+      const title = scannedSongTitle(currentProgram, before.setlist)
+      stopReason =
+        `Scan stopped: song PC ${currentProgram}${title ? ` (${title})` : ''} already seen earlier — ` +
+        'possible duplicate Program Change in Cubase arranger'
+      console.log(`[ViewerOne] Arranger scan: ${stopReason}`)
+      break
+    }
     programs.push(currentProgram)
+    seenPrograms.add(currentProgram)
     setArrangerScan({
       collected: programs.length,
       message: `Collected ${programs.length} songs · latest PC ${currentProgram}`
     })
   }
-  if (!arrangerScanCancelled && programs.length >= ARRANGER_MAX_SCAN_EVENTS) {
-    console.warn(
-      `[ViewerOne] Arranger scan: end: safety limit of ${ARRANGER_MAX_SCAN_EVENTS} events reached (Cubase may be wrapping)`
-    )
+  if (!arrangerScanCancelled && programs.length >= MIDI_PC_SONG_MAX && !stopReason) {
+    stopReason = `Scan stopped: safety limit of ${MIDI_PC_SONG_MAX} unique song PCs reached`
+    console.warn(`[ViewerOne] Arranger scan: ${stopReason}`)
   }
 
   const wasCancelled = arrangerScanCancelled
   if (wasCancelled) {
+    stopReason = 'Scan stopped: cancelled by user'
+    console.log(`[ViewerOne] Arranger scan: ${stopReason}`)
     // Allow an already-sent Next command to deliver its normal song PC before restoring.
     await sleep(250)
     if (latestSongProgram !== null) currentProgram = latestSongProgram
@@ -867,7 +887,9 @@ async function runArrangerScan(): Promise<void> {
       active: false,
       phase: 'cancelled',
       collected: programs.length,
-      message: restored ? 'Scan cancelled; Arranger returned to the starting song.' : 'Scan cancelled; could not confirm return to the starting song.'
+      message: restored
+        ? `${stopReason} — Arranger returned to the starting song.`
+        : `${stopReason} — could not confirm return to the starting song.`
     })
     return
   }
@@ -877,7 +899,7 @@ async function runArrangerScan(): Promise<void> {
       active: false,
       phase: 'error',
       collected: programs.length,
-      message: 'No song changes received — is Cubase connected? Previous setlist kept.'
+      message: `${stopReason ?? 'Scan stopped: no song changes received'} — previous setlist kept.`
     })
     return
   }
@@ -894,8 +916,8 @@ async function runArrangerScan(): Promise<void> {
     phase: restored ? 'complete' : 'error',
     collected: programs.length,
     message: restored
-      ? `Scan complete: ${programs.length} in arranger order (top); ${scanned.length - programs.length} not in arranger (below).`
-      : `Found ${programs.length} in arranger order and kept ${scanned.length - programs.length} not in arranger, but could not confirm return to PC ${startProgram}.`
+      ? `${stopReason ?? 'Scan stopped'} — saved ${programs.length} in arranger order; returned to PC ${startProgram}.`
+      : `${stopReason ?? 'Scan stopped'} — saved ${programs.length}, but could not confirm return to PC ${startProgram}.`
   })
 }
 
@@ -913,13 +935,15 @@ async function refreshMidiConnection(): Promise<void> {
   mixerInputName = null
   mixerOutputName = null
   await sleep(220)
-  for (let attempt = 0; attempt < 4; attempt++) {
+  const attempts = 6
+  for (let attempt = 0; attempt < attempts; attempt++) {
     connectMidi()
-    const cubaseOk = cubaseInputOpen || cubaseOutputOpen
-    const mixerOk = mixerInputOpen || mixerOutputOpen
-    if (cubaseOk || mixerOk) return
-    if (attempt < 3) {
-      console.log(`[ViewerOne] MIDI: refresh retry ${attempt + 1}/3 — no ports open yet`)
+    const cubaseOk = cubaseInputOpen && cubaseOutputOpen
+    if (cubaseOk) return
+    if (attempt < attempts - 1) {
+      console.log(
+        `[ViewerOne] MIDI: refresh retry ${attempt + 1}/${attempts - 1} — Cubase input/output pair not fully open yet`
+      )
       disconnectMidi()
       cubaseInputName = null
       cubaseOutputName = null
@@ -1243,6 +1267,9 @@ if (!gotTheLock) {
     })
     registerIpc()
     connectMidi()
+    if (!cubaseInputOpen || !cubaseOutputOpen) {
+      scheduleMidiReconnect('startup Cubase ports not fully open')
+    }
     syncEsp32SerialFromStore()
     setupAppMenu()
     controlWindow = createControlWindow()
