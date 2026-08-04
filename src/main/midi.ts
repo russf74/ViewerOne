@@ -40,8 +40,16 @@ export type MidiInputHandlers = {
   onControlChange?: CcHandler
   onNoteOn?: NoteOnHandler
   onNoteOff?: NoteOffHandler
+  /** MIDI realtime Start (0xFA). */
   onSystemRealtimeStart?: () => void
+  /** MIDI realtime Continue (0xFB) — resume without reset. */
+  onSystemRealtimeContinue?: () => void
+  /** MIDI realtime Stop (0xFC). */
   onSystemRealtimeStop?: () => void
+  /** MIDI clock tick (0xF8), 24 PPQN. Keep this handler cheap. */
+  onSystemRealtimeClock?: () => void
+  /** Song Position Pointer (0xF2), value in MIDI beats (1 beat = 6 clocks = 1/16 note). */
+  onSongPosition?: (midiBeats: number) => void
   onSysexBytes?: (bytes: number[]) => void
   /** Fired for every inbound message on the Cubase input (clock throttled). */
   onSpyEvent?: MidiSpyHandler
@@ -324,22 +332,36 @@ export class MidiService {
           })
         })
       }
-      // easymidi exposes realtime via typed events (see INPUT_EXTENDED_TYPES 0xFA/FB/FC).
-      // Subscribe explicitly — do not rely on a raw-byte path.
+      // easymidi exposes realtime via typed events (see INPUT_EXTENDED_TYPES 0xFA/FB/FC/F8/F2).
+      // Subscribe explicitly — do not rely on a raw-byte path. Start/Continue are separate:
+      // Continue must resume a frozen countdown; Start may reset when already running.
       if (handlers.onSystemRealtimeStart) {
         this.input.on('start', () => {
           console.log('[ViewerOne] MIDI: <<< realtime START (0xFA)')
           safeCall('start', () => handlers.onSystemRealtimeStart?.())
         })
+      }
+      if (handlers.onSystemRealtimeContinue) {
         this.input.on('continue', () => {
           console.log('[ViewerOne] MIDI: <<< realtime CONTINUE (0xFB)')
-          safeCall('continue', () => handlers.onSystemRealtimeStart?.())
+          safeCall('continue', () => handlers.onSystemRealtimeContinue?.())
         })
       }
       if (handlers.onSystemRealtimeStop) {
         this.input.on('stop', () => {
           console.log('[ViewerOne] MIDI: <<< realtime STOP (0xFC)')
           safeCall('stop', () => handlers.onSystemRealtimeStop?.())
+        })
+      }
+      if (handlers.onSystemRealtimeClock) {
+        this.input.on('clock', () => {
+          safeCall('clock', () => handlers.onSystemRealtimeClock?.())
+        })
+      }
+      if (handlers.onSongPosition) {
+        this.input.on('position', (msg) => {
+          const beats = typeof msg.value === 'number' ? msg.value : 0
+          safeCall('position', () => handlers.onSongPosition?.(beats))
         })
       }
       if (handlers.onSysexBytes) {
@@ -350,9 +372,23 @@ export class MidiService {
         })
       }
       // Unified spy on easymidi's "message" event (fires for every parsed inbound msg).
+      // Clock is early-returned before store/context work so 24 PPQN traffic cannot delay Start/Stop.
       if (handlers.onSpyEvent) {
         this.input.on('message', (msg: EasymidiMsg) => {
           safeCall('spy', () => {
+            const type = msg._type ?? ''
+            if (type === 'clock' || type === 'activesense') {
+              const now = Date.now()
+              if (now - this.lastClockSpyAtMs < 2000) return
+              this.lastClockSpyAtMs = now
+              handlers.onSpyEvent?.({
+                atMs: now,
+                kind: 'clock',
+                role: 'OTHER',
+                summary: 'MIDI clock (throttled)'
+              })
+              return
+            }
             let context: MidiSpyContext | null = null
             try {
               context = handlers.getSpyContext?.() ?? null
@@ -361,12 +397,6 @@ export class MidiService {
             }
             const event = formatMidiSpyEvent(msg, Date.now(), context)
             if (!event) return
-            if (event.kind === 'clock') {
-              const now = event.atMs
-              if (now - this.lastClockSpyAtMs < 2000) return
-              this.lastClockSpyAtMs = now
-              event.summary = 'MIDI clock (throttled)'
-            }
             handlers.onSpyEvent?.(event)
           })
         })

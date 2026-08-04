@@ -203,9 +203,9 @@ export type PublicState = AppState & {
    */
   transport: {
     playing: boolean
-    /** note | cc | MMC | realtime — null until the first transport message. */
+    /** note | cc | MMC | realtime | clock — null until the first transport message. */
     lastSource: string | null
-    lastAction: 'start' | 'stop' | null
+    lastAction: 'start' | 'continue' | 'stop' | null
     lastAtMs: number | null
   }
 }

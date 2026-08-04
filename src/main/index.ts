@@ -178,16 +178,46 @@ let countdownTotalSeconds = 0
 let countdownRemainingMs = 0
 let countdownRunning = false
 let countdownStartedAtMs: number | null = null
+/** Remaining at the moment play/continue began — used with MIDI clock correction. */
+let countdownAnchorRemainingMs = 0
 let countdownLastPublishedSecond: number | null = null
 let countdownTimer: ReturnType<typeof setInterval> | null = null
 /** Cubase transport latch — Start/Stop even when no song is selected for countdown. */
 let transportPlaying = false
-let lastTransportEvent: { action: 'start' | 'stop'; source: string; at: number } | null = null
+let lastTransportEvent: {
+  action: 'start' | 'continue' | 'stop'
+  source: string
+  at: number
+} | null = null
 /** Recent CubaseToViewerOne inbound messages for the Live status MIDI spy. */
 let cubaseSpy: MidiSpyEvent[] = []
 /** Suggestion when Play is heard on a mismatched note/CC/channel (or missing entirely). */
 let transportHint: string | null = null
 let realtimeTransportSeen = false
+
+/** MIDI clock is 24 pulses per quarter note. */
+const MIDI_CLOCK_PPQN = 24
+/** Sustained clock ticks while Stopped ⇒ Cubase is rolling even if 0xFA is late. */
+const MIDI_CLOCK_SOFT_START_TICKS = 6
+/** Ignore inter-tick gaps larger than this (ms) when estimating tempo. */
+const MIDI_CLOCK_MAX_GAP_MS = 500
+/** Start soon after a soft clock-start must not look like a mid-song restart. */
+const TRANSPORT_RESTART_GUARD_MS = 300
+
+let midiClockLastTickAtMs: number | null = null
+/** EMA of clock tick period (ms); null until two ticks arrive. */
+let midiClockTickPeriodMs: number | null = null
+let midiClockTicksSincePlay = 0
+/** Counts ticks received while transport is Stopped — used for soft-start. */
+let midiClockStoppedStreak = 0
+/** Ignore trailing clock ticks right after Stop so we don't soft-resume. */
+let midiClockSoftStartArmedAtMs = 0
+/** Song Position Pointer in MIDI beats (1 beat = 6 clocks = one 16th note). */
+let lastSongPositionMidiBeats: number | null = null
+let lastSongPositionAtMs: number | null = null
+/** Only honor SPP=0 as "rewound to start" when the pointer arrived recently. */
+const SPP_REWIND_WINDOW_MS = 600
+const MIDI_CLOCK_SOFT_START_GUARD_MS = 250
 
 /** Mirrors ESP LED pattern for the desktop preview (synced via boot / led serial events / MIDI LED PCs). */
 let ledPattern = 'knight_rider'
@@ -233,7 +263,16 @@ let arrangerScan: ArrangerScanState = {
 
 function countdownRemainingNowMs(now = Date.now()): number {
   if (!countdownRunning || countdownStartedAtMs === null) return countdownRemainingMs
-  return Math.max(0, countdownRemainingMs - (now - countdownStartedAtMs))
+  const wallElapsed = now - countdownStartedAtMs
+  // Once we have ~1 quarter-note of ticks + a tempo estimate, prefer MIDI clock time.
+  if (
+    midiClockTickPeriodMs != null &&
+    midiClockTicksSincePlay >= MIDI_CLOCK_PPQN
+  ) {
+    const clockElapsed = midiClockTicksSincePlay * midiClockTickPeriodMs
+    return Math.max(0, countdownAnchorRemainingMs - clockElapsed)
+  }
+  return Math.max(0, countdownAnchorRemainingMs - wallElapsed)
 }
 
 function countdownSnapshot(): PublicState['countdown'] {
@@ -259,75 +298,208 @@ function countdownSnapshot(): PublicState['countdown'] {
 function resetCountdownForSong(songId: string | null, keepRunning = false): void {
   const st = getState(store)
   const row = songId ? st.setlist.find((item) => item.id === songId) : null
+  const now = Date.now()
   countdownSongId = row?.id ?? null
   countdownTotalSeconds = row ? songLengthSeconds(row.length) : 0
   countdownRemainingMs = countdownTotalSeconds * 1000
+  countdownAnchorRemainingMs = countdownRemainingMs
   countdownRunning = keepRunning && countdownSongId !== null
-  countdownStartedAtMs = countdownRunning ? Date.now() : null
+  countdownStartedAtMs = countdownRunning ? now : null
   countdownLastPublishedSecond = countdownTotalSeconds > 0 ? countdownTotalSeconds : null
+  midiClockTicksSincePlay = 0
+}
+
+function bindCountdownToCurrentSong(): void {
+  const st = getState(store)
+  if (countdownSongId === st.currentSongId) return
+  resetCountdownForSong(st.currentSongId, false)
+}
+
+function beginCountdownRunning(now: number): void {
+  const st = getState(store)
+  bindCountdownToCurrentSong()
+  countdownRemainingMs = Math.max(0, countdownRemainingMs)
+  countdownAnchorRemainingMs = countdownRemainingMs
+  countdownRunning = st.currentSongId !== null && countdownRemainingMs > 0
+  countdownStartedAtMs = countdownRunning ? now : null
+  midiClockTicksSincePlay = 0
+  midiClockStoppedStreak = 0
+}
+
+function noteTransportHint(source: string): void {
+  if (source === 'realtime' || source === 'clock') {
+    realtimeTransportSeen = true
+    transportHint =
+      'Using MIDI Clock Start/Stop/Continue (0xFA/0xFB/0xFC) — countdown follows clock ticks.'
+  } else if (source === 'MMC') {
+    transportHint = 'Using MMC Play/Stop — no Generic Remote notes needed.'
+  }
 }
 
 /**
- * Cubase may emit both a mapped note and MIDI realtime/MMC for one button press. Collapse those
- * near-simultaneous cross-protocol duplicates while preserving a deliberate second Start.
+ * Cubase may emit mapped note + realtime/MMC + clock soft-start for one press.
+ * Collapse near-simultaneous cross-protocol duplicates; keep deliberate restarts.
  */
-function isDuplicateTransportEvent(action: 'start' | 'stop', source: string, now: number): boolean {
+function isDuplicateTransportEvent(
+  action: 'start' | 'continue' | 'stop',
+  source: string,
+  now: number
+): boolean {
   const previous = lastTransportEvent
-  lastTransportEvent = { action, source, at: now }
-  return Boolean(
+  const playFamily = action === 'start' || action === 'continue'
+  const prevPlayFamily =
+    previous != null && (previous.action === 'start' || previous.action === 'continue')
+  const isDup = Boolean(
     previous &&
-      previous.action === action &&
       previous.source !== source &&
-      now - previous.at < 100
+      now - previous.at < 120 &&
+      ((action === 'stop' && previous.action === 'stop') || (playFamily && prevPlayFamily))
   )
+  if (!isDup) lastTransportEvent = { action, source, at: now }
+  return isDup
 }
 
+function publishCountdownIfSecondChanged(): void {
+  const snap = countdownSnapshot()
+  if (snap.remainingSeconds === countdownLastPublishedSecond) return
+  countdownLastPublishedSecond = snap.remainingSeconds
+  if (snap.remainingSeconds === 0) {
+    countdownRemainingMs = 0
+    countdownAnchorRemainingMs = 0
+    countdownRunning = false
+    countdownStartedAtMs = null
+    midiClockTicksSincePlay = 0
+  }
+  broadcastState()
+}
+
+/**
+ * Start (0xFA) / mapped Start / MMC Play while already rolling:
+ * reset to full length. After Stop on the same song: resume frozen remaining.
+ * Song Position 0 after a partial countdown also means rewind → reset.
+ */
 function handleTransportStart(source: string): void {
   const now = Date.now()
+  // Capture prior transport timing BEFORE debounce mutates lastTransportEvent.
+  const priorPlaying = transportPlaying
+  const priorRunning = countdownRunning
+  const priorEvent = lastTransportEvent
+  const priorPlayAt =
+    priorPlaying && priorEvent && (priorEvent.action === 'start' || priorEvent.action === 'continue')
+      ? priorEvent.at
+      : null
+
   if (isDuplicateTransportEvent('start', source, now)) return
+  noteTransportHint(source)
   transportPlaying = true
-  if (source === 'realtime') {
-    realtimeTransportSeen = true
-    transportHint = 'Using MIDI realtime Start/Stop (0xFA/0xFC) — no Generic Remote notes needed.'
-  } else if (source === 'MMC') {
-    transportHint = 'Using MMC Play/Stop — no Generic Remote notes needed.'
-  } else {
-    transportHint = null
-  }
-  const st = getState(store)
-  if (countdownSongId !== st.currentSongId) resetCountdownForSong(st.currentSongId)
-  if (countdownRunning || countdownRemainingMs <= 0) {
-    resetCountdownForSong(st.currentSongId)
-  } else {
+  bindCountdownToCurrentSong()
+
+  const sppRecent =
+    lastSongPositionAtMs != null && now - lastSongPositionAtMs < SPP_REWIND_WINDOW_MS
+  const rewoundToStart = sppRecent && lastSongPositionMidiBeats === 0
+  const partiallyElapsed =
+    countdownTotalSeconds > 0 && countdownRemainingMs < countdownTotalSeconds * 1000 - 500
+  const playingLongEnough =
+    (priorPlaying || priorRunning) &&
+    priorPlayAt != null &&
+    now - priorPlayAt > TRANSPORT_RESTART_GUARD_MS
+  const mappedStart = source === 'note' || source === 'cc'
+  // Reset when exhausted, recently rewound to SPP0, or an explicit mapped Start while rolling.
+  // Do NOT reset on a late realtime 0xFA after clock soft-start/Continue — that caused a ~2s "jump".
+  const shouldReset =
+    countdownRemainingMs <= 0 ||
+    (rewoundToStart && partiallyElapsed) ||
+    (mappedStart && playingLongEnough)
+
+  if (shouldReset) {
+    resetCountdownForSong(getState(store).currentSongId, false)
+  } else if (priorRunning) {
     countdownRemainingMs = countdownRemainingNowMs(now)
   }
-  countdownRunning = st.currentSongId !== null
-  countdownStartedAtMs = countdownRunning ? now : null
+  beginCountdownRunning(now)
   console.log(
-    `[ViewerOne] MIDI: transport Start (${source}) — playing=${transportPlaying} countdown=${countdownSnapshot().display || 'length unknown'}`
+    `[ViewerOne] MIDI: transport Start (${source}) — playing=${transportPlaying} reset=${shouldReset} countdown=${countdownSnapshot().display || 'length unknown'}`
   )
   broadcastState()
 }
 
+/** Continue (0xFB) / clock soft-start: always resume frozen remaining, never reset. */
+function handleTransportContinue(source: string): void {
+  const now = Date.now()
+  if (isDuplicateTransportEvent('continue', source, now)) return
+  noteTransportHint(source)
+  transportPlaying = true
+  bindCountdownToCurrentSong()
+  if (countdownRunning) {
+    countdownRemainingMs = countdownRemainingNowMs(now)
+  }
+  if (countdownRemainingMs <= 0 && countdownTotalSeconds > 0) {
+    // Empty remaining on continue — arm full length once (fresh song / exhausted).
+    resetCountdownForSong(getState(store).currentSongId, false)
+  }
+  beginCountdownRunning(now)
+  console.log(
+    `[ViewerOne] MIDI: transport Continue (${source}) — playing=${transportPlaying} countdown=${countdownSnapshot().display || 'length unknown'}`
+  )
+  broadcastState()
+}
+
+/** Stop (0xFC) / MMC pause: freeze remaining — never reset to full length. */
 function handleTransportStop(source: string): void {
   const now = Date.now()
   if (isDuplicateTransportEvent('stop', source, now)) return
-  transportPlaying = false
-  if (source === 'realtime') {
-    realtimeTransportSeen = true
-    if (!transportHint) {
-      transportHint = 'Using MIDI realtime Start/Stop (0xFA/0xFC) — no Generic Remote notes needed.'
-    }
-  } else if (source === 'MMC' && !transportHint) {
-    transportHint = 'Using MMC Play/Stop — no Generic Remote notes needed.'
-  }
+  noteTransportHint(source)
+  // Freeze first while running flag still reflects playback.
   countdownRemainingMs = countdownRemainingNowMs(now)
+  countdownAnchorRemainingMs = countdownRemainingMs
   countdownRunning = false
   countdownStartedAtMs = null
+  transportPlaying = false
+  midiClockTicksSincePlay = 0
+  midiClockStoppedStreak = 0
+  midiClockLastTickAtMs = null
+  midiClockSoftStartArmedAtMs = now + MIDI_CLOCK_SOFT_START_GUARD_MS
   console.log(
     `[ViewerOne] MIDI: transport Stop/Pause (${source}) — playing=${transportPlaying} froze ${countdownSnapshot().display || 'unknown'}`
   )
   broadcastState()
+}
+
+function handleMidiClockTick(): void {
+  const now = Date.now()
+  if (midiClockLastTickAtMs != null) {
+    const gap = now - midiClockLastTickAtMs
+    if (gap > 0 && gap < MIDI_CLOCK_MAX_GAP_MS) {
+      midiClockTickPeriodMs =
+        midiClockTickPeriodMs == null ? gap : midiClockTickPeriodMs * 0.85 + gap * 0.15
+    }
+  }
+  midiClockLastTickAtMs = now
+
+  if (!transportPlaying) {
+    // Drop a short burst of ticks that often trail a Stop message.
+    if (now < midiClockSoftStartArmedAtMs) {
+      midiClockStoppedStreak = 0
+      return
+    }
+    midiClockStoppedStreak++
+    // Cubase sometimes starts clock a beat before 0xFA — don't wait seconds for Start.
+    if (midiClockStoppedStreak >= MIDI_CLOCK_SOFT_START_TICKS) {
+      handleTransportContinue('clock')
+    }
+    return
+  }
+
+  midiClockStoppedStreak = 0
+  if (!countdownRunning) return
+  midiClockTicksSincePlay++
+  // Lightweight: only push UI when the displayed second changes.
+  if (midiClockTicksSincePlay % 8 === 0) publishCountdownIfSecondChanged()
+}
+
+function handleSongPosition(midiBeats: number): void {
+  lastSongPositionMidiBeats = Math.max(0, Math.round(midiBeats))
+  lastSongPositionAtMs = Date.now()
 }
 
 function pushCubaseSpy(event: MidiSpyEvent): void {
@@ -388,16 +560,8 @@ function startCountdownTicker(): void {
   if (countdownTimer) return
   countdownTimer = setInterval(() => {
     if (!countdownRunning) return
-    const snap = countdownSnapshot()
-    if (snap.remainingSeconds === countdownLastPublishedSecond) return
-    countdownLastPublishedSecond = snap.remainingSeconds
-    if (snap.remainingSeconds === 0) {
-      countdownRemainingMs = 0
-      countdownRunning = false
-      countdownStartedAtMs = null
-    }
-    // One UI + serial update per displayed second; never publish the 250ms ticker itself.
-    broadcastState()
+    // Wall-clock fallback while MIDI clock tempo is still locking in.
+    publishCountdownIfSecondChanged()
   }, 250)
   countdownTimer.unref()
 }
@@ -776,8 +940,13 @@ function connectMidi(): void {
         console.log(`[ViewerOne] MIDI: song PC ${pc} → "${row.title}" (ch ${channel0 + 1})`)
         const sameSongRefired = s.currentSongId === row.id
         setState(store, { currentSongId: row.id })
-        // A new song waits at full length. Re-firing the same PC resets it and preserves play/pause.
-        resetCountdownForSong(row.id, sameSongRefired && countdownRunning)
+        // New song → full length. Same-song PC echo must NOT reset a frozen pause remaining
+        // (Cubase often re-chases the song PC around Stop — that was wiping the countdown).
+        if (!sameSongRefired) {
+          resetCountdownForSong(row.id, false)
+        } else {
+          countdownSongId = row.id
+        }
         broadcastState()
       } else {
         console.log(`[ViewerOne] MIDI: song PC ${pc} — no setlist row (ch ${channel0 + 1})`)
@@ -803,11 +972,17 @@ function connectMidi(): void {
       }
     },
     onSystemRealtimeStart: () => handleTransportStart('realtime'),
+    onSystemRealtimeContinue: () => handleTransportContinue('realtime'),
     onSystemRealtimeStop: () => handleTransportStop('realtime'),
+    onSystemRealtimeClock: () => handleMidiClockTick(),
+    onSongPosition: (midiBeats) => handleSongPosition(midiBeats),
     onSysexBytes: (bytes) => {
       const command = parseMmcTransportCommand(bytes)
-      if (command === 'play') handleTransportStart('MMC')
-      else if (command === 'stop') handleTransportStop('MMC')
+      // MMC Play from Stop resumes (freeze-aware). MMC Play while rolling uses Start rules.
+      if (command === 'play') {
+        if (transportPlaying || countdownRunning) handleTransportStart('MMC')
+        else handleTransportContinue('MMC')
+      } else if (command === 'stop') handleTransportStop('MMC')
     },
     onSpyEvent: (event) => pushCubaseSpy(event),
     getSpyContext: () => ({ transportMidi: getState(store).transportMidi })
