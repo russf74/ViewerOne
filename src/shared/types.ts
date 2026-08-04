@@ -30,6 +30,8 @@ export type SetlistItem = {
   /** 1-based position from the last successful Arranger scan; null when not visited by that scan. */
   arrangerIndex: number | null
   title: string
+  /** Normalized song duration in mm:ss, or empty when unset. */
+  length: string
   /** Release year, typically 4 digits */
   year: string
   /**

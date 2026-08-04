@@ -53,6 +53,7 @@ import type {
   PublicState,
   SetlistItem
 } from '../shared/types.js'
+import { normalizeSongLength } from '../shared/setlistTiming.js'
 
 // Must run before any MIDI/serial traffic — EPIPE on stdout used to kill the main process mid-gig.
 installProcessGuards()
@@ -696,8 +697,9 @@ function buildScannedSetlist(programs: number[], previous: SetlistItem[]): Setli
       program,
       arrangerIndex: index + 1,
       title: old?.title || `Song PC ${program}`,
+      length: old?.length ?? '',
       year: old?.year ?? '',
-      // Preserve every custom pick keyed by Cubase's stable song program.
+      // Preserve editable metadata and every custom pick keyed by Cubase's stable song program.
       ledPattern: clampLedPatternId(old?.ledPattern ?? songLedPatternForIndex())
     }
   })
@@ -913,6 +915,7 @@ function registerIpc(): void {
           ? Math.max(1, Math.round(row.arrangerIndex))
           : null,
       title: String(row.title ?? ''),
+      length: normalizeSongLength(row.length),
       year: String(
         row.year ?? (row as SetlistItem & { chords?: string }).chords ?? ''
       ),

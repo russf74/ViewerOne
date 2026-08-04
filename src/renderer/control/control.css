@@ -69,12 +69,12 @@ body {
 
 .top-columns {
   display: grid;
-  grid-template-columns: minmax(0, auto) minmax(280px, 1fr);
+  grid-template-columns: minmax(360px, 440px) minmax(280px, 1fr);
   gap: 10px 14px;
   align-items: start;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 780px) {
   .top-columns {
     grid-template-columns: 1fr;
   }
@@ -514,6 +514,15 @@ button:disabled {
   color: var(--danger);
 }
 
+.setlist-totals {
+  flex: 1 1 100%;
+  margin: 2px 0 0;
+  color: #8debf2;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
 .setlist-shell {
   flex: 1 1 0;
   min-height: 300px;
@@ -548,7 +557,7 @@ button:disabled {
 .setlist-header {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: 22px 88px 34px minmax(72px, 1fr) minmax(56px, 0.55fr) minmax(110px, 0.85fr) 26px;
+  grid-template-columns: 22px 88px 34px minmax(120px, 1fr) 76px 58px minmax(110px, 0.72fr) 26px;
   gap: 2px 4px;
   font-size: 0.58rem;
   color: var(--muted);
@@ -565,7 +574,7 @@ button:disabled {
 
 .setlist-row {
   display: grid;
-  grid-template-columns: 22px 88px 34px minmax(72px, 1fr) minmax(56px, 0.55fr) minmax(110px, 0.85fr) 26px;
+  grid-template-columns: 22px 88px 34px minmax(120px, 1fr) 76px 58px minmax(110px, 0.72fr) 26px;
   gap: 2px 4px;
   align-items: center;
   padding: 1px 2px;
@@ -586,6 +595,22 @@ button:disabled {
 
 .setlist-row--not-in-arranger:not(.current) > :not(.order-label) {
   opacity: 0.68;
+}
+
+.setlist-row--timed-section {
+  color: #55edf7;
+  border-color: rgba(53, 218, 231, 0.34);
+  background: rgba(0, 139, 156, 0.13);
+}
+
+.setlist-row--timed-section.current {
+  border-color: #48dce8;
+  box-shadow: inset 3px 0 0 rgba(72, 220, 232, 0.8);
+}
+
+.setlist-row--timed-section input.text-input {
+  color: #55edf7;
+  border-color: rgba(53, 218, 231, 0.3);
 }
 
 .setlist-row-selectable {
@@ -674,6 +699,12 @@ button:disabled {
   min-width: 0;
 }
 
+.setlist-row input.length-line {
+  min-width: 0;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 .setlist-pattern-cell {
   display: flex;
   align-items: center;
@@ -758,7 +789,7 @@ button:disabled {
 
 /* CrowPanel Advanced 7" preview — 1024×600 stage + mute pad column */
 .esp32-sim-lcd--crowpanel {
-  width: min(280px, 96vw);
+  width: min(440px, 96vw);
   aspect-ratio: 1024 / 600;
   display: flex;
   flex-direction: row;
@@ -772,7 +803,7 @@ button:disabled {
 }
 
 .esp32-sim-stage {
-  flex: 1 1 72%;
+  flex: 1 1 76%;
   min-width: 0;
   position: relative;
   display: flex;
@@ -782,26 +813,26 @@ button:disabled {
 
 .esp32-sim-brand {
   flex: 0 0 auto;
-  padding: 6px 8px 0;
-  font-size: 0.55rem;
+  padding: 8px 12px 0;
+  font-size: 0.6rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: #6b7280;
 }
 
 .esp32-sim-pads {
-  flex: 0 0 28%;
+  flex: 0 0 24%;
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 4px;
+  gap: 5px;
+  padding: 6px;
   border-left: 1px solid #222833;
   background: #0c0e14;
   overflow: hidden;
 }
 
 .esp32-sim-pads-title {
-  font-size: 0.5rem;
+  font-size: 0.54rem;
   letter-spacing: 0.1em;
   color: #8b92a0;
   text-align: center;
@@ -815,12 +846,12 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  border-radius: 5px;
+  gap: 8px;
+  border-radius: 6px;
   border: 1px solid #2a3340;
   background: #141820;
   color: #d1d5db;
-  padding: 4px 5px;
+  padding: 5px 6px;
   text-align: center;
 }
 
@@ -828,7 +859,7 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.04em;
 }
@@ -862,9 +893,9 @@ button:disabled {
 }
 
 .esp32-sim-pad-light {
-  width: 10px;
-  height: 10px;
-  flex: 0 0 10px;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
   border-radius: 50%;
   background: #303744;
   border: 1px solid #596170;
@@ -1001,7 +1032,7 @@ button:disabled {
 /* Below the simulated LCD (app chrome only — not on device). */
 .esp32-sim-queued-line {
   margin: 8px 0 0;
-  max-width: min(320px, 92vw);
+  max-width: min(440px, 92vw);
   font-size: 0.95rem;
   font-weight: 650;
   line-height: 1.35;
@@ -1029,7 +1060,7 @@ button:disabled {
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
-  max-width: min(320px, 92vw);
+  max-width: min(440px, 92vw);
 }
 
 .esp32-sim-pc-btn {
@@ -1065,7 +1096,7 @@ button:disabled {
   align-items: stretch;
   gap: 6px;
   margin-top: 8px;
-  max-width: min(320px, 92vw);
+  max-width: min(440px, 92vw);
 }
 
 .esp32-sim-pattern-select-wrap {

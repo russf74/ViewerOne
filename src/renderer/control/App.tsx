@@ -10,6 +10,7 @@ import {
 import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import type { AppState, PublicState, SetlistItem } from '../../shared/types'
 import { LED_USB_BRIGHTNESS_CAP } from '../../shared/ledPatterns'
+import { calculateSetlistTiming, formatSetlistSeconds } from '../../shared/setlistTiming'
 import { SortableRow } from './SortableRow'
 import { Esp32Preview } from './Esp32Preview'
 
@@ -241,7 +242,7 @@ export function App() {
   )
 
   const updateRow = useCallback(
-    (id: string, patch: Partial<Pick<SetlistItem, 'title' | 'year' | 'ledPattern'>>) => {
+    (id: string, patch: Partial<Pick<SetlistItem, 'title' | 'length' | 'year' | 'ledPattern'>>) => {
       if (!state) return
       const nextItems = state.setlist.map((r) => (r.id === id ? { ...r, ...patch } : r))
       void setSetlist(nextItems)
@@ -252,6 +253,10 @@ export function App() {
   const cubaseStatus = useMemo(() => (state ? cubaseStatusLine(state) : null), [state])
   const cubasePcStatus = useMemo(() => (state ? cubaseLastPcLine(state) : null), [state])
   const mixerStatus = useMemo(() => (state ? mixerStatusLine(state) : null), [state])
+  const setlistTiming = useMemo(
+    () => calculateSetlistTiming(state?.setlist ?? []),
+    [state?.setlist]
+  )
 
   // Keep “Ns ago” fresh for last Cubase PC without waiting for another MIDI event.
   useEffect(() => {
@@ -545,12 +550,19 @@ export function App() {
               {state.arrangerScan.active ? ` (${state.arrangerScan.collected} found)` : ''}
             </span>
           </div>
+          <p className="setlist-totals" role="status" aria-live="polite">
+            Setlist length : Intro {formatSetlistSeconds(setlistTiming.intro)} - Main Set{' '}
+            {formatSetlistSeconds(setlistTiming.main)} - Outro{' '}
+            {formatSetlistSeconds(setlistTiming.outro)} - Total{' '}
+            {formatSetlistSeconds(setlistTiming.total)}
+          </p>
         </div>
         <div className="setlist-header">
           <span />
           <span title="Position from the last successful Arranger scan">Arranger</span>
           <span>PC</span>
           <span>Title</span>
+          <span>Song length</span>
           <span>Year</span>
           <span className="setlist-h-pattern">Pattern</span>
           <span />

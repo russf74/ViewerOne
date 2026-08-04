@@ -27,11 +27,11 @@ function activePatternId(ledPattern: string): number {
 const PREVIEW_PADS = [
   { id: 'all', label: 'ALL', kind: 'button' },
   { id: 'fx', label: 'FX', kind: 'button' },
-  { id: 'prompt1', label: 'PROMPT 1', kind: 'indicator' },
-  { id: 'prompt2', label: 'PROMPT 2', kind: 'indicator' }
+  { id: 'prompt1', label: 'PROMPT1', kind: 'indicator' },
+  { id: 'prompt2', label: 'PROMPT2', kind: 'indicator' }
 ] as const
 
-/** Mirrors CrowPanel 1024×600 HMI (main stage + two mute buttons + two prompt indicators). */
+/** Mirrors the full CrowPanel 1024×600 HMI: broad stage plus four stacked right pads. */
 export function Esp32Preview({ state }: Props) {
   const payload = useMemo(
     () => buildEsp32DisplayPayload(state),

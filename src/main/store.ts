@@ -7,6 +7,7 @@ import {
   RANDOM_LED_PATTERN_ID,
   songLedPatternForIndex
 } from '../shared/ledPatterns.js'
+import { normalizeSongLength } from '../shared/setlistTiming.js'
 
 type AppStore = Store<AppState>
 
@@ -47,6 +48,7 @@ function normalizeSetlist(list: unknown): SetlistItem[] {
       program: typeof r.program === 'number' ? r.program : 0,
       arrangerIndex,
       title: String(r.title ?? ''),
+      length: normalizeSongLength(r.length),
       year,
       ledPattern: clampLedPatternId(
         r.ledPattern !== undefined ? r.ledPattern : RANDOM_LED_PATTERN_ID
@@ -109,6 +111,7 @@ export function newSetlistItem(partial?: Partial<SetlistItem>): SetlistItem {
     program: partial?.program ?? 0,
     arrangerIndex: partial?.arrangerIndex ?? null,
     title: partial?.title ?? '',
+    length: normalizeSongLength(partial?.length),
     year: partial?.year ?? '',
     ledPattern: clampLedPatternId(partial?.ledPattern ?? RANDOM_LED_PATTERN_ID)
   }

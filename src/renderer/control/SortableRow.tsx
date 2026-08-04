@@ -4,11 +4,12 @@ import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import type { SetlistItem } from '../../shared/types'
 import { LED_PATTERNS } from '../../shared/ledPatterns'
+import { isTimedSectionTitle, normalizeSongLength } from '../../shared/setlistTiming'
 
 type Props = {
   item: SetlistItem
   isCurrent: boolean
-  onChange: (patch: Partial<Pick<SetlistItem, 'title' | 'year' | 'ledPattern'>>) => void
+  onChange: (patch: Partial<Pick<SetlistItem, 'title' | 'length' | 'year' | 'ledPattern'>>) => void
   onRemove: () => void
   /** Click row (not inputs/drag/select) to set as current for ESP preview — no MIDI. */
   onActivateRow?: () => void
@@ -20,18 +21,25 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
   })
 
   const [titleDraft, setTitleDraft] = useState(item.title)
+  const [lengthDraft, setLengthDraft] = useState(item.length)
   const [yearDraft, setYearDraft] = useState(item.year)
   const titleFocus = useRef(false)
+  const lengthFocus = useRef(false)
   const yearFocus = useRef(false)
 
   useEffect(() => {
     setTitleDraft(item.title)
+    setLengthDraft(item.length)
     setYearDraft(item.year)
   }, [item.id])
 
   useEffect(() => {
     if (!titleFocus.current) setTitleDraft(item.title)
   }, [item.title])
+
+  useEffect(() => {
+    if (!lengthFocus.current) setLengthDraft(item.length)
+  }, [item.length])
 
   useEffect(() => {
     if (!yearFocus.current) setYearDraft(item.year)
@@ -45,6 +53,13 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
   const commitYear = () => {
     yearFocus.current = false
     if (yearDraft !== item.year) onChange({ year: yearDraft })
+  }
+
+  const commitLength = () => {
+    lengthFocus.current = false
+    const normalized = normalizeSongLength(lengthDraft)
+    setLengthDraft(normalized)
+    if (normalized !== item.length) onChange({ length: normalized })
   }
 
   const style: CSSProperties = {
@@ -78,7 +93,7 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
     <div
       ref={setNodeRef}
       style={style}
-      className={`setlist-row${item.arrangerIndex === null ? ' setlist-row--not-in-arranger' : ''}${isCurrent ? ' current' : ''}${onActivateRow ? ' setlist-row-selectable' : ''}`}
+      className={`setlist-row${item.arrangerIndex === null ? ' setlist-row--not-in-arranger' : ''}${isTimedSectionTitle(item.title) ? ' setlist-row--timed-section' : ''}${isCurrent ? ' current' : ''}${onActivateRow ? ' setlist-row-selectable' : ''}`}
       onClick={onRowClick}
       title={onActivateRow ? 'Click row (not fields) to preview on ESP — no MIDI to Cubase' : undefined}
     >
@@ -116,6 +131,28 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
         onBlur={commitTitle}
         onKeyDown={onTitleKeyDown}
         placeholder="Title"
+      />
+      <input
+        className="text-input length-line"
+        type="text"
+        inputMode="numeric"
+        value={lengthDraft}
+        onChange={(e) => {
+          const draft = e.target.value.replace(/[^\d:]/g, '')
+          setLengthDraft(draft)
+          const normalized = normalizeSongLength(draft)
+          if ((draft === '' || normalized) && normalized !== item.length) {
+            onChange({ length: normalized })
+          }
+        }}
+        onFocus={() => {
+          lengthFocus.current = true
+        }}
+        onBlur={commitLength}
+        onKeyDown={onYearKeyDown}
+        placeholder="MM:SS"
+        aria-label={`Song length for ${item.title || `program ${item.program}`}`}
+        title="Song length (mm:ss)"
       />
       <input
         className="text-input year-line"

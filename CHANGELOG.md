@@ -1,5 +1,18 @@
 # Changelog
 
+## v5.9.0
+
+- Added an editable **Song length** column immediately after Title. Durations accept `m:ss` /
+  `mm:ss`, persist normalized as `mm:ss`, survive restarts, and are preserved by stable program
+  when Arranger scans merge visited and unvisited songs.
+- Added live Intro / Main Set / Outro / Total timing beside the setlist controls. Capitalized
+  `INTRO` and `OUTRO` title prefixes select those sections; `SOUNDCHECK` is excluded; every other
+  valid duration contributes to Main Set, including songs not visited by the latest scan.
+- `SOUNDCHECK`, `INTRO`, and `OUTRO` rows are highlighted cyan for quick identification.
+- Enlarged the simulated CrowPanel from 280px to a responsive 440px-wide 1024×600 preview and
+  refined the stage-to-controls proportions, spacing, and four right pads (ALL, FX, PROMPT1,
+  PROMPT2) while retaining the scrollable multi-row setlist below.
+
 ## v5.8.0
 
 - Added configurable Cubase Arranger Prev/Next output on the existing `ViewerOneToCubase` port.
