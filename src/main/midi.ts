@@ -51,7 +51,7 @@ export type MidiInputHandlers = {
   /** Song Position Pointer (0xF2), value in MIDI beats (1 beat = 6 clocks = 1/16 note). */
   onSongPosition?: (midiBeats: number) => void
   onSysexBytes?: (bytes: number[]) => void
-  /** Fired for every inbound message on the Cubase input (clock throttled). */
+  /** Fired for inbound Cubase messages (MIDI clock / active sense omitted). */
   onSpyEvent?: MidiSpyHandler
   /** Optional — used to tag configured Start/Stop note/CC as TRANSPORT. */
   getSpyContext?: () => MidiSpyContext
@@ -260,8 +260,6 @@ export class MidiService {
   private pcChannel0: number = 0
   private handlers: MidiInputHandlers | null = null
   private onDisconnect: MidiDisconnectHandler | null = null
-  /** Throttle MIDI clock / active sensing in the spy so Play/Stop stays visible. */
-  private lastClockSpyAtMs = 0
 
   setDisconnectHandler(handler: MidiDisconnectHandler | null): void {
     this.onDisconnect = handler
@@ -283,7 +281,6 @@ export class MidiService {
   openInput(name: string | null, handlers: MidiInputHandlers): boolean {
     this.closeInput()
     this.handlers = handlers
-    this.lastClockSpyAtMs = 0
     const onPc = handlers.onProgramChange
     if (!name) {
       console.warn('[ViewerOne] MIDI: no Cubase input port detected — check loopMIDI is running with the expected cable names.')
@@ -372,21 +369,13 @@ export class MidiService {
         })
       }
       // Unified spy on easymidi's "message" event (fires for every parsed inbound msg).
-      // Clock is early-returned before store/context work so 24 PPQN traffic cannot delay Start/Stop.
+      // Clock/active-sense are omitted from the spy (they filled the short ring and looked like
+      // "throttled" spam). Timing uses the dedicated `clock` handler — never the spy path.
       if (handlers.onSpyEvent) {
         this.input.on('message', (msg: EasymidiMsg) => {
           safeCall('spy', () => {
             const type = msg._type ?? ''
             if (type === 'clock' || type === 'activesense') {
-              const now = Date.now()
-              if (now - this.lastClockSpyAtMs < 2000) return
-              this.lastClockSpyAtMs = now
-              handlers.onSpyEvent?.({
-                atMs: now,
-                kind: 'clock',
-                role: 'OTHER',
-                summary: 'MIDI clock (throttled)'
-              })
               return
             }
             let context: MidiSpyContext | null = null

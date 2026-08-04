@@ -178,7 +178,7 @@ let countdownTotalSeconds = 0
 let countdownRemainingMs = 0
 let countdownRunning = false
 let countdownStartedAtMs: number | null = null
-/** Remaining at the moment play/continue began — used with MIDI clock correction. */
+/** Remaining at the moment play/continue began — wall-clock anchor while Playing. */
 let countdownAnchorRemainingMs = 0
 let countdownLastPublishedSecond: number | null = null
 let countdownTimer: ReturnType<typeof setInterval> | null = null
@@ -201,17 +201,26 @@ const MIDI_CLOCK_PPQN = 24
 const MIDI_CLOCK_SOFT_START_TICKS = 6
 /** Ignore inter-tick gaps larger than this (ms) when estimating tempo. */
 const MIDI_CLOCK_MAX_GAP_MS = 500
+/** Heavy EMA for optional BPM correction — Windows tick gaps are noisy. */
+const MIDI_CLOCK_PERIOD_EMA = 0.02
+/** Apply at most one light MIDI-clock nudge per second. */
+const MIDI_CLOCK_CORRECT_INTERVAL_MS = 1000
+/** Max ms pulled off the display remaining per correction tick. */
+const MIDI_CLOCK_CORRECT_MAX_MS = 120
 /** Start soon after a soft clock-start must not look like a mid-song restart. */
 const TRANSPORT_RESTART_GUARD_MS = 300
 
 let midiClockLastTickAtMs: number | null = null
-/** EMA of clock tick period (ms); null until two ticks arrive. */
+/** Heavily smoothed tick period (ms); optional correction only — not the display driver. */
 let midiClockTickPeriodMs: number | null = null
 let midiClockTicksSincePlay = 0
 /** Counts ticks received while transport is Stopped — used for soft-start. */
 let midiClockStoppedStreak = 0
 /** Ignore trailing clock ticks right after Stop so we don't soft-resume. */
 let midiClockSoftStartArmedAtMs = 0
+/** Extra elapsed applied from rare MIDI-clock nudges (never negative). */
+let countdownClockBiasMs = 0
+let countdownLastClockCorrectAtMs = 0
 /** Song Position Pointer in MIDI beats (1 beat = 6 clocks = one 16th note). */
 let lastSongPositionMidiBeats: number | null = null
 let lastSongPositionAtMs: number | null = null
@@ -261,18 +270,30 @@ let arrangerScan: ArrangerScanState = {
   message: 'Ready'
 }
 
+/**
+ * Wall-clock remaining while Playing. MIDI clock may apply a small downward
+ * bias (~1/sec) but never drives the display directly (tick jitter on Windows
+ * made period×ticks jump residual seconds up and down).
+ */
 function countdownRemainingNowMs(now = Date.now()): number {
   if (!countdownRunning || countdownStartedAtMs === null) return countdownRemainingMs
   const wallElapsed = now - countdownStartedAtMs
-  // Once we have ~1 quarter-note of ticks + a tempo estimate, prefer MIDI clock time.
-  if (
-    midiClockTickPeriodMs != null &&
-    midiClockTicksSincePlay >= MIDI_CLOCK_PPQN
-  ) {
-    const clockElapsed = midiClockTicksSincePlay * midiClockTickPeriodMs
-    return Math.max(0, countdownAnchorRemainingMs - clockElapsed)
+  return Math.max(0, countdownAnchorRemainingMs - wallElapsed - countdownClockBiasMs)
+}
+
+/**
+ * Display seconds: ceil for "time left", monotonic while Playing so we never
+ * oscillate between N and N+1 when remaining crosses a boundary with jitter.
+ * Increases are allowed only after Stop→Start/Continue resume or song reset
+ * (callers clear {@link countdownLastPublishedSecond}).
+ */
+function countdownDisplaySeconds(now = Date.now()): number | null {
+  if (countdownTotalSeconds <= 0) return null
+  let sec = Math.max(0, Math.ceil(countdownRemainingNowMs(now) / 1000))
+  if (countdownRunning && countdownLastPublishedSecond != null) {
+    sec = Math.min(sec, countdownLastPublishedSecond)
   }
-  return Math.max(0, countdownAnchorRemainingMs - wallElapsed)
+  return sec
 }
 
 function countdownSnapshot(): PublicState['countdown'] {
@@ -282,11 +303,7 @@ function countdownSnapshot(): PublicState['countdown'] {
   const ownsCurrentSong = Boolean(row && countdownSongId === row.id)
   const totalSeconds = ownsCurrentSong ? countdownTotalSeconds : rowTotal
   const remainingSeconds =
-    totalSeconds > 0
-      ? ownsCurrentSong
-        ? Math.max(0, Math.ceil(countdownRemainingNowMs() / 1000))
-        : totalSeconds
-      : null
+    totalSeconds > 0 ? (ownsCurrentSong ? countdownDisplaySeconds() : totalSeconds) : null
   return {
     running: countdownRunning && ownsCurrentSong,
     display: remainingSeconds === null ? '' : formatSetlistSeconds(remainingSeconds),
@@ -303,9 +320,12 @@ function resetCountdownForSong(songId: string | null, keepRunning = false): void
   countdownTotalSeconds = row ? songLengthSeconds(row.length) : 0
   countdownRemainingMs = countdownTotalSeconds * 1000
   countdownAnchorRemainingMs = countdownRemainingMs
+  countdownClockBiasMs = 0
+  countdownLastClockCorrectAtMs = 0
   countdownRunning = keepRunning && countdownSongId !== null
   countdownStartedAtMs = countdownRunning ? now : null
-  countdownLastPublishedSecond = countdownTotalSeconds > 0 ? countdownTotalSeconds : null
+  // Allow display to jump up to full length on song reset.
+  countdownLastPublishedSecond = null
   midiClockTicksSincePlay = 0
 }
 
@@ -320,8 +340,12 @@ function beginCountdownRunning(now: number): void {
   bindCountdownToCurrentSong()
   countdownRemainingMs = Math.max(0, countdownRemainingMs)
   countdownAnchorRemainingMs = countdownRemainingMs
+  countdownClockBiasMs = 0
+  countdownLastClockCorrectAtMs = now
   countdownRunning = st.currentSongId !== null && countdownRemainingMs > 0
   countdownStartedAtMs = countdownRunning ? now : null
+  // Resume / Start may show a higher remaining than the previous published second.
+  countdownLastPublishedSecond = null
   midiClockTicksSincePlay = 0
   midiClockStoppedStreak = 0
 }
@@ -330,10 +354,29 @@ function noteTransportHint(source: string): void {
   if (source === 'realtime' || source === 'clock') {
     realtimeTransportSeen = true
     transportHint =
-      'Using MIDI Clock Start/Stop/Continue (0xFA/0xFB/0xFC) — countdown follows clock ticks.'
+      'Using MIDI Clock Start/Stop/Continue (0xFA/0xFB/0xFC) — countdown uses wall clock (light tempo nudge).'
   } else if (source === 'MMC') {
     transportHint = 'Using MMC Play/Stop — no Generic Remote notes needed.'
   }
+}
+
+/**
+ * Optional ~1 Hz MIDI-clock nudge toward tempo-accurate remaining.
+ * Only pulls remaining DOWN (never increases displayed time while Playing).
+ */
+function maybeApplyMidiClockCorrection(now: number): void {
+  if (!countdownRunning || countdownStartedAtMs === null) return
+  if (midiClockTickPeriodMs == null || midiClockTicksSincePlay < MIDI_CLOCK_PPQN) return
+  if (now - countdownLastClockCorrectAtMs < MIDI_CLOCK_CORRECT_INTERVAL_MS) return
+  countdownLastClockCorrectAtMs = now
+  const wallRemaining = countdownAnchorRemainingMs - (now - countdownStartedAtMs) - countdownClockBiasMs
+  const clockElapsed = midiClockTicksSincePlay * midiClockTickPeriodMs
+  const clockRemaining = countdownAnchorRemainingMs - clockElapsed
+  // Wall ahead of clock ⇒ we're counting too slowly; nudge down a little.
+  const lagMs = wallRemaining - clockRemaining
+  if (lagMs <= 40) return
+  const nudge = Math.min(MIDI_CLOCK_CORRECT_MAX_MS, lagMs * 0.2)
+  countdownClockBiasMs += nudge
 }
 
 /**
@@ -360,12 +403,14 @@ function isDuplicateTransportEvent(
 }
 
 function publishCountdownIfSecondChanged(): void {
+  maybeApplyMidiClockCorrection(Date.now())
   const snap = countdownSnapshot()
   if (snap.remainingSeconds === countdownLastPublishedSecond) return
   countdownLastPublishedSecond = snap.remainingSeconds
   if (snap.remainingSeconds === 0) {
     countdownRemainingMs = 0
     countdownAnchorRemainingMs = 0
+    countdownClockBiasMs = 0
     countdownRunning = false
     countdownStartedAtMs = null
     midiClockTicksSincePlay = 0
@@ -452,6 +497,7 @@ function handleTransportStop(source: string): void {
   // Freeze first while running flag still reflects playback.
   countdownRemainingMs = countdownRemainingNowMs(now)
   countdownAnchorRemainingMs = countdownRemainingMs
+  countdownClockBiasMs = 0
   countdownRunning = false
   countdownStartedAtMs = null
   transportPlaying = false
@@ -465,13 +511,17 @@ function handleTransportStop(source: string): void {
   broadcastState()
 }
 
+/** Lightweight 0xF8 path — soft-start + slow EMA only; display is wall-clock driven. */
 function handleMidiClockTick(): void {
   const now = Date.now()
   if (midiClockLastTickAtMs != null) {
     const gap = now - midiClockLastTickAtMs
     if (gap > 0 && gap < MIDI_CLOCK_MAX_GAP_MS) {
+      // Very heavy smoothing — gap jitter must not swing countdown math.
       midiClockTickPeriodMs =
-        midiClockTickPeriodMs == null ? gap : midiClockTickPeriodMs * 0.85 + gap * 0.15
+        midiClockTickPeriodMs == null
+          ? gap
+          : midiClockTickPeriodMs * (1 - MIDI_CLOCK_PERIOD_EMA) + gap * MIDI_CLOCK_PERIOD_EMA
     }
   }
   midiClockLastTickAtMs = now
@@ -493,8 +543,6 @@ function handleMidiClockTick(): void {
   midiClockStoppedStreak = 0
   if (!countdownRunning) return
   midiClockTicksSincePlay++
-  // Lightweight: only push UI when the displayed second changes.
-  if (midiClockTicksSincePlay % 8 === 0) publishCountdownIfSecondChanged()
 }
 
 function handleSongPosition(midiBeats: number): void {
@@ -558,11 +606,11 @@ function tryMappedTransport(
 
 function startCountdownTicker(): void {
   if (countdownTimer) return
+  // 1 Hz display cadence — second changes are monotonic via countdownDisplaySeconds.
   countdownTimer = setInterval(() => {
     if (!countdownRunning) return
-    // Wall-clock fallback while MIDI clock tempo is still locking in.
     publishCountdownIfSecondChanged()
-  }, 250)
+  }, 1000)
   countdownTimer.unref()
 }
 

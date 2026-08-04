@@ -24,7 +24,13 @@ const SPY_FILTERS: { id: SpyFilter; label: string }[] = [
   { id: 'mute', label: 'Mute' }
 ]
 
-function spyRoleMatchesFilter(role: MidiSpyRole | undefined, filter: SpyFilter): boolean {
+function spyRoleMatchesFilter(
+  role: MidiSpyRole | undefined,
+  filter: SpyFilter,
+  kind?: MidiSpyEvent['kind']
+): boolean {
+  // Clock heartbeat is noisy — hide from default All; Transport/Song/Mute stay focused.
+  if (filter === 'all' && kind === 'clock') return false
   if (filter === 'all') return true
   if (filter === 'transport') return role === 'TRANSPORT'
   if (filter === 'song') return role === 'SONG'
@@ -300,7 +306,7 @@ export function App() {
   )
   const filteredSpy = useMemo(() => {
     const list = state?.midi.cubaseSpy ?? []
-    return list.filter((ev) => spyRoleMatchesFilter(spyEventRole(ev), spyFilter))
+    return list.filter((ev) => spyRoleMatchesFilter(spyEventRole(ev), spyFilter, ev.kind))
   }, [state?.midi.cubaseSpy, spyFilter])
 
   // Keep “Ns ago” / spy ages fresh without waiting for another MIDI event.
