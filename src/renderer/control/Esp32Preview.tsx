@@ -15,6 +15,7 @@ import {
 
 type Props = {
   state: PublicState
+  detailMode: boolean
 }
 
 const FLASH_MS = 500
@@ -32,7 +33,7 @@ const PREVIEW_PADS = [
 ] as const
 
 /** Mirrors the full CrowPanel 1024×600 HMI: broad stage plus four stacked right pads. */
-export function Esp32Preview({ state }: Props) {
+export function Esp32Preview({ state, detailMode }: Props) {
   const payload = useMemo(
     () => buildEsp32DisplayPayload(state),
     [state.setlist, state.currentSongId, state.fxMuted, state.allMuted]
@@ -220,9 +221,10 @@ export function Esp32Preview({ state }: Props) {
       >
         Queued: {queuedText}
       </p>
-      <details className="preview-tests">
-        <summary>Prompt tests</summary>
-        <div className="esp32-sim-pc-btns" role="group" aria-label="Simulate prompt program changes">
+      {detailMode ? (
+        <div className="preview-detail-tools">
+          <div className="preview-tool-label">Prompt PC tests</div>
+          <div className="esp32-sim-pc-btns" role="group" aria-label="Simulate prompt program changes">
           {[
             [MIDI_PC_PROMPT_1_ON, 'Prompt 1 on'],
             [MIDI_PC_PROMPT_1_OFF, 'Prompt 1 off'],
@@ -244,9 +246,9 @@ export function Esp32Preview({ state }: Props) {
               PC {pc} · {label}
             </button>
           ))}
-        </div>
-      </details>
-      <div className="esp32-sim-pc-btns" role="group" aria-label="Simulate reserved LED program changes">
+          </div>
+          <div className="preview-tool-label">LED PC tests</div>
+          <div className="esp32-sim-pc-btns" role="group" aria-label="Simulate reserved LED program changes">
         <button
           type="button"
           key={flashPc === MIDI_PC_LED_BLACKOUT ? `blackout-${state.ledMidiPulseAt}` : 'blackout'}
@@ -289,12 +291,12 @@ export function Esp32Preview({ state }: Props) {
         >
           PC 127 · Apply lights
         </button>
-      </div>
-      <div
-        className="esp32-sim-pattern-test"
-        role="group"
-        aria-label="Live-test LED patterns on the ESP"
-      >
+          </div>
+          <div
+            className="esp32-sim-pattern-test"
+            role="group"
+            aria-label="Live-test LED patterns on the ESP"
+          >
         <button
           type="button"
           className="esp32-sim-pattern-step"
@@ -336,7 +338,9 @@ export function Esp32Preview({ state }: Props) {
         >
           ›
         </button>
-      </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

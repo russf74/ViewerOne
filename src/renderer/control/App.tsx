@@ -137,6 +137,7 @@ function mixerStatusLine(state: PublicState): StatusLine {
 
 export function App() {
   const [state, setState] = useState<PublicState | null>(null)
+  const [detailMode, setDetailMode] = useState(false)
   const [midiFeedback, setMidiFeedback] = useState<StatusLine | null>(null)
   const midiFeedbackTimer = useRef<number | null>(null)
   const bridgeOk = typeof window !== 'undefined' && typeof window.viewer !== 'undefined'
@@ -296,26 +297,76 @@ export function App() {
             <h1 className="app-title">ViewerOne</h1>
             <p className="sub">v{state.appVersion} · Live control</p>
           </div>
+          <button
+            type="button"
+            className={`detail-toggle${detailMode ? ' detail-toggle--active' : ''}`}
+            aria-pressed={detailMode}
+            onClick={(e) => {
+              flashButton(e.currentTarget)
+              setDetailMode((open) => !open)
+            }}
+          >
+            Detail {detailMode ? 'On' : 'Off'}
+          </button>
         </header>
 
         <div className="top-columns">
           <div className="top-preview-col">
-            <Esp32Preview state={state} />
+            <Esp32Preview state={state} detailMode={detailMode} />
           </div>
 
           <div className="top-settings-col">
             <div className="settings-card">
-              <h2 className="settings-card-title">MIDI</h2>
-              <div className="midi-status-list">
-                <p className={`midi-status-row midi-status-row--${cubaseStatus?.tone ?? 'warn'}`}>
-                  <strong>Cubase</strong> {cubaseStatus?.text}
-                </p>
-                <p className={`midi-status-row midi-status-row--${cubasePcStatus?.tone ?? 'warn'}`}>
-                  <strong>Last Cubase PC</strong> {cubasePcStatus?.text}
-                </p>
-                <p className={`midi-status-row midi-status-row--${mixerStatus?.tone ?? 'warn'}`}>
-                  <strong>Mixer</strong> {mixerStatus?.text}
-                </p>
+              <div className="settings-card-heading">
+                <h2 className="settings-card-title">Live status</h2>
+                <span className={`serial-pill serial-pill--${state.esp32Display.connection}`}>
+                  Display {state.esp32Display.connection}
+                </span>
+              </div>
+              <div className="status-pills" aria-label="MIDI connection status">
+                <span className={`status-pill status-pill--${cubaseStatus?.tone ?? 'warn'}`}>
+                  <i aria-hidden="true" />
+                  Cubase
+                </span>
+                <span className={`status-pill status-pill--${mixerStatus?.tone ?? 'warn'}`}>
+                  <i aria-hidden="true" />
+                  Mixer
+                </span>
+                <span className={`status-pill status-pill--${cubasePcStatus?.tone ?? 'warn'}`}>
+                  PC {state.midi.cubaseLastPc ?? '—'}
+                </span>
+              </div>
+              {detailMode ? (
+                <div className="midi-status-list midi-status-list--detail">
+                  <p className={`midi-status-row midi-status-row--${cubaseStatus?.tone ?? 'warn'}`}>
+                    <strong>Cubase</strong> {cubaseStatus?.text}
+                  </p>
+                  <p className={`midi-status-row midi-status-row--${cubasePcStatus?.tone ?? 'warn'}`}>
+                    <strong>Last Cubase PC</strong> {cubasePcStatus?.text}
+                  </p>
+                  <p className={`midi-status-row midi-status-row--${mixerStatus?.tone ?? 'warn'}`}>
+                    <strong>Mixer</strong> {mixerStatus?.text}
+                  </p>
+                </div>
+              ) : null}
+              <div className="essential-controls">
+                <label className="esp-enable esp-enable--inline">
+                  <input
+                    type="checkbox"
+                    checked={state.fxMuted}
+                    onChange={(e) => void patchSettings({ fxMuted: e.target.checked })}
+                  />
+                  <span>FX mute</span>
+                </label>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={(e) => void onReconnectMidi(e.currentTarget)}
+                >
+                  Reconnect MIDI
+                </button>
+              </div>
+              <div className="midi-feedback-slot">
                 {midiFeedback ? (
                   <p
                     className={`midi-status-row midi-status-row--flash midi-status-row--${midiFeedback.tone}`}
@@ -326,30 +377,10 @@ export function App() {
                   </p>
                 ) : null}
               </div>
-              <div className="settings-fields settings-fields--midi">
-                <label className="esp-enable esp-enable--inline">
-                  <input
-                    type="checkbox"
-                    checked={state.fxMuted}
-                    onChange={(e) => void patchSettings({ fxMuted: e.target.checked })}
-                  />
-                  <span>FX muted (tint + CC out)</span>
-                </label>
-                <div className="field field-btn">
-                  <label className="label-spacer" aria-hidden>
-                    &nbsp;
-                  </label>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={(e) => void onReconnectMidi(e.currentTarget)}
-                  >
-                    Reconnect MIDI
-                  </button>
-                </div>
-              </div>
-              <details className="advanced-settings">
-                <summary>Arranger MIDI mapping</summary>
+
+              {detailMode ? (
+                <section className="detail-section" aria-labelledby="arranger-mapping-heading">
+                  <h3 id="arranger-mapping-heading">Arranger MIDI mapping</h3>
                 <div className="settings-fields settings-fields--midi">
                   <div className="field">
                     <label htmlFor="arranger-mode">Message</label>
@@ -419,52 +450,57 @@ export function App() {
                     />
                   </div>
                 </div>
-              </details>
+                </section>
+              ) : null}
             </div>
 
-            <details className="settings-card hardware-settings">
-              <summary className="settings-card-title">Display + LED settings</summary>
-              <div className="settings-fields settings-fields--esp">
-                <label className="esp-enable">
-                  <input
-                    type="checkbox"
-                    checked={state.esp32Enabled}
-                    onChange={(e) => void patchSettings({ esp32Enabled: e.target.checked })}
-                  />
-                  <span>Enable USB serial to ESP32</span>
-                </label>
-                <label className="esp-enable">
-                  <input
-                    type="checkbox"
-                    checked={state.ledExternalPower}
-                    onChange={(e) => void patchSettings({ ledExternalPower: e.target.checked })}
-                  />
-                  <span>LEDs powered from external 5V PSU</span>
-                </label>
-                <div className="field led-brightness-field">
-                  <label htmlFor="led-brightness">
-                    LED brightness{' '}
-                    <span className="led-bri-value">
-                      {state.ledBrightness}
-                      {!state.ledExternalPower ? ` / max ${LED_USB_BRIGHTNESS_CAP} (USB)` : ' / 255'}
-                    </span>
+            {detailMode ? (
+              <section className="settings-card hardware-settings" aria-labelledby="hardware-settings-heading">
+                <h2 className="settings-card-title" id="hardware-settings-heading">
+                  Display + LED
+                </h2>
+                <div className="settings-fields settings-fields--esp">
+                  <label className="esp-enable">
+                    <input
+                      type="checkbox"
+                      checked={state.esp32Enabled}
+                      onChange={(e) => void patchSettings({ esp32Enabled: e.target.checked })}
+                    />
+                    <span>Enable USB serial to ESP32</span>
                   </label>
-                  <input
-                    id="led-brightness"
-                    type="range"
-                    min={0}
-                    max={state.ledExternalPower ? 255 : LED_USB_BRIGHTNESS_CAP}
-                    value={state.ledBrightness}
-                    onChange={(e) => void patchSettings({ ledBrightness: Number(e.target.value) })}
-                  />
-                  {!state.ledExternalPower ? (
-                    <p className="settings-hint">
-                      USB/ESP power: brightness capped at {LED_USB_BRIGHTNESS_CAP}. Tick external PSU for full range.
-                    </p>
-                  ) : null}
+                  <label className="esp-enable">
+                    <input
+                      type="checkbox"
+                      checked={state.ledExternalPower}
+                      onChange={(e) => void patchSettings({ ledExternalPower: e.target.checked })}
+                    />
+                    <span>LEDs powered from external 5V PSU</span>
+                  </label>
+                  <div className="field led-brightness-field">
+                    <label htmlFor="led-brightness">
+                      LED brightness{' '}
+                      <span className="led-bri-value">
+                        {state.ledBrightness}
+                        {!state.ledExternalPower ? ` / max ${LED_USB_BRIGHTNESS_CAP} (USB)` : ' / 255'}
+                      </span>
+                    </label>
+                    <input
+                      id="led-brightness"
+                      type="range"
+                      min={0}
+                      max={state.ledExternalPower ? 255 : LED_USB_BRIGHTNESS_CAP}
+                      value={state.ledBrightness}
+                      onChange={(e) => void patchSettings({ ledBrightness: Number(e.target.value) })}
+                    />
+                    {!state.ledExternalPower ? (
+                      <p className="settings-hint">
+                        USB/ESP power: brightness capped at {LED_USB_BRIGHTNESS_CAP}. Tick external PSU for full range.
+                      </p>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-            </details>
+              </section>
+            ) : null}
           </div>
         </div>
       </div>

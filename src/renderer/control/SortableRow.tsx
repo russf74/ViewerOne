@@ -121,7 +121,7 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
         {item.program}
       </span>
       <input
-        className="text-input"
+        className="text-input title-line"
         type="text"
         value={titleDraft}
         onChange={(e) => setTitleDraft(e.target.value)}
