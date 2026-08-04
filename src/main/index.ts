@@ -189,9 +189,15 @@ let prompt2On = false
 let promptMidiPulse: 120 | 121 | 122 | 123 | null = null
 let promptMidiPulseAt = 0
 
-const ARRANGER_CHANGE_TIMEOUT_MS = 1500
+const ARRANGER_CHANGE_TIMEOUT_MS = 1800
 const ARRANGER_NO_CHANGE_ATTEMPTS = 3
 const ARRANGER_SETTLE_MS = 150
+const ARRANGER_REWIND_PULSES = 100
+const ARRANGER_REWIND_PULSE_INTERVAL_MS = 20
+const ARRANGER_REWIND_NOTE_DURATION_MS = 8
+const ARRANGER_REWIND_SETTLE_MS = 400
+/** Safety bound only; duplicate PCs mean event count is not limited by the 119 song-PC values. */
+const ARRANGER_MAX_SCAN_EVENTS = 256
 let latestSongProgram: number | null = null
 let songIdentityRevision = 0
 let arrangerScanCancelled = false
@@ -617,14 +623,48 @@ function setArrangerScan(patch: Partial<ArrangerScanState>): void {
   broadcastUiState()
 }
 
-function sendArrangerCommand(direction: 'prev' | 'next'): void {
+function sendArrangerCommand(
+  direction: 'prev' | 'next',
+  log = true,
+  noteDurationMs = 60
+): void {
   const mapping = getState(store).arrangerMidi
   const number = direction === 'prev' ? mapping.prevNumber : mapping.nextNumber
-  console.log(
-    `[ViewerOne] MIDI: Arranger ${direction} → ${mapping.mode === 'note' ? 'Note' : 'CC'} ${number}, ch ${mapping.channel}, port "${cubaseOutputName ?? '(no output port)'}"`
-  )
-  if (mapping.mode === 'note') midi.sendNotePulse(mapping.channel, number)
+  if (log) {
+    console.log(
+      `[ViewerOne] MIDI: Arranger ${direction} → ${mapping.mode === 'note' ? 'Note' : 'CC'} ${number}, ch ${mapping.channel}, port "${cubaseOutputName ?? '(no output port)'}"`
+    )
+  }
+  if (mapping.mode === 'note') midi.sendNotePulse(mapping.channel, number, 127, noteDurationMs)
   else midi.sendControlChange(mapping.channel, number, 127)
+}
+
+/**
+ * Cubase does not expose an absolute "first Arranger event" command. A bounded burst of very
+ * fast Previous commands is deterministic for normal set sizes and avoids relying on PCs being
+ * unique. The initial burst can be cancelled; the final restore intentionally always completes.
+ */
+async function rewindArrangerToBeginning(respectCancel: boolean): Promise<boolean> {
+  console.log(
+    `[ViewerOne] Arranger scan: rewinding with ${ARRANGER_REWIND_PULSES} fast Previous pulses (${ARRANGER_REWIND_PULSE_INTERVAL_MS}ms apart)`
+  )
+  for (let pulse = 0; pulse < ARRANGER_REWIND_PULSES; pulse++) {
+    if (respectCancel && arrangerScanCancelled) {
+      console.log(`[ViewerOne] Arranger scan: initial rewind cancelled after ${pulse} Previous pulses`)
+      return false
+    }
+    sendArrangerCommand('prev', false, ARRANGER_REWIND_NOTE_DURATION_MS)
+    if (pulse < ARRANGER_REWIND_PULSES - 1) {
+      await sleep(ARRANGER_REWIND_PULSE_INTERVAL_MS)
+    }
+  }
+
+  const deadline = Date.now() + ARRANGER_REWIND_SETTLE_MS
+  while (Date.now() < deadline) {
+    if (respectCancel && arrangerScanCancelled) return false
+    await sleep(Math.min(50, deadline - Date.now()))
+  }
+  return true
 }
 
 async function waitForSongIdentityChange(
@@ -681,16 +721,18 @@ async function stepArrangerUntilChanged(
 }
 
 function buildScannedSetlist(programs: number[], previous: SetlistItem[]): SetlistItem[] {
-  const byProgram = new Map<number, SetlistItem>()
+  const byProgram = new Map<number, SetlistItem[]>()
   for (const row of previous) {
-    if (!byProgram.has(row.program)) byProgram.set(row.program, row)
+    const rows = byProgram.get(row.program)
+    if (rows) rows.push(row)
+    else byProgram.set(row.program, [row])
   }
   const usedIds = new Set<string>()
-  const scannedPrograms = new Set(programs)
   const scanned = programs.map((program, index) => {
-    const old = byProgram.get(program)
-    const canReuseId = old && !usedIds.has(old.id)
-    const id = canReuseId ? old.id : crypto.randomUUID()
+    // Consume prior rows in order so duplicate PCs remain distinct setlist entries and retain
+    // their own title/length/year/pattern instead of all inheriting the first matching row.
+    const old = byProgram.get(program)?.shift()
+    const id = old?.id ?? crypto.randomUUID()
     usedIds.add(id)
     return {
       id,
@@ -703,10 +745,10 @@ function buildScannedSetlist(programs: number[], previous: SetlistItem[]): Setli
       ledPattern: clampLedPatternId(old?.ledPattern ?? songLedPatternForIndex())
     }
   })
-  // A scan only proves the order of songs Cubase actually visited. Keep every
-  // unvisited row at the bottom so a partial Arranger chain can never erase it.
+  // A scan only proves the individual rows Cubase actually visited. Keep every unused prior
+  // row at the bottom, including extra rows whose PC duplicates a scanned event.
   const unvisited = previous
-    .filter((row) => !scannedPrograms.has(row.program) && !usedIds.has(row.id))
+    .filter((row) => !usedIds.has(row.id))
     .map((row) => ({ ...row, arrangerIndex: null }))
   return [...scanned, ...unvisited]
 }
@@ -714,19 +756,6 @@ function buildScannedSetlist(programs: number[], previous: SetlistItem[]): Setli
 async function runArrangerScan(): Promise<void> {
   if (arrangerScan.active) return
   const before = getState(store)
-  const currentRow = before.currentSongId
-    ? before.setlist.find((row) => row.id === before.currentSongId)
-    : null
-  const startProgram = latestSongProgram ?? currentRow?.program ?? null
-  if (startProgram === null || startProgram < 1 || startProgram > MIDI_PC_SONG_MAX) {
-    setArrangerScan({
-      active: false,
-      phase: 'error',
-      collected: 0,
-      message: 'No current song identity. Select an Arranger step so Cubase sends its normal song Program Change, then scan again.'
-    })
-    return
-  }
   if (!cubaseInputOpen || !cubaseOutputOpen) {
     setArrangerScan({
       active: false,
@@ -738,10 +767,49 @@ async function runArrangerScan(): Promise<void> {
   }
 
   arrangerScanCancelled = false
+  setArrangerScan({
+    active: true,
+    phase: 'scanning',
+    collected: 0,
+    message: `Rewinding to the first Arranger event (${ARRANGER_REWIND_PULSES} fast Previous pulses)…`
+  })
+
+  const initialRewindCompleted = await rewindArrangerToBeginning(true)
+  if (!initialRewindCompleted || arrangerScanCancelled) {
+    // Cancellation remains bounded: finish one deterministic rewind so the user still lands at
+    // the beginning rather than wherever the interrupted burst happened to stop.
+    setArrangerScan({
+      active: true,
+      phase: 'returning',
+      collected: 0,
+      message: 'Scan cancelled; returning to the beginning…'
+    })
+    await rewindArrangerToBeginning(false)
+    setArrangerScan({
+      active: false,
+      phase: 'cancelled',
+      collected: 0,
+      message: 'Scan cancelled; Arranger returned to the beginning.'
+    })
+    return
+  }
+
+  const currentRow = before.currentSongId
+    ? before.setlist.find((row) => row.id === before.currentSongId)
+    : null
+  const startProgram = latestSongProgram ?? currentRow?.program ?? null
+  if (startProgram === null || startProgram < 1 || startProgram > MIDI_PC_SONG_MAX) {
+    setArrangerScan({
+      active: false,
+      phase: 'error',
+      collected: 0,
+      message: 'Reached the beginning, but received no song Program Change from Cubase. Previous setlist kept.'
+    })
+    return
+  }
+
   const programs = [startProgram]
-  const seenPrograms = new Set(programs)
   let currentProgram = startProgram
-  let wrapped = false
   setArrangerScan({
     active: true,
     phase: 'scanning',
@@ -749,27 +817,27 @@ async function runArrangerScan(): Promise<void> {
     message: `Scanning from PC ${startProgram}…`
   })
 
-  while (!arrangerScanCancelled && programs.length < MIDI_PC_SONG_MAX) {
+  while (!arrangerScanCancelled && programs.length < ARRANGER_MAX_SCAN_EVENTS) {
     const nextProgram = await stepArrangerUntilChanged('next', currentProgram, true)
     if (arrangerScanCancelled) break
-    if (nextProgram === null) break
-    currentProgram = nextProgram
-    if (currentProgram === startProgram) {
-      wrapped = true
-      break
-    }
-    if (seenPrograms.has(currentProgram)) {
-      console.warn(
-        `[ViewerOne] Arranger scan: stopped at repeated PC ${currentProgram} before returning to start`
+    if (nextProgram === null) {
+      console.log(
+        `[ViewerOne] Arranger scan: end: ${ARRANGER_NO_CHANGE_ATTEMPTS} unchanged Nexts after song PC ${currentProgram}`
       )
       break
     }
+    currentProgram = nextProgram
+    // Repeated PCs are valid: the same program/title may appear more than once in a setlist.
     programs.push(currentProgram)
-    seenPrograms.add(currentProgram)
     setArrangerScan({
       collected: programs.length,
       message: `Collected ${programs.length} songs · latest PC ${currentProgram}`
     })
+  }
+  if (!arrangerScanCancelled && programs.length >= ARRANGER_MAX_SCAN_EVENTS) {
+    console.warn(
+      `[ViewerOne] Arranger scan: end: safety limit of ${ARRANGER_MAX_SCAN_EVENTS} events reached (Cubase may be wrapping)`
+    )
   }
 
   const wasCancelled = arrangerScanCancelled
@@ -779,22 +847,20 @@ async function runArrangerScan(): Promise<void> {
     if (latestSongProgram !== null) currentProgram = latestSongProgram
   }
 
-  let restored = currentProgram === startProgram || wrapped
-  if (!restored) {
-    setArrangerScan({
-      active: true,
-      phase: 'returning',
-      collected: programs.length,
-      message: `Returning to start PC ${startProgram}…`
-    })
-    const maxPrevSteps = Math.max(2, programs.length + 2)
-    for (let step = 0; step < maxPrevSteps && currentProgram !== startProgram; step++) {
-      const previousProgram = await stepArrangerUntilChanged('prev', currentProgram, false)
-      if (previousProgram === null) break
-      currentProgram = previousProgram
-    }
-    restored = currentProgram === startProgram
-  }
+  setArrangerScan({
+    active: true,
+    phase: 'returning',
+    collected: programs.length,
+    message: `Returning to the first Arranger event (PC ${startProgram})…`
+  })
+  await rewindArrangerToBeginning(false)
+  currentProgram = latestSongProgram ?? currentProgram
+  const restored = currentProgram === startProgram
+  console.log(
+    restored
+      ? `[ViewerOne] Arranger scan: rewind complete at first song PC ${startProgram}`
+      : `[ViewerOne] Arranger scan: rewind finished but identity is PC ${currentProgram}; expected first song PC ${startProgram}`
+  )
 
   if (wasCancelled) {
     setArrangerScan({
