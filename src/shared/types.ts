@@ -58,6 +58,40 @@ export type ArrangerMidiMapping = {
   nextNumber: number
 }
 
+/**
+ * Cubase → ViewerOne transport Start/Stop mapping (Generic Remote / MIDI Remote).
+ * MIDI realtime (0xFA/FB/FC) and MMC Play/Stop are always accepted in addition.
+ */
+export type TransportMidiMapping = {
+  /** Mapped Start/Stop message type from Cubase Generic Remote. */
+  mode: 'note' | 'cc'
+  /** MIDI channel 1–16, or 0 = any channel. */
+  channel: number
+  /** Note or CC number for Start (0–127). */
+  startNumber: number
+  /** Note or CC number for Stop (0–127). */
+  stopNumber: number
+}
+
+/** Compact line for the Cubase→ViewerOne MIDI activity spy. */
+export type MidiSpyEvent = {
+  atMs: number
+  kind:
+    | 'noteon'
+    | 'noteoff'
+    | 'cc'
+    | 'program'
+    | 'sysex'
+    | 'mmc'
+    | 'start'
+    | 'continue'
+    | 'stop'
+    | 'clock'
+    | 'other'
+  /** Short human label, e.g. "ch16 note 60 vel 127". */
+  summary: string
+}
+
 export type ArrangerScanState = {
   active: boolean
   phase: 'idle' | 'scanning' | 'returning' | 'complete' | 'cancelled' | 'error'
@@ -81,6 +115,8 @@ export type AppState = {
   ledExternalPower: boolean
   /** Cubase Generic Remote mapping used for Arranger Prev / Next. */
   arrangerMidi: ArrangerMidiMapping
+  /** Cubase → ViewerOne Start/Stop mapping (notes/CC); realtime + MMC always on. */
+  transportMidi: TransportMidiMapping
 }
 
 /** Live MIDI connection status, so the UI isn't "blind" even though ports are auto-detected/hardcoded. */
@@ -109,6 +145,13 @@ export type MidiStatus = {
   /** MIDI channel 1–16 of {@link cubaseLastPc}. */
   cubaseLastPcChannel: number | null
   cubaseLastPcAgoMs: number | null
+  /**
+   * Recent inbound messages on CubaseToViewerOne (newest last).
+   * Use this to see what Cubase actually sends on Play/Stop.
+   */
+  cubaseSpy: MidiSpyEvent[]
+  /** Hint when Play arrives as a mismatched note/CC/channel — null when healthy. */
+  transportHint: string | null
 }
 
 export type PublicState = AppState & {
@@ -155,7 +198,7 @@ export type PublicState = AppState & {
    */
   transport: {
     playing: boolean
-    /** note | MMC | realtime — null until the first transport message. */
+    /** note | cc | MMC | realtime — null until the first transport message. */
     lastSource: string | null
     lastAction: 'start' | 'stop' | null
     lastAtMs: number | null

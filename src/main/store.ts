@@ -1,5 +1,5 @@
 import Store from 'electron-store'
-import type { AppState, ArrangerMidiMapping, SetlistItem } from '../shared/types.js'
+import type { AppState, ArrangerMidiMapping, SetlistItem, TransportMidiMapping } from '../shared/types.js'
 import {
   clampLedBrightness,
   clampLedPatternId,
@@ -8,6 +8,11 @@ import {
   songLedPatternForIndex
 } from '../shared/ledPatterns.js'
 import { normalizeSongLength } from '../shared/setlistTiming.js'
+import {
+  CUBASE_TRANSPORT_CHANNEL,
+  CUBASE_TRANSPORT_START_NOTE,
+  CUBASE_TRANSPORT_STOP_NOTE
+} from '../shared/midiConfig.js'
 
 type AppStore = Store<AppState>
 
@@ -24,6 +29,12 @@ const defaults: AppState = {
     channel: 16,
     prevNumber: 62,
     nextNumber: 63
+  },
+  transportMidi: {
+    mode: 'note',
+    channel: CUBASE_TRANSPORT_CHANNEL,
+    startNumber: CUBASE_TRANSPORT_START_NOTE,
+    stopNumber: CUBASE_TRANSPORT_STOP_NOTE
   }
 }
 
@@ -72,6 +83,21 @@ function normalizeArrangerMidi(value: unknown): ArrangerMidiMapping {
   }
 }
 
+function normalizeTransportMidi(value: unknown): TransportMidiMapping {
+  const raw = value && typeof value === 'object' ? (value as Partial<TransportMidiMapping>) : {}
+  const channelRaw = Number(raw.channel)
+  // 0 = any channel; 1–16 = fixed. Invalid/missing → default ch 16.
+  const channel = Number.isFinite(channelRaw)
+    ? Math.max(0, Math.min(16, Math.round(channelRaw)))
+    : CUBASE_TRANSPORT_CHANNEL
+  return {
+    mode: raw.mode === 'cc' ? 'cc' : 'note',
+    channel,
+    startNumber: clampMidi7(raw.startNumber, CUBASE_TRANSPORT_START_NOTE),
+    stopNumber: clampMidi7(raw.stopNumber, CUBASE_TRANSPORT_STOP_NOTE)
+  }
+}
+
 /** Assign every song to random (20) — sequential rotate of busy patterns on ESP. */
 export function assignLedPatternsByOrder(items: SetlistItem[]): SetlistItem[] {
   return items.map((row) => ({
@@ -94,7 +120,8 @@ export function getState(store: AppStore): AppState {
     esp32Enabled: Boolean(store.get('esp32Enabled')),
     ledBrightness,
     ledExternalPower,
-    arrangerMidi: normalizeArrangerMidi(store.get('arrangerMidi'))
+    arrangerMidi: normalizeArrangerMidi(store.get('arrangerMidi')),
+    transportMidi: normalizeTransportMidi(store.get('transportMidi'))
   }
 }
 

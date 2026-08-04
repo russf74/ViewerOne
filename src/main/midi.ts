@@ -1,4 +1,5 @@
 import easymidi from 'easymidi'
+import type { MidiSpyEvent } from '../shared/types.js'
 
 export function listInputs(): string[] {
   try {
@@ -20,14 +21,19 @@ type PcHandler = (program: number, channel0: number) => void
 
 export type CcHandler = (msg: { channel: number; controller: number; value: number }) => void
 export type NoteOnHandler = (msg: { channel: number; note: number; velocity: number }) => void
+export type NoteOffHandler = (msg: { channel: number; note: number; velocity: number }) => void
+export type MidiSpyHandler = (event: MidiSpyEvent) => void
 
 export type MidiInputHandlers = {
   onProgramChange: PcHandler
   onControlChange?: CcHandler
   onNoteOn?: NoteOnHandler
+  onNoteOff?: NoteOffHandler
   onSystemRealtimeStart?: () => void
   onSystemRealtimeStop?: () => void
   onSysexBytes?: (bytes: number[]) => void
+  /** Fired for every inbound message on the Cubase input (clock throttled). */
+  onSpyEvent?: MidiSpyHandler
 }
 
 /** Fired when an open output/input handle is dropped after a send/open failure. */
@@ -41,6 +47,81 @@ function safeCall(label: string, fn: () => void): void {
   }
 }
 
+type EasymidiMsg = {
+  _type?: string
+  channel?: number
+  note?: number
+  velocity?: number
+  controller?: number
+  value?: number
+  number?: number
+  bytes?: number[]
+}
+
+/** Format one easymidi message for the Cubase MIDI spy. */
+export function formatMidiSpyEvent(msg: EasymidiMsg, atMs = Date.now()): MidiSpyEvent | null {
+  const type = msg._type ?? 'other'
+  if (type === 'clock' || type === 'activesense') {
+    return { atMs, kind: 'clock', summary: type === 'clock' ? 'MIDI clock' : 'active sensing' }
+  }
+  if (type === 'start') return { atMs, kind: 'start', summary: 'realtime START (0xFA)' }
+  if (type === 'continue') return { atMs, kind: 'continue', summary: 'realtime CONTINUE (0xFB)' }
+  if (type === 'stop') return { atMs, kind: 'stop', summary: 'realtime STOP (0xFC)' }
+
+  const ch = typeof msg.channel === 'number' ? msg.channel + 1 : null
+  if (type === 'noteon') {
+    return {
+      atMs,
+      kind: 'noteon',
+      summary: `ch${ch ?? '?'} note ${msg.note ?? '?'} vel ${msg.velocity ?? 0}`
+    }
+  }
+  if (type === 'noteoff') {
+    return {
+      atMs,
+      kind: 'noteoff',
+      summary: `ch${ch ?? '?'} note ${msg.note ?? '?'} off`
+    }
+  }
+  if (type === 'cc') {
+    return {
+      atMs,
+      kind: 'cc',
+      summary: `ch${ch ?? '?'} CC ${msg.controller ?? '?'} = ${msg.value ?? 0}`
+    }
+  }
+  if (type === 'program') {
+    const wire = msg.number ?? 0
+    return {
+      atMs,
+      kind: 'program',
+      summary: `ch${ch ?? '?'} PC ${wire + 1} (wire ${wire})`
+    }
+  }
+  if (type === 'sysex') {
+    const bytes = msg.bytes ?? []
+    const mmc = parseMmcTransportCommand(bytes)
+    if (mmc) {
+      return {
+        atMs,
+        kind: 'mmc',
+        summary: `MMC ${mmc}${formatSysexPreview(bytes)}`
+      }
+    }
+    return { atMs, kind: 'sysex', summary: `sysex${formatSysexPreview(bytes)}` }
+  }
+  return { atMs, kind: 'other', summary: type }
+}
+
+function formatSysexPreview(bytes: number[]): string {
+  if (!bytes.length) return ''
+  const head = bytes
+    .slice(0, 8)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join(' ')
+  return bytes.length > 8 ? ` [${head} …]` : ` [${head}]`
+}
+
 export class MidiService {
   private input: easymidi.Input | null = null
   private output: easymidi.Output | null = null
@@ -50,6 +131,8 @@ export class MidiService {
   private pcChannel0: number = 0
   private handlers: MidiInputHandlers | null = null
   private onDisconnect: MidiDisconnectHandler | null = null
+  /** Throttle MIDI clock / active sensing in the spy so Play/Stop stays visible. */
+  private lastClockSpyAtMs = 0
 
   setDisconnectHandler(handler: MidiDisconnectHandler | null): void {
     this.onDisconnect = handler
@@ -71,6 +154,7 @@ export class MidiService {
   openInput(name: string | null, handlers: MidiInputHandlers): boolean {
     this.closeInput()
     this.handlers = handlers
+    this.lastClockSpyAtMs = 0
     const onPc = handlers.onProgramChange
     if (!name) {
       console.warn('[ViewerOne] MIDI: no Cubase input port detected — check loopMIDI is running with the expected cable names.')
@@ -105,24 +189,37 @@ export class MidiService {
       const onNoteOn = handlers.onNoteOn
       if (onNoteOn) {
         this.input.on('noteon', (msg) => {
-          if (msg.velocity <= 0) return
+          // Velocity 0 is a note-off alias — still forward so transport can treat it as Stop if mapped.
           safeCall('noteon', () => {
             onNoteOn({ channel: msg.channel, note: msg.note, velocity: msg.velocity })
           })
         })
       }
+      const onNoteOff = handlers.onNoteOff
+      if (onNoteOff) {
+        this.input.on('noteoff', (msg) => {
+          safeCall('noteoff', () => {
+            onNoteOff({ channel: msg.channel, note: msg.note, velocity: msg.velocity })
+          })
+        })
+      }
+      // easymidi exposes realtime via typed events (see INPUT_EXTENDED_TYPES 0xFA/FB/FC).
+      // Subscribe explicitly — do not rely on a raw-byte path.
       if (handlers.onSystemRealtimeStart) {
-        this.input.on('start', () =>
+        this.input.on('start', () => {
+          console.log('[ViewerOne] MIDI: <<< realtime START (0xFA)')
           safeCall('start', () => handlers.onSystemRealtimeStart?.())
-        )
-        this.input.on('continue', () =>
+        })
+        this.input.on('continue', () => {
+          console.log('[ViewerOne] MIDI: <<< realtime CONTINUE (0xFB)')
           safeCall('continue', () => handlers.onSystemRealtimeStart?.())
-        )
+        })
       }
       if (handlers.onSystemRealtimeStop) {
-        this.input.on('stop', () =>
+        this.input.on('stop', () => {
+          console.log('[ViewerOne] MIDI: <<< realtime STOP (0xFC)')
           safeCall('stop', () => handlers.onSystemRealtimeStop?.())
-        )
+        })
       }
       if (handlers.onSysexBytes) {
         this.input.on('sysex', (msg) => {
@@ -131,9 +228,25 @@ export class MidiService {
           safeCall('sysex', () => handlers.onSysexBytes?.(bytes))
         })
       }
+      // Unified spy on easymidi's "message" event (fires for every parsed inbound msg).
+      if (handlers.onSpyEvent) {
+        this.input.on('message', (msg: EasymidiMsg) => {
+          safeCall('spy', () => {
+            const event = formatMidiSpyEvent(msg)
+            if (!event) return
+            if (event.kind === 'clock') {
+              const now = event.atMs
+              if (now - this.lastClockSpyAtMs < 2000) return
+              this.lastClockSpyAtMs = now
+              event.summary = 'MIDI clock (throttled)'
+            }
+            handlers.onSpyEvent?.(event)
+          })
+        })
+      }
       const open = this.input.isPortOpen()
       console.log(
-        `[ViewerOne] MIDI: listening on "${name}" for Program Change on ANY channel (outgoing PC uses ch ${this.pcChannel0 + 1}) — isPortOpen=${open}`
+        `[ViewerOne] MIDI: listening on "${name}" for PC (any ch), notes/CC, MMC, realtime start/stop — isPortOpen=${open}`
       )
       return open
     } catch (err) {
@@ -378,11 +491,16 @@ export class MidiService {
   }
 }
 
-/** Parse MMC Universal Real Time SysEx Play/Stop. */
+/**
+ * Parse MMC Universal Real Time SysEx Play/Stop.
+ * Accepts any device ID; Play (02), Deferred Play (03), Stop (01), Pause (09).
+ */
 export function parseMmcTransportCommand(bytes: number[]): 'play' | 'stop' | null {
   if (bytes.length < 6 || bytes[0] !== 0xf0 || bytes[bytes.length - 1] !== 0xf7) return null
-  if (bytes[1] !== 0x7f || bytes[2] !== 0x7f || bytes[3] !== 0x06) return null
-  if (bytes[4] === 0x02) return 'play'
-  if (bytes[4] === 0x01) return 'stop'
+  // Universal Real Time (0x7F), device id any, sub-id MMC (0x06)
+  if (bytes[1] !== 0x7f || bytes[3] !== 0x06) return null
+  const cmd = bytes[4]
+  if (cmd === 0x02 || cmd === 0x03) return 'play'
+  if (cmd === 0x01 || cmd === 0x09) return 'stop'
   return null
 }

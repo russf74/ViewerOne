@@ -31,9 +31,7 @@ import { ensureLoopMidiRunning } from './loopMidi.js'
 import { detectCubasePorts, detectMixerPorts } from '../shared/midiAutoDetect.js'
 import {
   CUBASE_PC_CHANNEL,
-  CUBASE_TRANSPORT_CHANNEL,
-  CUBASE_TRANSPORT_START_NOTE,
-  CUBASE_TRANSPORT_STOP_NOTE,
+  CUBASE_MIDI_SPY_LIMIT,
   CUBASE_MUTE_CHANNEL,
   CUBASE_MUTE_CC,
   MIXER_MUTE_CHANNEL,
@@ -53,8 +51,10 @@ import type {
   AppState,
   ArrangerScanState,
   Esp32DisplayStatus,
+  MidiSpyEvent,
   PublicState,
-  SetlistItem
+  SetlistItem,
+  TransportMidiMapping
 } from '../shared/types.js'
 import {
   formatSetlistSeconds,
@@ -183,6 +183,11 @@ let countdownTimer: ReturnType<typeof setInterval> | null = null
 /** Cubase transport latch — Start/Stop even when no song is selected for countdown. */
 let transportPlaying = false
 let lastTransportEvent: { action: 'start' | 'stop'; source: string; at: number } | null = null
+/** Recent CubaseToViewerOne inbound messages for the Live status MIDI spy. */
+let cubaseSpy: MidiSpyEvent[] = []
+/** Suggestion when Play is heard on a mismatched note/CC/channel (or missing entirely). */
+let transportHint: string | null = null
+let realtimeTransportSeen = false
 
 /** Mirrors ESP LED pattern for the desktop preview (synced via boot / led serial events / MIDI LED PCs). */
 let ledPattern = 'knight_rider'
@@ -281,6 +286,14 @@ function handleTransportStart(source: string): void {
   const now = Date.now()
   if (isDuplicateTransportEvent('start', source, now)) return
   transportPlaying = true
+  if (source === 'realtime') {
+    realtimeTransportSeen = true
+    transportHint = 'Using MIDI realtime Start/Stop (0xFA/0xFC) — no Generic Remote notes needed.'
+  } else if (source === 'MMC') {
+    transportHint = 'Using MMC Play/Stop — no Generic Remote notes needed.'
+  } else {
+    transportHint = null
+  }
   const st = getState(store)
   if (countdownSongId !== st.currentSongId) resetCountdownForSong(st.currentSongId)
   if (countdownRunning || countdownRemainingMs <= 0) {
@@ -300,6 +313,14 @@ function handleTransportStop(source: string): void {
   const now = Date.now()
   if (isDuplicateTransportEvent('stop', source, now)) return
   transportPlaying = false
+  if (source === 'realtime') {
+    realtimeTransportSeen = true
+    if (!transportHint) {
+      transportHint = 'Using MIDI realtime Start/Stop (0xFA/0xFC) — no Generic Remote notes needed.'
+    }
+  } else if (source === 'MMC' && !transportHint) {
+    transportHint = 'Using MMC Play/Stop — no Generic Remote notes needed.'
+  }
   countdownRemainingMs = countdownRemainingNowMs(now)
   countdownRunning = false
   countdownStartedAtMs = null
@@ -307,6 +328,60 @@ function handleTransportStop(source: string): void {
     `[ViewerOne] MIDI: transport Stop/Pause (${source}) — playing=${transportPlaying} froze ${countdownSnapshot().display || 'unknown'}`
   )
   broadcastState()
+}
+
+function pushCubaseSpy(event: MidiSpyEvent): void {
+  cubaseSpy = [...cubaseSpy, event].slice(-CUBASE_MIDI_SPY_LIMIT)
+  // UI-only — do not push ESP / mute side effects for every MIDI clock or note.
+  broadcastUiState()
+}
+
+function channelMatchesTransport(msgChannel0: number, mapping: TransportMidiMapping): boolean {
+  if (mapping.channel === 0) return true
+  return msgChannel0 === mapping.channel - 1
+}
+
+/** Map configured note/CC Start/Stop; also hint when the number matches on the wrong channel. */
+function tryMappedTransport(
+  kind: 'note' | 'cc',
+  msgChannel0: number,
+  number: number,
+  value: number
+): void {
+  const mapping = getState(store).transportMidi
+  if (mapping.mode !== kind) {
+    // Still hint if numbers match the configured Start/Stop while mode differs.
+    if (
+      (number === mapping.startNumber || number === mapping.stopNumber) &&
+      value > 0 &&
+      !realtimeTransportSeen
+    ) {
+      transportHint =
+        `Saw ${kind} ${number} on ch ${msgChannel0 + 1}, but transport mode is set to ${mapping.mode}. ` +
+        `Switch Transport MIDI mode to ${kind} in Detail, or route MIDI Clock/MMC to CubaseToViewerOne.`
+      broadcastUiState()
+    }
+    return
+  }
+  const isStart = number === mapping.startNumber
+  const isStop = number === mapping.stopNumber
+  if (!isStart && !isStop) return
+  // CC: ignore releases (0). Note: velocity 0 = note-off alias — ignore for Start, allow for Stop.
+  if (kind === 'cc' && value <= 0) return
+  if (kind === 'note' && isStart && value <= 0) return
+  if (!channelMatchesTransport(msgChannel0, mapping)) {
+    const want = mapping.channel === 0 ? 'any' : String(mapping.channel)
+    transportHint =
+      `Saw transport ${kind} ${number} on ch ${msgChannel0 + 1}, but settings expect ch ${want}. ` +
+      `Set Transport channel to ${msgChannel0 + 1} (or Any) in Detail.`
+    console.log(
+      `[ViewerOne] MIDI: transport ${kind} ${number} on ch ${msgChannel0 + 1} ignored — need ch ${want}`
+    )
+    broadcastUiState()
+    return
+  }
+  if (isStart) handleTransportStart(kind)
+  else handleTransportStop(kind)
 }
 
 function startCountdownTicker(): void {
@@ -375,7 +450,9 @@ function buildPublicState(): PublicState {
       cubaseLastSentCc,
       cubaseLastPc,
       cubaseLastPcChannel,
-      cubaseLastPcAgoMs: cubaseLastPcAtMs !== null ? Date.now() - cubaseLastPcAtMs : null
+      cubaseLastPcAgoMs: cubaseLastPcAtMs !== null ? Date.now() - cubaseLastPcAtMs : null,
+      cubaseSpy,
+      transportHint
     }
   }
 }
@@ -642,7 +719,14 @@ function connectMidi(): void {
   cubaseLastPc = null
   cubaseLastPcChannel = null
   cubaseLastPcAtMs = null
+  cubaseSpy = []
+  // Keep transportHint / realtimeTransportSeen across reconnect so auto-detect stays visible.
   midi.setProgramChangeChannel(CUBASE_PC_CHANNEL)
+  const transportMap = getState(store).transportMidi
+  console.log(
+    `[ViewerOne] MIDI: transport map mode=${transportMap.mode} ch=${transportMap.channel || 'any'} ` +
+      `start=${transportMap.startNumber} stop=${transportMap.stopNumber} (+ realtime + MMC)`
+  )
   cubaseInputOpen = midi.openInput(cubase.input, {
     onProgramChange: (wireProgram, channel0) => {
       // Surface every incoming PC in the UI (any channel) so a dead Cubase link is obvious.
@@ -700,6 +784,7 @@ function connectMidi(): void {
       }
     },
     onControlChange: (msg) => {
+      tryMappedTransport('cc', msg.channel, msg.controller, msg.value)
       if (msg.channel !== cubaseMuteCh0 || msg.controller !== CUBASE_MUTE_CC) return
       if (Date.now() - muteCcSentAtMs < 90) return
       const muted = ccValueToFxMuted(msg.value)
@@ -707,17 +792,15 @@ function connectMidi(): void {
       applyFxMuted(muted, { sendToCubase: false, sendToMixer: false })
     },
     onNoteOn: (msg) => {
-      const isStart = msg.note === CUBASE_TRANSPORT_START_NOTE
-      const isStop = msg.note === CUBASE_TRANSPORT_STOP_NOTE
-      if (!isStart && !isStop) return
-      if (msg.channel !== CUBASE_TRANSPORT_CHANNEL - 1) {
-        console.log(
-          `[ViewerOne] MIDI: transport note ${msg.note} on ch ${msg.channel + 1} ignored — need ch ${CUBASE_TRANSPORT_CHANNEL} (CubaseToViewerOne Generic Remote)`
-        )
-        return
+      tryMappedTransport('note', msg.channel, msg.note, msg.velocity)
+    },
+    onNoteOff: (msg) => {
+      // Some Generic Remote maps fire Stop as note-off of the Stop note.
+      const mapping = getState(store).transportMidi
+      if (mapping.mode !== 'note') return
+      if (msg.note === mapping.stopNumber) {
+        tryMappedTransport('note', msg.channel, msg.note, 1)
       }
-      if (isStart) handleTransportStart('note')
-      else handleTransportStop('note')
     },
     onSystemRealtimeStart: () => handleTransportStart('realtime'),
     onSystemRealtimeStop: () => handleTransportStop('realtime'),
@@ -725,7 +808,8 @@ function connectMidi(): void {
       const command = parseMmcTransportCommand(bytes)
       if (command === 'play') handleTransportStart('MMC')
       else if (command === 'stop') handleTransportStop('MMC')
-    }
+    },
+    onSpyEvent: (event) => pushCubaseSpy(event)
   })
   cubaseOutputOpen = midi.openOutput(cubase.output)
 
@@ -1221,6 +1305,25 @@ function registerIpc(): void {
         prevNumber: Math.max(0, Math.min(127, Math.round(Number(raw.prevNumber) || 0))),
         nextNumber: Math.max(0, Math.min(127, Math.round(Number(raw.nextNumber) || 0)))
       }
+    }
+    if (patch.transportMidi && typeof patch.transportMidi === 'object') {
+      const raw = patch.transportMidi
+      const channelRaw = Number(raw.channel)
+      const channel = Number.isFinite(channelRaw)
+        ? Math.max(0, Math.min(16, Math.round(channelRaw)))
+        : st.transportMidi.channel
+      allowed.transportMidi = {
+        mode: raw.mode === 'cc' ? 'cc' : 'note',
+        channel,
+        startNumber: Math.max(0, Math.min(127, Math.round(Number(raw.startNumber ?? st.transportMidi.startNumber)))),
+        stopNumber: Math.max(0, Math.min(127, Math.round(Number(raw.stopNumber ?? st.transportMidi.stopNumber))))
+      }
+      transportHint = null
+      console.log(
+        `[ViewerOne] MIDI: transport map updated mode=${allowed.transportMidi.mode} ` +
+          `ch=${allowed.transportMidi.channel || 'any'} start=${allowed.transportMidi.startNumber} ` +
+          `stop=${allowed.transportMidi.stopNumber}`
+      )
     }
 
     let nextExternal =

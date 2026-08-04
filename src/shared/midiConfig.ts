@@ -47,12 +47,24 @@
 export const CUBASE_PC_CHANNEL = 2
 
 /**
- * Cubase Generic Remote transport pulses retained from ViewerOne's original transport mapping.
- * Realtime MIDI Start/Continue/Stop and MMC Play/Stop are accepted as compatible alternatives.
+ * Default Cubase Generic Remote transport pulses (original ViewerOne mapping).
+ * Overridable at runtime via AppState.transportMidi.
+ *
+ * Also accepted (always on, no settings needed):
+ *  - MIDI realtime Start/Continue/Stop (0xFA / 0xFB / 0xFC)
+ *  - MMC Play / Deferred Play / Stop / Pause
+ *
+ * Important: song Program Changes usually come from a Cubase MIDI track routed to
+ * CubaseToViewerOne. Transport realtime/MMC is configured separately in Cubase
+ * (Project Synchronization Setup → MIDI Clock / MMC destinations) OR via Generic
+ * Remote notes/CCs on that same port. If song PCs work but Play never shows in the
+ * MIDI spy, Cubase is not sending transport on CubaseToViewerOne yet.
  */
 export const CUBASE_TRANSPORT_CHANNEL = 16
 export const CUBASE_TRANSPORT_START_NOTE = 60
 export const CUBASE_TRANSPORT_STOP_NOTE = 61
+/** How many recent Cubase→ViewerOne messages the Live status spy keeps. */
+export const CUBASE_MIDI_SPY_LIMIT = 14
 
 /**
  * Highest setlist program (1-based Cubase/UI PC). Songs use 1…{@link MIDI_PC_SONG_MAX};

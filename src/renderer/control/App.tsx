@@ -112,6 +112,20 @@ function transportAgoText(agoMs: number | null | undefined): string {
   return `${Math.round(agoMs / 1000)}s ago`
 }
 
+function spyAgeText(atMs: number, now: number): string {
+  const ago = now - atMs
+  if (ago < 1500) return 'now'
+  if (ago < 60_000) return `${Math.round(ago / 1000)}s`
+  return `${Math.round(ago / 60_000)}m`
+}
+
+function transportMapSummary(state: PublicState): string {
+  const t = state.transportMidi
+  const ch = t.channel === 0 ? 'any ch' : `ch ${t.channel}`
+  const unit = t.mode === 'cc' ? 'CC' : 'note'
+  return `${ch} ${unit} ${t.startNumber} Start / ${t.stopNumber} Stop · + MMC · + realtime`
+}
+
 function mixerStatusLine(state: PublicState): StatusLine {
   const { midi } = state
   if (!midi.mixerInputName && !midi.mixerOutputName) {
@@ -265,14 +279,20 @@ export function App() {
     [state?.setlist]
   )
 
-  // Keep “Ns ago” fresh for last Cubase PC / transport without waiting for another MIDI event.
+  // Keep “Ns ago” / spy ages fresh without waiting for another MIDI event.
   useEffect(() => {
-    if (state?.midi.cubaseLastPc == null && state?.transport.lastAtMs == null) return
+    if (
+      state?.midi.cubaseLastPc == null &&
+      state?.transport.lastAtMs == null &&
+      !(state?.midi.cubaseSpy?.length)
+    ) {
+      return
+    }
     const id = window.setInterval(() => {
       void window.viewer.getState().then(setState)
     }, 1000)
     return () => window.clearInterval(id)
-  }, [state?.midi.cubaseLastPc, state?.transport.lastAtMs])
+  }, [state?.midi.cubaseLastPc, state?.transport.lastAtMs, state?.midi.cubaseSpy?.length])
 
   if (!bridgeOk) {
     return (
@@ -401,8 +421,39 @@ export function App() {
                 </p>
                 <p className="midi-reconnect-help">
                   MIDI in <strong>{state.midi.cubaseInputName ?? 'CubaseToViewerOne'}</strong>
-                  {' · '}ch 16 note 60 Start / 61 Stop (also MMC + MIDI realtime)
+                  {' · '}
+                  {transportMapSummary(state)}
                 </p>
+                {state.midi.transportHint ? (
+                  <p className="transport-hint" role="status">
+                    {state.midi.transportHint}
+                  </p>
+                ) : null}
+                <div className="midi-spy" aria-label="Incoming Cubase MIDI activity">
+                  <div className="midi-spy-heading">
+                    <span>MIDI spy</span>
+                    <span className="midi-spy-sub">
+                      Press Play in Cubase — last {state.midi.cubaseSpy.length || 0} on{' '}
+                      {state.midi.cubaseInputName ?? 'CubaseToViewerOne'}
+                    </span>
+                  </div>
+                  {state.midi.cubaseSpy.length === 0 ? (
+                    <p className="midi-spy-empty">
+                      No messages yet. Song PCs should appear here; if Play adds nothing, Cubase is
+                      not sending transport on this port (route Clock/MMC/Generic Remote to it).
+                    </p>
+                  ) : (
+                    <ul className="midi-spy-list">
+                      {[...state.midi.cubaseSpy].reverse().map((ev, i) => (
+                        <li key={`${ev.atMs}-${ev.kind}-${i}`} className={`midi-spy-item midi-spy-item--${ev.kind}`}>
+                          <span className="midi-spy-age">{spyAgeText(ev.atMs, Date.now())}</span>
+                          <span className="midi-spy-kind">{ev.kind}</span>
+                          <span className="midi-spy-summary">{ev.summary}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </div>
               <div className="midi-feedback-slot">
                 {midiFeedback ? (
@@ -417,6 +468,96 @@ export function App() {
               </div>
 
               {detailMode ? (
+                <>
+                <section className="detail-section" aria-labelledby="transport-mapping-heading">
+                  <h3 id="transport-mapping-heading">Transport MIDI mapping</h3>
+                  <p className="midi-reconnect-help">
+                    Defaults are ch16 note 60/61. MIDI realtime Start/Stop and MMC are always
+                    accepted. Match whatever the MIDI spy shows when you press Play.
+                  </p>
+                  <div className="settings-fields settings-fields--midi">
+                    <div className="field">
+                      <label htmlFor="transport-mode">Message</label>
+                      <select
+                        id="transport-mode"
+                        value={state.transportMidi.mode}
+                        onChange={(e) =>
+                          void patchSettings({
+                            transportMidi: {
+                              ...state.transportMidi,
+                              mode: e.target.value === 'cc' ? 'cc' : 'note'
+                            }
+                          })
+                        }
+                      >
+                        <option value="note">Note On</option>
+                        <option value="cc">Control Change</option>
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label htmlFor="transport-channel">Channel</label>
+                      <select
+                        id="transport-channel"
+                        value={state.transportMidi.channel}
+                        onChange={(e) =>
+                          void patchSettings({
+                            transportMidi: {
+                              ...state.transportMidi,
+                              channel: Number(e.target.value)
+                            }
+                          })
+                        }
+                      >
+                        <option value={0}>Any</option>
+                        {Array.from({ length: 16 }, (_, i) => i + 1).map((ch) => (
+                          <option key={ch} value={ch}>
+                            {ch}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label htmlFor="transport-start">
+                        Start {state.transportMidi.mode === 'note' ? 'note' : 'CC'}
+                      </label>
+                      <input
+                        id="transport-start"
+                        type="number"
+                        min={0}
+                        max={127}
+                        value={state.transportMidi.startNumber}
+                        onChange={(e) =>
+                          void patchSettings({
+                            transportMidi: {
+                              ...state.transportMidi,
+                              startNumber: Number(e.target.value)
+                            }
+                          })
+                        }
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="transport-stop">
+                        Stop {state.transportMidi.mode === 'note' ? 'note' : 'CC'}
+                      </label>
+                      <input
+                        id="transport-stop"
+                        type="number"
+                        min={0}
+                        max={127}
+                        value={state.transportMidi.stopNumber}
+                        onChange={(e) =>
+                          void patchSettings({
+                            transportMidi: {
+                              ...state.transportMidi,
+                              stopNumber: Number(e.target.value)
+                            }
+                          })
+                        }
+                      />
+                    </div>
+                  </div>
+                </section>
                 <section className="detail-section" aria-labelledby="arranger-mapping-heading">
                   <h3 id="arranger-mapping-heading">Arranger MIDI mapping</h3>
                 <div className="settings-fields settings-fields--midi">
@@ -489,6 +630,7 @@ export function App() {
                   </div>
                 </div>
                 </section>
+                </>
               ) : null}
             </div>
 
