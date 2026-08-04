@@ -8,13 +8,32 @@ import {
   type DragEndEvent
 } from '@dnd-kit/core'
 import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import type { AppState, PublicState, SetlistItem } from '../../shared/types'
+import type { AppState, MidiSpyEvent, MidiSpyRole, PublicState, SetlistItem } from '../../shared/types'
 import { LED_USB_BRIGHTNESS_CAP } from '../../shared/ledPatterns'
 import { calculateSetlistTiming, formatSetlistSeconds } from '../../shared/setlistTiming'
 import { SortableRow } from './SortableRow'
 import { Esp32Preview } from './Esp32Preview'
 
 type StatusLine = { text: string; tone: 'ok' | 'warn' | 'error' }
+type SpyFilter = 'all' | 'transport' | 'song' | 'mute'
+
+const SPY_FILTERS: { id: SpyFilter; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'transport', label: 'Transport only' },
+  { id: 'song', label: 'Song' },
+  { id: 'mute', label: 'Mute' }
+]
+
+function spyRoleMatchesFilter(role: MidiSpyRole | undefined, filter: SpyFilter): boolean {
+  if (filter === 'all') return true
+  if (filter === 'transport') return role === 'TRANSPORT'
+  if (filter === 'song') return role === 'SONG'
+  return role === 'MUTE'
+}
+
+function spyEventRole(ev: MidiSpyEvent): MidiSpyRole {
+  return ev.role ?? 'OTHER'
+}
 
 const BTN_FLASH_MS = 450
 
@@ -158,6 +177,7 @@ function mixerStatusLine(state: PublicState): StatusLine {
 export function App() {
   const [state, setState] = useState<PublicState | null>(null)
   const [detailMode, setDetailMode] = useState(false)
+  const [spyFilter, setSpyFilter] = useState<SpyFilter>('all')
   const [midiFeedback, setMidiFeedback] = useState<StatusLine | null>(null)
   const midiFeedbackTimer = useRef<number | null>(null)
   const bridgeOk = typeof window !== 'undefined' && typeof window.viewer !== 'undefined'
@@ -278,6 +298,10 @@ export function App() {
     () => calculateSetlistTiming(state?.setlist ?? []),
     [state?.setlist]
   )
+  const filteredSpy = useMemo(() => {
+    const list = state?.midi.cubaseSpy ?? []
+    return list.filter((ev) => spyRoleMatchesFilter(spyEventRole(ev), spyFilter))
+  }, [state?.midi.cubaseSpy, spyFilter])
 
   // Keep “Ns ago” / spy ages fresh without waiting for another MIDI event.
   useEffect(() => {
@@ -433,24 +457,54 @@ export function App() {
                   <div className="midi-spy-heading">
                     <span>MIDI spy</span>
                     <span className="midi-spy-sub">
-                      Press Play in Cubase — last {state.midi.cubaseSpy.length || 0} on{' '}
+                      {state.midi.cubaseSpy.length || 0} on{' '}
                       {state.midi.cubaseInputName ?? 'CubaseToViewerOne'}
                     </span>
                   </div>
+                  <p className="midi-spy-help">
+                    Press Play/Stop in Cubase — look for lines tagged TRANSPORT. Song PCs and mute
+                    CCs are normal and ignored for countdown.
+                  </p>
+                  <div className="midi-spy-filters" role="toolbar" aria-label="MIDI spy filter">
+                    {SPY_FILTERS.map((f) => (
+                      <button
+                        key={f.id}
+                        type="button"
+                        className={`midi-spy-filter${spyFilter === f.id ? ' midi-spy-filter--active' : ''}`}
+                        aria-pressed={spyFilter === f.id}
+                        onClick={() => setSpyFilter(f.id)}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
                   {state.midi.cubaseSpy.length === 0 ? (
                     <p className="midi-spy-empty">
-                      No messages yet. Song PCs should appear here; if Play adds nothing, Cubase is
-                      not sending transport on this port (route Clock/MMC/Generic Remote to it).
+                      No messages yet. If Play adds nothing tagged TRANSPORT, route Clock/MMC/Generic
+                      Remote to this port.
+                    </p>
+                  ) : filteredSpy.length === 0 ? (
+                    <p className="midi-spy-empty">
+                      No {spyFilter === 'transport' ? 'TRANSPORT' : spyFilter} messages in the recent
+                      list — switch to All or press Play/Stop.
                     </p>
                   ) : (
                     <ul className="midi-spy-list">
-                      {[...state.midi.cubaseSpy].reverse().map((ev, i) => (
-                        <li key={`${ev.atMs}-${ev.kind}-${i}`} className={`midi-spy-item midi-spy-item--${ev.kind}`}>
-                          <span className="midi-spy-age">{spyAgeText(ev.atMs, Date.now())}</span>
-                          <span className="midi-spy-kind">{ev.kind}</span>
-                          <span className="midi-spy-summary">{ev.summary}</span>
-                        </li>
-                      ))}
+                      {[...filteredSpy].reverse().map((ev, i) => {
+                        const role = spyEventRole(ev)
+                        return (
+                          <li
+                            key={`${ev.atMs}-${ev.kind}-${role}-${i}`}
+                            className={`midi-spy-item midi-spy-item--${ev.kind} midi-spy-item--role-${role.toLowerCase()}`}
+                          >
+                            <span className="midi-spy-age">{spyAgeText(ev.atMs, Date.now())}</span>
+                            <span className={`midi-spy-role midi-spy-role--${role.toLowerCase()}`}>
+                              {role}
+                            </span>
+                            <span className="midi-spy-summary">{ev.summary}</span>
+                          </li>
+                        )
+                      })}
                     </ul>
                   )}
                 </div>

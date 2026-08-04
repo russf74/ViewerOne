@@ -809,7 +809,8 @@ function connectMidi(): void {
       if (command === 'play') handleTransportStart('MMC')
       else if (command === 'stop') handleTransportStop('MMC')
     },
-    onSpyEvent: (event) => pushCubaseSpy(event)
+    onSpyEvent: (event) => pushCubaseSpy(event),
+    getSpyContext: () => ({ transportMidi: getState(store).transportMidi })
   })
   cubaseOutputOpen = midi.openOutput(cubase.output)
 

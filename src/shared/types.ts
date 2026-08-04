@@ -73,6 +73,9 @@ export type TransportMidiMapping = {
   stopNumber: number
 }
 
+/** What this Cubase→ViewerOne message means for Live status / countdown. */
+export type MidiSpyRole = 'SONG' | 'MUTE' | 'TRANSPORT' | 'OTHER'
+
 /** Compact line for the Cubase→ViewerOne MIDI activity spy. */
 export type MidiSpyEvent = {
   atMs: number
@@ -88,6 +91,8 @@ export type MidiSpyEvent = {
     | 'stop'
     | 'clock'
     | 'other'
+  /** Role tag so Play/Stop stands out from song PCs and mute CCs. */
+  role: MidiSpyRole
   /** Short human label, e.g. "ch16 note 60 vel 127". */
   summary: string
 }

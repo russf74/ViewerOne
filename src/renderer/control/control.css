@@ -321,7 +321,7 @@ body {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 6px 10px;
-  margin-bottom: 5px;
+  margin-bottom: 3px;
   color: var(--muted);
   font-size: 0.64rem;
   font-weight: 650;
@@ -334,6 +334,45 @@ body {
   letter-spacing: 0;
   text-transform: none;
   color: #6f7b8c;
+}
+
+.midi-spy-help {
+  margin: 0 0 5px;
+  color: #8fa0b5;
+  font-size: 0.66rem;
+  line-height: 1.35;
+}
+
+.midi-spy-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 5px;
+}
+
+.midi-spy-filter {
+  margin: 0;
+  padding: 2px 7px;
+  border: 1px solid #303846;
+  border-radius: 4px;
+  background: #161b22;
+  color: #8fa0b5;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  line-height: 1.35;
+}
+
+.midi-spy-filter:hover {
+  border-color: #455064;
+  color: #c5d0de;
+}
+
+.midi-spy-filter--active {
+  border-color: #4f8f6a;
+  background: rgba(118, 212, 146, 0.12);
+  color: #9ee0b2;
 }
 
 .midi-spy-empty {
@@ -354,7 +393,7 @@ body {
 
 .midi-spy-item {
   display: grid;
-  grid-template-columns: 2.2rem 4.4rem 1fr;
+  grid-template-columns: 2.2rem 5.6rem 1fr;
   gap: 6px;
   padding: 2px 0;
   border-bottom: 1px solid #1a2029;
@@ -371,23 +410,53 @@ body {
   color: #6f7b8c;
 }
 
-.midi-spy-kind {
+.midi-spy-role {
+  font-weight: 700;
+  letter-spacing: 0.04em;
   color: #8fa0b5;
-  font-weight: 650;
 }
 
-.midi-spy-item--start .midi-spy-kind,
-.midi-spy-item--continue .midi-spy-kind,
-.midi-spy-item--mmc .midi-spy-kind {
+.midi-spy-role--song {
+  color: #7eb6ff;
+}
+
+.midi-spy-role--mute {
+  color: #c4a0e0;
+}
+
+.midi-spy-role--other {
+  color: #6f7b8c;
+  font-weight: 600;
+}
+
+.midi-spy-role--transport {
   color: #76d492;
 }
 
-.midi-spy-item--stop .midi-spy-kind {
-  color: #d8a657;
+.midi-spy-item--role-transport {
+  color: #e8f7ec;
+  font-weight: 700;
+  background: rgba(118, 212, 146, 0.1);
+  border-bottom-color: rgba(118, 212, 146, 0.22);
+  padding-left: 4px;
+  margin-left: -4px;
+  padding-right: 4px;
+  border-left: 2px solid #76d492;
 }
 
-.midi-spy-item--program .midi-spy-kind {
-  color: #7eb6ff;
+.midi-spy-item--role-transport .midi-spy-age {
+  color: #9ee0b2;
+  font-weight: 650;
+}
+
+.midi-spy-item--role-transport.midi-spy-item--stop .midi-spy-role--transport {
+  color: #e0b86a;
+}
+
+.midi-spy-item--role-transport.midi-spy-item--stop {
+  background: rgba(216, 166, 87, 0.1);
+  border-left-color: #d8a657;
+  border-bottom-color: rgba(216, 166, 87, 0.22);
 }
 
 .midi-spy-summary {

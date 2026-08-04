@@ -1,5 +1,11 @@
 import easymidi from 'easymidi'
-import type { MidiSpyEvent } from '../shared/types.js'
+import {
+  CUBASE_MUTE_CC,
+  CUBASE_MUTE_CHANNEL,
+  MIXER_MUTE_CC,
+  MIXER_MUTE_CHANNEL
+} from '../shared/midiConfig.js'
+import type { MidiSpyEvent, MidiSpyRole, TransportMidiMapping } from '../shared/types.js'
 
 export function listInputs(): string[] {
   try {
@@ -24,6 +30,11 @@ export type NoteOnHandler = (msg: { channel: number; note: number; velocity: num
 export type NoteOffHandler = (msg: { channel: number; note: number; velocity: number }) => void
 export type MidiSpyHandler = (event: MidiSpyEvent) => void
 
+/** Live context for classifying spy rows (transport map can change at runtime). */
+export type MidiSpyContext = {
+  transportMidi: TransportMidiMapping
+}
+
 export type MidiInputHandlers = {
   onProgramChange: PcHandler
   onControlChange?: CcHandler
@@ -34,6 +45,8 @@ export type MidiInputHandlers = {
   onSysexBytes?: (bytes: number[]) => void
   /** Fired for every inbound message on the Cubase input (clock throttled). */
   onSpyEvent?: MidiSpyHandler
+  /** Optional — used to tag configured Start/Stop note/CC as TRANSPORT. */
+  getSpyContext?: () => MidiSpyContext
 }
 
 /** Fired when an open output/input handle is dropped after a send/open failure. */
@@ -58,44 +71,141 @@ type EasymidiMsg = {
   bytes?: number[]
 }
 
+function isKnownMuteCc(channel0: number | undefined, controller: number | undefined): boolean {
+  if (typeof channel0 !== 'number' || typeof controller !== 'number') return false
+  if (channel0 === CUBASE_MUTE_CHANNEL - 1 && controller === CUBASE_MUTE_CC) return true
+  if (channel0 === MIXER_MUTE_CHANNEL - 1 && controller === MIXER_MUTE_CC) return true
+  return false
+}
+
+function isMappedTransportMessage(
+  kind: MidiSpyEvent['kind'],
+  msg: EasymidiMsg,
+  mapping: TransportMidiMapping | undefined
+): boolean {
+  if (!mapping) return false
+  const ch0 = typeof msg.channel === 'number' ? msg.channel : null
+  const chOk = mapping.channel === 0 || (ch0 != null && ch0 === mapping.channel - 1)
+  if (!chOk) return false
+  if (mapping.mode === 'note' && (kind === 'noteon' || kind === 'noteoff')) {
+    const note = msg.note
+    return note === mapping.startNumber || note === mapping.stopNumber
+  }
+  if (mapping.mode === 'cc' && kind === 'cc') {
+    const cc = msg.controller
+    return cc === mapping.startNumber || cc === mapping.stopNumber
+  }
+  return false
+}
+
+/** Classify a spy row so Play/Stop is obvious next to song PCs and mute CCs. */
+export function classifyMidiSpyRole(
+  kind: MidiSpyEvent['kind'],
+  msg: EasymidiMsg,
+  context?: MidiSpyContext | null
+): MidiSpyRole {
+  if (kind === 'start' || kind === 'continue' || kind === 'stop' || kind === 'mmc') {
+    return 'TRANSPORT'
+  }
+  if (kind === 'program') return 'SONG'
+  if (kind === 'cc' && isKnownMuteCc(msg.channel, msg.controller)) return 'MUTE'
+  if (isMappedTransportMessage(kind, msg, context?.transportMidi)) return 'TRANSPORT'
+  return 'OTHER'
+}
+
 /** Format one easymidi message for the Cubase MIDI spy. */
-export function formatMidiSpyEvent(msg: EasymidiMsg, atMs = Date.now()): MidiSpyEvent | null {
+export function formatMidiSpyEvent(
+  msg: EasymidiMsg,
+  atMs = Date.now(),
+  context?: MidiSpyContext | null
+): MidiSpyEvent | null {
   const type = msg._type ?? 'other'
   if (type === 'clock' || type === 'activesense') {
-    return { atMs, kind: 'clock', summary: type === 'clock' ? 'MIDI clock' : 'active sensing' }
+    return {
+      atMs,
+      kind: 'clock',
+      role: 'OTHER',
+      summary: type === 'clock' ? 'MIDI clock' : 'active sensing'
+    }
   }
-  if (type === 'start') return { atMs, kind: 'start', summary: 'realtime START (0xFA)' }
-  if (type === 'continue') return { atMs, kind: 'continue', summary: 'realtime CONTINUE (0xFB)' }
-  if (type === 'stop') return { atMs, kind: 'stop', summary: 'realtime STOP (0xFC)' }
+  if (type === 'start') {
+    return {
+      atMs,
+      kind: 'start',
+      role: 'TRANSPORT',
+      summary: 'realtime START (0xFA)'
+    }
+  }
+  if (type === 'continue') {
+    return {
+      atMs,
+      kind: 'continue',
+      role: 'TRANSPORT',
+      summary: 'realtime CONTINUE (0xFB)'
+    }
+  }
+  if (type === 'stop') {
+    return {
+      atMs,
+      kind: 'stop',
+      role: 'TRANSPORT',
+      summary: 'realtime STOP (0xFC)'
+    }
+  }
 
   const ch = typeof msg.channel === 'number' ? msg.channel + 1 : null
   if (type === 'noteon') {
+    const kind = 'noteon' as const
+    const role = classifyMidiSpyRole(kind, msg, context)
+    const mapped =
+      role === 'TRANSPORT'
+        ? msg.note === context?.transportMidi.startNumber
+          ? 'Start'
+          : 'Stop'
+        : null
     return {
       atMs,
-      kind: 'noteon',
-      summary: `ch${ch ?? '?'} note ${msg.note ?? '?'} vel ${msg.velocity ?? 0}`
+      kind,
+      role,
+      summary: mapped
+        ? `${mapped} note ch${ch ?? '?'} #${msg.note ?? '?'} vel ${msg.velocity ?? 0}`
+        : `ch${ch ?? '?'} note ${msg.note ?? '?'} vel ${msg.velocity ?? 0}`
     }
   }
   if (type === 'noteoff') {
+    const kind = 'noteoff' as const
+    const role = classifyMidiSpyRole(kind, msg, context)
     return {
       atMs,
-      kind: 'noteoff',
+      kind,
+      role,
       summary: `ch${ch ?? '?'} note ${msg.note ?? '?'} off`
     }
   }
   if (type === 'cc') {
-    return {
-      atMs,
-      kind: 'cc',
-      summary: `ch${ch ?? '?'} CC ${msg.controller ?? '?'} = ${msg.value ?? 0}`
+    const kind = 'cc' as const
+    const role = classifyMidiSpyRole(kind, msg, context)
+    let summary = `ch${ch ?? '?'} CC ${msg.controller ?? '?'} = ${msg.value ?? 0}`
+    if (role === 'MUTE') {
+      const which =
+        msg.channel === CUBASE_MUTE_CHANNEL - 1 && msg.controller === CUBASE_MUTE_CC
+          ? 'FX mute'
+          : 'mixer mute'
+      summary = `${which} ch${ch ?? '?'} CC${msg.controller ?? '?'} = ${msg.value ?? 0}`
+    } else if (role === 'TRANSPORT') {
+      const mapped =
+        msg.controller === context?.transportMidi.startNumber ? 'Start' : 'Stop'
+      summary = `${mapped} CC ch${ch ?? '?'} #${msg.controller ?? '?'} = ${msg.value ?? 0}`
     }
+    return { atMs, kind, role, summary }
   }
   if (type === 'program') {
     const wire = msg.number ?? 0
     return {
       atMs,
       kind: 'program',
-      summary: `ch${ch ?? '?'} PC ${wire + 1} (wire ${wire})`
+      role: 'SONG',
+      summary: `song PC ${wire + 1} · ch${ch ?? '?'} (wire ${wire})`
     }
   }
   if (type === 'sysex') {
@@ -105,12 +215,23 @@ export function formatMidiSpyEvent(msg: EasymidiMsg, atMs = Date.now()): MidiSpy
       return {
         atMs,
         kind: 'mmc',
+        role: 'TRANSPORT',
         summary: `MMC ${mmc}${formatSysexPreview(bytes)}`
       }
     }
-    return { atMs, kind: 'sysex', summary: `sysex${formatSysexPreview(bytes)}` }
+    return {
+      atMs,
+      kind: 'sysex',
+      role: 'OTHER',
+      summary: `sysex${formatSysexPreview(bytes)}`
+    }
   }
-  return { atMs, kind: 'other', summary: type }
+  return {
+    atMs,
+    kind: 'other',
+    role: classifyMidiSpyRole('other', msg, context),
+    summary: type
+  }
 }
 
 function formatSysexPreview(bytes: number[]): string {
@@ -232,7 +353,13 @@ export class MidiService {
       if (handlers.onSpyEvent) {
         this.input.on('message', (msg: EasymidiMsg) => {
           safeCall('spy', () => {
-            const event = formatMidiSpyEvent(msg)
+            let context: MidiSpyContext | null = null
+            try {
+              context = handlers.getSpyContext?.() ?? null
+            } catch {
+              context = null
+            }
+            const event = formatMidiSpyEvent(msg, Date.now(), context)
             if (!event) return
             if (event.kind === 'clock') {
               const now = event.atMs
