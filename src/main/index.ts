@@ -197,8 +197,16 @@ let realtimeTransportSeen = false
 
 /** MIDI clock is 24 pulses per quarter note. */
 const MIDI_CLOCK_PPQN = 24
-/** Sustained clock ticks while Stopped ⇒ Cubase is rolling even if 0xFA is late. */
-const MIDI_CLOCK_SOFT_START_TICKS = 6
+/**
+ * Soft-start after this many post-silence ticks while Stopped.
+ * 1 = first 0xF8 after silence ⇒ Playing immediately (do not wait for late 0xFA).
+ */
+const MIDI_CLOCK_SOFT_START_TICKS = 1
+/**
+ * Gap that means "clock was silent". Next tick while Stopped starts a new burst
+ * (Cubase often begins 0xF8 before a bar-quantized 0xFA).
+ */
+const MIDI_CLOCK_SILENCE_MS = 200
 /** Ignore inter-tick gaps larger than this (ms) when estimating tempo. */
 const MIDI_CLOCK_MAX_GAP_MS = 500
 /** Heavy EMA for optional BPM correction — Windows tick gaps are noisy. */
@@ -214,7 +222,7 @@ let midiClockLastTickAtMs: number | null = null
 /** Heavily smoothed tick period (ms); optional correction only — not the display driver. */
 let midiClockTickPeriodMs: number | null = null
 let midiClockTicksSincePlay = 0
-/** Counts ticks received while transport is Stopped — used for soft-start. */
+/** Counts ticks in the current post-silence burst while Stopped — used for soft-start. */
 let midiClockStoppedStreak = 0
 /** Ignore trailing clock ticks right after Stop so we don't soft-resume. */
 let midiClockSoftStartArmedAtMs = 0
@@ -226,6 +234,7 @@ let lastSongPositionMidiBeats: number | null = null
 let lastSongPositionAtMs: number | null = null
 /** Only honor SPP=0 as "rewound to start" when the pointer arrived recently. */
 const SPP_REWIND_WINDOW_MS = 600
+/** Drop trailing 0xF8 after Stop before arming soft-start on the next burst. */
 const MIDI_CLOCK_SOFT_START_GUARD_MS = 250
 
 /** Mirrors ESP LED pattern for the desktop preview (synced via boot / led serial events / MIDI LED PCs). */
@@ -514,15 +523,14 @@ function handleTransportStop(source: string): void {
 /** Lightweight 0xF8 path — soft-start + slow EMA only; display is wall-clock driven. */
 function handleMidiClockTick(): void {
   const now = Date.now()
-  if (midiClockLastTickAtMs != null) {
-    const gap = now - midiClockLastTickAtMs
-    if (gap > 0 && gap < MIDI_CLOCK_MAX_GAP_MS) {
-      // Very heavy smoothing — gap jitter must not swing countdown math.
-      midiClockTickPeriodMs =
-        midiClockTickPeriodMs == null
-          ? gap
-          : midiClockTickPeriodMs * (1 - MIDI_CLOCK_PERIOD_EMA) + gap * MIDI_CLOCK_PERIOD_EMA
-    }
+  const gap =
+    midiClockLastTickAtMs != null ? now - midiClockLastTickAtMs : Number.POSITIVE_INFINITY
+  if (midiClockLastTickAtMs != null && gap > 0 && gap < MIDI_CLOCK_MAX_GAP_MS) {
+    // Very heavy smoothing — gap jitter must not swing countdown math.
+    midiClockTickPeriodMs =
+      midiClockTickPeriodMs == null
+        ? gap
+        : midiClockTickPeriodMs * (1 - MIDI_CLOCK_PERIOD_EMA) + gap * MIDI_CLOCK_PERIOD_EMA
   }
   midiClockLastTickAtMs = now
 
@@ -532,8 +540,12 @@ function handleMidiClockTick(): void {
       midiClockStoppedStreak = 0
       return
     }
+    // Fresh burst after silence (or first tick ever) — Cubase may roll clock before 0xFA.
+    if (gap >= MIDI_CLOCK_SILENCE_MS) {
+      midiClockStoppedStreak = 0
+    }
     midiClockStoppedStreak++
-    // Cubase sometimes starts clock a beat before 0xFA — don't wait seconds for Start.
+    // Instant soft-start on first post-silence tick (same feel as Stop on 0xFC).
     if (midiClockStoppedStreak >= MIDI_CLOCK_SOFT_START_TICKS) {
       handleTransportContinue('clock')
     }
