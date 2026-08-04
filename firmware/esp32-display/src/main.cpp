@@ -1,9 +1,9 @@
 /**
  * ViewerOne — ESP32-2432S028R ILI9341 (CYD), landscape 320×240 via ROTATION in board_pins.h
  *
- * PC @ 115200 — display (unchanged):
- *   {"t":"Title","c":"1999","l":true,"m":false}
- *   c = release year. m = FX mute colours. l accepted for compatibility.
+ * PC @ 115200 — display:
+ *   {"t":"Title","c":"1999","d":"04:32","l":true,"m":false}
+ *   c = release year. d = full/remaining duration. m = FX mute colours.
  *
  * PC @ 115200 — LED strip (WS2812B on GPIO 27 / CN1):
  *   {"led":"pattern","id":0}          id 0–9 or "name":"fire"
@@ -35,7 +35,7 @@
 #include "patterns.h"
 
 /** Keep in sync with repository root `package.json` version when releasing the app. */
-static constexpr const char *VIEWERONE_FW_VERSION = "5.7.0";
+static constexpr const char *VIEWERONE_FW_VERSION = "5.10.0";
 
 /** Seconds the main loop may go without feeding the watchdog before it force-reboots the board. */
 static constexpr uint32_t WDT_TIMEOUT_S = 5;
@@ -53,6 +53,7 @@ static CRGB leds[NUM_LEDS];
 /** Cached song fields so LED pattern changes can refresh the footer without a new PC payload. */
 static char s_title[160] = "Waiting";
 static char s_year[24] = "";
+static char s_duration[16] = "";
 static bool s_muted = false;
 static bool s_showing_waiting = true;
 
@@ -200,27 +201,41 @@ static int32_t drawTextBlock(const char *text, int32_t x, int32_t y, int32_t max
   return cy;
 }
 
-static void drawSong(const char *title, const char *year, bool /*live*/, bool muted) {
+static void drawSong(const char *title, const char *year, const char *duration, bool /*live*/, bool muted) {
   const int32_t W = tft.width();
   const int32_t H = tft.height();
   const int32_t mid = H / 2;
   const uint16_t bg = muted ? C_NAVY : C_BLACK;
   const uint16_t textColor = muted ? C_YELLOW : C_LIME;
   constexpr uint8_t kTitleSize = 5;
-  constexpr uint8_t kYearSize = 7;
   constexpr int32_t kPad = 6;
 
-  strncpy(s_title, title && title[0] ? title : "—", sizeof(s_title) - 1);
-  s_title[sizeof(s_title) - 1] = '\0';
-  strncpy(s_year, year ? year : "", sizeof(s_year) - 1);
-  s_year[sizeof(s_year) - 1] = '\0';
+  if (title != s_title) {
+    strncpy(s_title, title && title[0] ? title : "—", sizeof(s_title) - 1);
+    s_title[sizeof(s_title) - 1] = '\0';
+  }
+  if (year != s_year) {
+    strncpy(s_year, year ? year : "", sizeof(s_year) - 1);
+    s_year[sizeof(s_year) - 1] = '\0';
+  }
+  if (duration != s_duration) {
+    strncpy(s_duration, duration ? duration : "", sizeof(s_duration) - 1);
+    s_duration[sizeof(s_duration) - 1] = '\0';
+  }
   s_muted = muted;
   s_showing_waiting = false;
 
   tft.fillScreen(bg);
 
   drawTextBlock(s_title, kPad, kPad, W - 2 * kPad, mid - kPad, textColor, kTitleSize, bg, 0);
-  drawTextBlock(s_year, kPad, mid + kPad / 2, W - 2 * kPad, H - kPad - PATTERN_FOOTER_H, textColor, kYearSize,
+  char meta[48];
+  if (s_year[0] && s_duration[0]) {
+    snprintf(meta, sizeof(meta), "%s     %s", s_year, s_duration);
+  } else {
+    snprintf(meta, sizeof(meta), "%s%s", s_year, s_duration);
+  }
+  const uint8_t metaSize = s_duration[0] ? 3 : 7;
+  drawTextBlock(meta, kPad, mid + kPad / 2, W - 2 * kPad, H - kPad - PATTERN_FOOTER_H, textColor, metaSize,
                 bg, 0);
   drawPatternFooter(bg, textColor);
 }
@@ -232,6 +247,7 @@ static void drawWaitingScreen() {
   s_muted = false;
   strncpy(s_title, "Waiting", sizeof(s_title) - 1);
   s_year[0] = '\0';
+  s_duration[0] = '\0';
 
   tft.fillScreen(bg);
   tft.setTextSize(3);
@@ -256,7 +272,7 @@ static void refreshDisplayForPatternChange() {
   if (s_showing_waiting) {
     drawWaitingScreen();
   } else {
-    drawSong(s_title, s_year, true, s_muted);
+    drawSong(s_title, s_year, s_duration, true, s_muted);
   }
 }
 
@@ -410,9 +426,10 @@ static void handleSerialLine(const String &line) {
 
   const char *t = doc["t"] | "";
   const char *c = doc["c"] | "";
+  const char *d = doc["d"] | "";
   bool l = doc["l"] | true;
   bool m = doc["m"] | false;
-  drawSong(t, c, l, m);
+  drawSong(t, c, d, l, m);
 }
 
 void setup() {

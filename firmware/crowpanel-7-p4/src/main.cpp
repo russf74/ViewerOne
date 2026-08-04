@@ -1,8 +1,8 @@
 /**
  * ViewerOne — CrowPanel Advanced 7" ESP32-P4 (EK79007 MIPI-DSI 1024×600 + GT911)
  *
- * PC @ 115200 — display (unchanged):
- *   {"t":"Title","c":"1999","l":true,"m":false,"a":false}
+ * PC @ 115200 — display:
+ *   {"t":"Title","c":"1999","d":"04:32","l":true,"m":false,"a":false}
  *
  * PC @ 115200 — LED (optional, crowpanel-7-p4-led env):
  *   {"led":"pattern","id":0} / brightness / off / status
@@ -42,7 +42,7 @@ static CRGB s_leds[NUM_LEDS];
 using namespace esp_panel::drivers;
 using namespace esp_panel::board;
 
-static constexpr const char *VIEWERONE_FW_VERSION = "5.7.6";
+static constexpr const char *VIEWERONE_FW_VERSION = "5.10.0";
 static constexpr uint32_t WDT_TIMEOUT_S = 8;
 
 static constexpr int SCREEN_W = H_size;
@@ -61,7 +61,7 @@ static constexpr int kTextBoxBotGap = 10;
 
 /** LVGL built-in Montserrat tops out at 48px; zoom (256 = 1x) matches PC preview proportions on 1024×600. */
 static constexpr uint16_t kTitleZoom = 400;  // ~75px visual
-static constexpr uint16_t kYearZoom = 460;   // ~86px visual
+static constexpr uint16_t kYearZoom = 330;   // ~62px visual; fits "YYYY     MM:SS"
 static constexpr uint16_t kIdleZoom = 400;   // ~75px visual
 
 /** Grow down/right from top-left so left-justified layout stays inside the text box. */
@@ -92,7 +92,7 @@ enum PadId : uint8_t {
 static const char *const kPadLabels[PAD_COUNT] = {"ALL", "FX", "PROMPT 1", "PROMPT 2"};
 
 static char s_title[160] = "Waiting";
-static char s_year[24] = "";
+static char s_year[48] = "";
 static bool s_fx_muted = false;
 static bool s_showing_waiting = true;
 /** ALL/FX: muted state. PROMPT 1/2: illuminated state. */
@@ -224,11 +224,16 @@ static void positionYearBelowTitle() {
   lv_obj_set_y(s_year_lbl, title_y + title_visual_h + title_visual_font_h / 2);
 }
 
-static void drawSongUi(const char *title, const char *year, bool muted) {
+static void drawSongUi(const char *title, const char *year, const char *duration, bool muted) {
   strncpy(s_title, title && title[0] ? title : "-", sizeof(s_title) - 1);
   s_title[sizeof(s_title) - 1] = '\0';
-  strncpy(s_year, year ? year : "", sizeof(s_year) - 1);
-  s_year[sizeof(s_year) - 1] = '\0';
+  const char *safe_year = year ? year : "";
+  const char *safe_duration = duration ? duration : "";
+  if (safe_year[0] && safe_duration[0]) {
+    snprintf(s_year, sizeof(s_year), "%s     %s", safe_year, safe_duration);
+  } else {
+    snprintf(s_year, sizeof(s_year), "%s%s", safe_year, safe_duration);
+  }
   s_fx_muted = muted;
   s_pad_muted[PAD_FX] = muted;
   showWaitingUi(false);
@@ -595,12 +600,13 @@ static void handleSerialLine(const String &line) {
 
   const char *t = doc["t"] | "";
   const char *c = doc["c"] | "";
+  const char *d = doc["d"] | "";
   bool m = doc["m"] | false;
   const bool has_all = !doc["a"].isNull();
   const bool all_muted = doc["a"] | false;
 
   if (lvgl_port_lock(-1)) {
-    drawSongUi(t, c, m);
+    drawSongUi(t, c, d, m);
     if (has_all) {
       s_pad_muted[PAD_ALL] = all_muted;
       refreshPadVisual(PAD_ALL);

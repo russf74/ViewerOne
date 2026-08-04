@@ -72,7 +72,7 @@ Hold **BOOT**, tap **RESET**, release **BOOT** if upload fails to enter download
 
 ## UI
 
-- **Left (~75%)**: song title + year, mute colours (muted = yellow on navy, live = lime on black), LED pattern footer, polished idle “Waiting for signal”.
+- **Left (~75%)**: song title + `YYYY     MM:SS` (full length or live remaining time), mute colours (muted = yellow on navy, live = lime on black), LED pattern footer, polished idle “Waiting for signal”.
 - **Right**: four double-height items — pressable **ALL** (Group1) and **FX** (Group6, same as CYD/main-stage touch), followed by non-clickable **PROMPT 1** and **PROMPT 2** status lights.
 - PROMPT PCs use absolute LED-style state: **120 = PROMPT 1 on**, **121 = off**, **122 = PROMPT 2 on**, **123 = off**. ViewerOne translates these to serial JSON.
 - Mute feedback is optimistic: touch-down updates and presents the local LVGL frame first, then sends the serial event to ViewerOne. The desktop echo remains authoritative for later synchronization.
@@ -82,7 +82,7 @@ Hold **BOOT**, tap **RESET**, release **BOOT** if upload fails to enter download
 PC → ESP:
 
 ```json
-{"t":"Title","c":"1999","l":true,"m":false,"a":false}
+{"t":"Title","c":"1999","d":"04:32","l":true,"m":false,"a":false}
 {"cmd":"hello"}
 {"prompt":1,"on":true}
 {"prompt":1,"on":false}
@@ -97,8 +97,8 @@ ESP → PC:
 {"evt":"mute_toggle","group":"fx"}
 {"evt":"mute_toggle","group":"all"}
 {"evt":"prompt","ok":true,"prompt":1,"on":true}
-{"evt":"boot","device":"crowpanel7","model":"Elecrow CrowPanel Advanced 7","w":1024,"h":600,"fw":"5.7.6",...}
-{"evt":"hello","device":"crowpanel7","model":"Elecrow CrowPanel Advanced 7","w":1024,"h":600,"fw":"5.7.6",...}
+{"evt":"boot","device":"crowpanel7","model":"Elecrow CrowPanel Advanced 7","w":1024,"h":600,"fw":"5.10.0",...}
+{"evt":"hello","device":"crowpanel7","model":"Elecrow CrowPanel Advanced 7","w":1024,"h":600,"fw":"5.10.0",...}
 ```
 
 Each pad press emits one event. FX/ALL include `group`; the desktop accepts grouped and legacy ungrouped

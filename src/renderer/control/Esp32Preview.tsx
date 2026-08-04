@@ -35,15 +35,17 @@ const PREVIEW_PADS = [
 /** Mirrors the full CrowPanel 1024×600 HMI: broad stage plus four stacked right pads. */
 export function Esp32Preview({ state, detailMode }: Props) {
   const payload = useMemo(
-    () => buildEsp32DisplayPayload(state),
-    [state.setlist, state.currentSongId, state.fxMuted, state.allMuted]
+    () => buildEsp32DisplayPayload(state, state.countdown.display),
+    [state.setlist, state.currentSongId, state.fxMuted, state.allMuted, state.countdown.display]
   )
 
   const fxMuted = Boolean(payload.m)
   /** Match firmware: muted = yellow on navy; unmuted = lime on black. */
   const textColor = fxMuted ? '#ffe600' : '#39ff14'
   const footerColor = state.ledPattern === 'off' || !state.esp32Enabled ? '#8b92a0' : textColor
-  const isWaiting = payload.t === ESP32_WAITING_TITLE && !payload.c
+  const isWaiting = payload.t === ESP32_WAITING_TITLE && !payload.c && !payload.d
+  const yearAndDuration =
+    payload.c && payload.d ? `${payload.c}     ${payload.d}` : payload.c || payload.d
   const patternLabel = formatLedPatternLabel(state.ledPattern)
   const selectedId = activePatternId(state.ledPattern)
   const previewDisplay = getEsp32PreviewDisplay(state.esp32Display)
@@ -136,7 +138,7 @@ export function Esp32Preview({ state, detailMode }: Props) {
                 </div>
                 <div className="esp32-sim-half esp32-sim-half--year">
                   <div className="esp32-sim-year-fill" style={{ color: textColor }}>
-                    {isWaiting && !payload.c ? '' : !payload.c.trim() ? '—' : payload.c}
+                    {isWaiting ? '' : yearAndDuration || '—'}
                   </div>
                   <div className="esp32-sim-pattern" style={{ color: footerColor }} title="Active LED pattern on strip">
                     {patternLabel}
@@ -206,7 +208,7 @@ export function Esp32Preview({ state, detailMode }: Props) {
             </div>
             <div className="esp32-sim-half esp32-sim-half--year">
               <div className="esp32-sim-year-fill" style={{ color: textColor }}>
-                {isWaiting && !payload.c ? '' : !payload.c.trim() ? '—' : payload.c}
+                {isWaiting ? '' : yearAndDuration || '—'}
               </div>
               <div className="esp32-sim-pattern" style={{ color: footerColor }} title="Active LED pattern on strip">
                 {patternLabel}

@@ -19,10 +19,15 @@ export function listOutputs(): string[] {
 type PcHandler = (program: number, channel0: number) => void
 
 export type CcHandler = (msg: { channel: number; controller: number; value: number }) => void
+export type NoteOnHandler = (msg: { channel: number; note: number; velocity: number }) => void
 
 export type MidiInputHandlers = {
   onProgramChange: PcHandler
   onControlChange?: CcHandler
+  onNoteOn?: NoteOnHandler
+  onSystemRealtimeStart?: () => void
+  onSystemRealtimeStop?: () => void
+  onSysexBytes?: (bytes: number[]) => void
 }
 
 /** Fired when an open output/input handle is dropped after a send/open failure. */
@@ -95,6 +100,35 @@ export class MidiService {
           safeCall('cc', () => {
             onCc({ channel: msg.channel, controller: msg.controller, value: msg.value })
           })
+        })
+      }
+      const onNoteOn = handlers.onNoteOn
+      if (onNoteOn) {
+        this.input.on('noteon', (msg) => {
+          if (msg.velocity <= 0) return
+          safeCall('noteon', () => {
+            onNoteOn({ channel: msg.channel, note: msg.note, velocity: msg.velocity })
+          })
+        })
+      }
+      if (handlers.onSystemRealtimeStart) {
+        this.input.on('start', () =>
+          safeCall('start', () => handlers.onSystemRealtimeStart?.())
+        )
+        this.input.on('continue', () =>
+          safeCall('continue', () => handlers.onSystemRealtimeStart?.())
+        )
+      }
+      if (handlers.onSystemRealtimeStop) {
+        this.input.on('stop', () =>
+          safeCall('stop', () => handlers.onSystemRealtimeStop?.())
+        )
+      }
+      if (handlers.onSysexBytes) {
+        this.input.on('sysex', (msg) => {
+          const bytes = msg.bytes
+          if (!bytes?.length) return
+          safeCall('sysex', () => handlers.onSysexBytes?.(bytes))
         })
       }
       const open = this.input.isPortOpen()
@@ -342,4 +376,13 @@ export class MidiService {
       this.dropCubaseOutput(err)
     }
   }
+}
+
+/** Parse MMC Universal Real Time SysEx Play/Stop. */
+export function parseMmcTransportCommand(bytes: number[]): 'play' | 'stop' | null {
+  if (bytes.length < 6 || bytes[0] !== 0xf0 || bytes[bytes.length - 1] !== 0xf7) return null
+  if (bytes[1] !== 0x7f || bytes[2] !== 0x7f || bytes[3] !== 0x06) return null
+  if (bytes[4] === 0x02) return 'play'
+  if (bytes[4] === 0x01) return 'stop'
+  return null
 }

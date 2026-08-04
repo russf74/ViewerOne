@@ -120,6 +120,13 @@ Program Change / mute CC conventions are fixed in `src/shared/midiConfig.ts` (no
 Song select uses Cubase-style PC **1–119**; PCs 120–123 are prompt indicators, and reserved
 **PC 125** = LED blackout, **PC 126** = idle dim knight rider, **PC 127** = apply current song pattern.
 
+Cubase transport uses the original Generic Remote mapping on **channel 16**: **note 60 = Start**
+and **note 61 = Stop/Pause**. ViewerOne also accepts MIDI realtime Start/Continue/Stop and MMC
+Play/Stop. A song PC loads its setlist length at full time and waits. Start runs/resumes the
+countdown, Stop freezes it, a repeated PC resets the same song, and Start received while already
+running resets to full length. The ESP receives at most one updated `MM:SS` display payload per
+second.
+
 #### Cubase Arranger controls and scan
 
 ViewerOne sends Arranger Prev/Next through the existing **`ViewerOneToCubase`** output. Defaults:

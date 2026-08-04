@@ -1120,18 +1120,19 @@ button:disabled {
   min-height: 0;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   align-self: stretch;
   width: 100%;
   box-sizing: border-box;
-  text-align: center;
+  text-align: left;
   font-weight: 700;
   line-height: 1.2;
   overflow-wrap: anywhere;
   word-break: break-word;
   overflow-y: auto;
   padding: 4px 4px 2px;
-  /* Match firmware kYearSize = 7 */
+  white-space: pre-wrap;
+  /* Large enough for the shared year + countdown metadata line. */
   font-size: clamp(16px, 34cqmin, 42px);
 }
 

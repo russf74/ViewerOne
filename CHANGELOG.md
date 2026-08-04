@@ -1,5 +1,15 @@
 # Changelog
 
+## v5.10.0
+
+- ESP display payloads now include `d` for setlist duration / live remaining time. CrowPanel and
+  CYD render `YYYY     MM:SS`, and the desktop hardware preview mirrors the same left-aligned line.
+- Restored Cubase transport input using the rig's original channel 16 notes (60 Start, 61
+  Stop/Pause), plus MIDI realtime Start/Continue/Stop and MMC Play/Stop compatibility.
+- Added a one-second remaining-time countdown sourced from the selected song length. Stop freezes,
+  Start resumes, a repeated song PC resets, and Start while already running resets. Cross-protocol
+  duplicate transport messages from one Cubase action are collapsed.
+
 ## v5.9.0
 
 - Added an editable **Song length** column immediately after Title. Durations accept `m:ss` /

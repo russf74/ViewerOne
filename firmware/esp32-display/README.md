@@ -3,7 +3,7 @@
 Firmware for the ESP32-2432S028R-style board (**Cheap Yellow Display**):
 
 - USB serial at **115200**
-- Display JSON: `{"t":"Title","c":"1999","l":true,"m":false}` (unchanged)
+- Display JSON: `{"t":"Title","c":"1999","d":"04:32","l":true,"m":false}` (`d` is full/remaining time)
 - LED JSON: `{"led":"pattern","id":0}` etc. (WS2812B)
 - Identity: boot and `{"cmd":"hello"}` reply with
   `{"evt":"hello","device":"cyd","model":"ESP32-2432S028R","w":320,"h":240,...}`

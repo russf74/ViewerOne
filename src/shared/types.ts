@@ -4,6 +4,8 @@ export type Esp32DisplayPayload = {
   t: string
   /** release year (4-digit) */
   c: string
+  /** song duration / live remaining time in mm:ss */
+  d: string
   /** live — kept for firmware compatibility; colour is mute-driven only */
   l: boolean
   /** FX mute — yellow on navy when true; green on black when false */
@@ -139,4 +141,12 @@ export type PublicState = AppState & {
   promptMidiPulseAt: number
   /** Ephemeral progress for the Cubase Arranger setlist scan. */
   arrangerScan: ArrangerScanState
+  /** Ephemeral Cubase-synced song countdown; setlist length remains the source of truth. */
+  countdown: {
+    running: boolean
+    /** Current display value (full length idle, remaining while playing/paused), or empty if unknown. */
+    display: string
+    remainingSeconds: number | null
+    totalSeconds: number | null
+  }
 }

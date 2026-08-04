@@ -47,6 +47,14 @@
 export const CUBASE_PC_CHANNEL = 2
 
 /**
+ * Cubase Generic Remote transport pulses retained from ViewerOne's original transport mapping.
+ * Realtime MIDI Start/Continue/Stop and MMC Play/Stop are accepted as compatible alternatives.
+ */
+export const CUBASE_TRANSPORT_CHANNEL = 16
+export const CUBASE_TRANSPORT_START_NOTE = 60
+export const CUBASE_TRANSPORT_STOP_NOTE = 61
+
+/**
  * Highest setlist program (1-based Cubase/UI PC). Songs use 1…{@link MIDI_PC_SONG_MAX};
  * PCs 120–127 are reserved for prompt indicators and LEDs.
  */

@@ -369,6 +369,11 @@ export function App() {
               <p className="midi-reconnect-help">
                 Cubase usually does not need restart; use Reconnect MIDI if ports were busy.
               </p>
+              <p className="midi-reconnect-help">
+                Countdown {state.countdown.running ? 'playing' : 'idle/paused'}{' '}
+                {state.countdown.display || '--:--'} · Start resumes; Stop freezes; repeated song
+                PC or Start while already playing resets.
+              </p>
               <div className="midi-feedback-slot">
                 {midiFeedback ? (
                   <p

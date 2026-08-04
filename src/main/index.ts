@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createAppStore, getState, setState, newSetlistItem } from './store.js'
-import { MidiService, listInputs, listOutputs } from './midi.js'
+import { MidiService, listInputs, listOutputs, parseMmcTransportCommand } from './midi.js'
 import {
   pushEsp32Payload,
   pushEsp32HelloRequest,
@@ -31,6 +31,9 @@ import { ensureLoopMidiRunning } from './loopMidi.js'
 import { detectCubasePorts, detectMixerPorts } from '../shared/midiAutoDetect.js'
 import {
   CUBASE_PC_CHANNEL,
+  CUBASE_TRANSPORT_CHANNEL,
+  CUBASE_TRANSPORT_START_NOTE,
+  CUBASE_TRANSPORT_STOP_NOTE,
   CUBASE_MUTE_CHANNEL,
   CUBASE_MUTE_CC,
   MIXER_MUTE_CHANNEL,
@@ -53,7 +56,11 @@ import type {
   PublicState,
   SetlistItem
 } from '../shared/types.js'
-import { normalizeSongLength } from '../shared/setlistTiming.js'
+import {
+  formatSetlistSeconds,
+  normalizeSongLength,
+  songLengthSeconds
+} from '../shared/setlistTiming.js'
 
 // Must run before any MIDI/serial traffic — EPIPE on stdout used to kill the main process mid-gig.
 installProcessGuards()
@@ -125,6 +132,7 @@ function quitViewerOne(): void {
   }
   isQuitting = true
   clearMidiReconnectTimer()
+  stopCountdownTicker()
   shutdownEsp32Serial()
   try {
     midi.closeInput()
@@ -163,6 +171,16 @@ let cubaseLastSentCc: { channel: number; controller: number; value: number } | n
 let cubaseLastPc: number | null = null
 let cubaseLastPcChannel: number | null = null
 let cubaseLastPcAtMs: number | null = null
+
+/** Ephemeral transport countdown. Song length in the persisted setlist is always authoritative. */
+let countdownSongId: string | null = null
+let countdownTotalSeconds = 0
+let countdownRemainingMs = 0
+let countdownRunning = false
+let countdownStartedAtMs: number | null = null
+let countdownLastPublishedSecond: number | null = null
+let countdownTimer: ReturnType<typeof setInterval> | null = null
+let lastTransportEvent: { action: 'start' | 'stop'; source: string; at: number } | null = null
 
 /** Mirrors ESP LED pattern for the desktop preview (synced via boot / led serial events / MIDI LED PCs). */
 let ledPattern = 'knight_rider'
@@ -206,6 +224,107 @@ let arrangerScan: ArrangerScanState = {
   message: 'Ready'
 }
 
+function countdownRemainingNowMs(now = Date.now()): number {
+  if (!countdownRunning || countdownStartedAtMs === null) return countdownRemainingMs
+  return Math.max(0, countdownRemainingMs - (now - countdownStartedAtMs))
+}
+
+function countdownSnapshot(): PublicState['countdown'] {
+  const st = getState(store)
+  const row = st.currentSongId ? st.setlist.find((item) => item.id === st.currentSongId) : null
+  const rowTotal = row ? songLengthSeconds(row.length) : 0
+  const ownsCurrentSong = Boolean(row && countdownSongId === row.id)
+  const totalSeconds = ownsCurrentSong ? countdownTotalSeconds : rowTotal
+  const remainingSeconds =
+    totalSeconds > 0
+      ? ownsCurrentSong
+        ? Math.max(0, Math.ceil(countdownRemainingNowMs() / 1000))
+        : totalSeconds
+      : null
+  return {
+    running: countdownRunning && ownsCurrentSong,
+    display: remainingSeconds === null ? '' : formatSetlistSeconds(remainingSeconds),
+    remainingSeconds,
+    totalSeconds: totalSeconds > 0 ? totalSeconds : null
+  }
+}
+
+function resetCountdownForSong(songId: string | null, keepRunning = false): void {
+  const st = getState(store)
+  const row = songId ? st.setlist.find((item) => item.id === songId) : null
+  countdownSongId = row?.id ?? null
+  countdownTotalSeconds = row ? songLengthSeconds(row.length) : 0
+  countdownRemainingMs = countdownTotalSeconds * 1000
+  countdownRunning = keepRunning && countdownSongId !== null
+  countdownStartedAtMs = countdownRunning ? Date.now() : null
+  countdownLastPublishedSecond = countdownTotalSeconds > 0 ? countdownTotalSeconds : null
+}
+
+/**
+ * Cubase may emit both a mapped note and MIDI realtime/MMC for one button press. Collapse those
+ * near-simultaneous cross-protocol duplicates while preserving a deliberate second Start.
+ */
+function isDuplicateTransportEvent(action: 'start' | 'stop', source: string, now: number): boolean {
+  const previous = lastTransportEvent
+  lastTransportEvent = { action, source, at: now }
+  return Boolean(
+    previous &&
+      previous.action === action &&
+      previous.source !== source &&
+      now - previous.at < 100
+  )
+}
+
+function handleTransportStart(source: string): void {
+  const now = Date.now()
+  if (isDuplicateTransportEvent('start', source, now)) return
+  const st = getState(store)
+  if (countdownSongId !== st.currentSongId) resetCountdownForSong(st.currentSongId)
+  if (countdownRunning || countdownRemainingMs <= 0) {
+    resetCountdownForSong(st.currentSongId)
+  } else {
+    countdownRemainingMs = countdownRemainingNowMs(now)
+  }
+  countdownRunning = st.currentSongId !== null
+  countdownStartedAtMs = countdownRunning ? now : null
+  console.log(`[ViewerOne] MIDI: transport Start (${source}) — ${countdownSnapshot().display || 'length unknown'}`)
+  broadcastState()
+}
+
+function handleTransportStop(source: string): void {
+  const now = Date.now()
+  if (isDuplicateTransportEvent('stop', source, now)) return
+  countdownRemainingMs = countdownRemainingNowMs(now)
+  countdownRunning = false
+  countdownStartedAtMs = null
+  console.log(`[ViewerOne] MIDI: transport Stop/Pause (${source}) — froze ${countdownSnapshot().display || 'unknown'}`)
+  broadcastState()
+}
+
+function startCountdownTicker(): void {
+  if (countdownTimer) return
+  countdownTimer = setInterval(() => {
+    if (!countdownRunning) return
+    const snap = countdownSnapshot()
+    if (snap.remainingSeconds === countdownLastPublishedSecond) return
+    countdownLastPublishedSecond = snap.remainingSeconds
+    if (snap.remainingSeconds === 0) {
+      countdownRemainingMs = 0
+      countdownRunning = false
+      countdownStartedAtMs = null
+    }
+    // One UI + serial update per displayed second; never publish the 250ms ticker itself.
+    broadcastState()
+  }, 250)
+  countdownTimer.unref()
+}
+
+function stopCountdownTicker(): void {
+  if (!countdownTimer) return
+  clearInterval(countdownTimer)
+  countdownTimer = null
+}
+
 function buildPublicState(): PublicState {
   const base = getState(store)
   const queuedRow = base.currentSongId
@@ -224,6 +343,7 @@ function buildPublicState(): PublicState {
     promptMidiPulse,
     promptMidiPulseAt,
     arrangerScan,
+    countdown: countdownSnapshot(),
     midi: {
       cubaseInputName,
       cubaseInputOpen,
@@ -262,11 +382,11 @@ function applyPromptPc(pc: 120 | 121 | 122 | 123): void {
   broadcastUiState()
 }
 
-/** Song title/year/mute JSON only — does not change LEDs. */
+/** Song title/year/duration/mute JSON only — does not change LEDs. */
 function broadcastEsp32DisplayIfEnabled(): void {
   const st = getState(store)
   if (!st.esp32Enabled) return
-  pushEsp32Payload(buildEsp32DisplayPayload(st))
+  pushEsp32Payload(buildEsp32DisplayPayload(st, countdownSnapshot().display))
 }
 
 /** Push settings brightness unless between-song idle dim is active. */
@@ -556,7 +676,10 @@ function connectMidi(): void {
       if (row) {
         // Display + queue only — LEDs change via PC 125/126/127.
         console.log(`[ViewerOne] MIDI: song PC ${pc} → "${row.title}" (ch ${channel0 + 1})`)
+        const sameSongRefired = s.currentSongId === row.id
         setState(store, { currentSongId: row.id })
+        // A new song waits at full length. Re-firing the same PC resets it and preserves play/pause.
+        resetCountdownForSong(row.id, sameSongRefired && countdownRunning)
         broadcastState()
       } else {
         console.log(`[ViewerOne] MIDI: song PC ${pc} — no setlist row (ch ${channel0 + 1})`)
@@ -568,6 +691,18 @@ function connectMidi(): void {
       const muted = ccValueToFxMuted(msg.value)
       // Cubase already owns telling the mixer for its own automation, so nothing echoed back out.
       applyFxMuted(muted, { sendToCubase: false, sendToMixer: false })
+    },
+    onNoteOn: (msg) => {
+      if (msg.channel !== CUBASE_TRANSPORT_CHANNEL - 1) return
+      if (msg.note === CUBASE_TRANSPORT_START_NOTE) handleTransportStart('note')
+      else if (msg.note === CUBASE_TRANSPORT_STOP_NOTE) handleTransportStop('note')
+    },
+    onSystemRealtimeStart: () => handleTransportStart('realtime'),
+    onSystemRealtimeStop: () => handleTransportStop('realtime'),
+    onSysexBytes: (bytes) => {
+      const command = parseMmcTransportCommand(bytes)
+      if (command === 'play') handleTransportStart('MMC')
+      else if (command === 'stop') handleTransportStop('MMC')
     }
   })
   cubaseOutputOpen = midi.openOutput(cubase.output)
@@ -910,6 +1045,7 @@ async function runArrangerScan(): Promise<void> {
     setlist: scanned,
     currentSongId: startRow?.id ?? null
   })
+  resetCountdownForSong(startRow?.id ?? null)
   broadcastState()
   setArrangerScan({
     active: false,
@@ -1017,6 +1153,7 @@ function registerIpc(): void {
         ? st.currentSongId
         : null
     setState(store, { setlist: withIds, currentSongId: still })
+    if (!countdownRunning) resetCountdownForSong(still)
     broadcastState()
     return buildPublicState()
   })
@@ -1041,6 +1178,7 @@ function registerIpc(): void {
     const next = st.setlist.filter((r) => r.id !== id)
     const nextSong = st.currentSongId === id ? null : st.currentSongId
     setState(store, { setlist: next, currentSongId: nextSong })
+    if (nextSong !== st.currentSongId) resetCountdownForSong(nextSong)
     broadcastState()
     return buildPublicState()
   })
@@ -1173,6 +1311,7 @@ function registerIpc(): void {
     if (nextIdx === null) return buildPublicState()
     const row = setlist[nextIdx]
     setState(store, { currentSongId: row.id })
+    resetCountdownForSong(row.id)
     midi.sendProgramChange(CUBASE_PC_CHANNEL, row.program)
     broadcastState()
     return buildPublicState()
@@ -1189,6 +1328,7 @@ function registerIpc(): void {
     if (nextIdx === null) return buildPublicState()
     const row = setlist[nextIdx]
     setState(store, { currentSongId: row.id })
+    resetCountdownForSong(row.id)
     midi.sendProgramChange(CUBASE_PC_CHANNEL, row.program)
     broadcastState()
     return buildPublicState()
@@ -1205,6 +1345,7 @@ function registerIpc(): void {
     else if (idx === -1) nextIdx = setlist.length - 1
     if (nextIdx === null) return buildPublicState()
     setState(store, { currentSongId: setlist[nextIdx].id })
+    resetCountdownForSong(setlist[nextIdx].id)
     broadcastState()
     return buildPublicState()
   })
@@ -1219,6 +1360,7 @@ function registerIpc(): void {
     else if (idx === -1) nextIdx = 0
     if (nextIdx === null) return buildPublicState()
     setState(store, { currentSongId: setlist[nextIdx].id })
+    resetCountdownForSong(setlist[nextIdx].id)
     broadcastState()
     return buildPublicState()
   })
@@ -1227,12 +1369,14 @@ function registerIpc(): void {
     const st = getState(store)
     if (id === null || id === undefined || id === '') {
       setState(store, { currentSongId: null })
+      resetCountdownForSong(null)
       broadcastState()
       return buildPublicState()
     }
     if (typeof id !== 'string') return buildPublicState()
     if (!st.setlist.some((r) => r.id === id)) return buildPublicState()
     setState(store, { currentSongId: id })
+    resetCountdownForSong(id)
     broadcastState()
     return buildPublicState()
   })
@@ -1253,6 +1397,8 @@ if (!gotTheLock) {
 
   app.whenReady().then(() => {
     ensureLoopMidiRunning()
+    resetCountdownForSong(getState(store).currentSongId)
+    startCountdownTicker()
     setEsp32LineHandler(handleEsp32Line)
     setEsp32ConnectionHandler((connected) => {
       const enabled = getState(store).esp32Enabled
@@ -1290,6 +1436,7 @@ if (!gotTheLock) {
   app.on('before-quit', () => {
     isQuitting = true
     clearMidiReconnectTimer()
+    stopCountdownTicker()
     shutdownEsp32Serial()
     midi.closeInput()
     midi.closeMixerInput()
