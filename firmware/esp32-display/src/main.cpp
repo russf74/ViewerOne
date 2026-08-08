@@ -1,9 +1,11 @@
 /**
  * ViewerOne — ESP32-2432S028R ILI9341 (CYD), landscape 320×240 via ROTATION in board_pins.h
  *
- * PC @ 115200 — display:
- *   {"t":"Title","c":"1999","d":"04:32","l":true,"m":false}
- *   c = release year. d = full/remaining duration. m = FX mute colours.
+ * PC @ 115200 — display (transport / song change only — not every second):
+ *   {"t":"Title","c":"1999","d":"04:32","n":"01/24","x":"Next Title","r":272,"p":true,"l":true,"m":false}
+ *   c = release year. d = full/remaining duration. n = setlist position. m = FX mute colours.
+ *   x = next setlist row title — single clipped line above meta; song-change only.
+ *   r = remaining seconds, p = playing — firmware ticks MM:SS locally while p=true.
  *
  * PC @ 115200 — LED strip (WS2812B on GPIO 27 / CN1):
  *   {"led":"pattern","id":0}          id 0–9 or "name":"fire"
@@ -35,7 +37,7 @@
 #include "patterns.h"
 
 /** Keep in sync with repository root `package.json` version when releasing the app. */
-static constexpr const char *VIEWERONE_FW_VERSION = "5.10.0";
+static constexpr const char *VIEWERONE_FW_VERSION = "5.12.14";
 
 /** Seconds the main loop may go without feeding the watchdog before it force-reboots the board. */
 static constexpr uint32_t WDT_TIMEOUT_S = 5;
@@ -46,6 +48,7 @@ static constexpr uint16_t C_WHITE = 0xFFFF;
 static constexpr uint16_t C_YELLOW = 0xFFE0;
 static constexpr uint16_t C_GREY = 0x7BEF;
 static constexpr uint16_t C_LIME = 0x37E0;
+static constexpr uint16_t C_CYAN = 0x073F;  // #00E5FF — now-playing title
 static constexpr uint16_t C_NAVY = 0x0011;
 
 static CRGB leds[NUM_LEDS];
@@ -54,8 +57,17 @@ static CRGB leds[NUM_LEDS];
 static char s_title[160] = "Waiting";
 static char s_year[24] = "";
 static char s_duration[16] = "";
+static char s_position[16] = "";
+static char s_next[160] = "";
 static bool s_muted = false;
 static bool s_showing_waiting = true;
+
+/** Device-side countdown — host arms via r/p; firmware ticks without per-second USB. */
+static int32_t s_cd_remain_sec = -1;
+static bool s_cd_running = false;
+static uint32_t s_cd_anchor_ms = 0;
+static int32_t s_cd_anchor_sec = 0;
+static int32_t s_cd_last_shown = -1;
 
 static constexpr int32_t PATTERN_FOOTER_H = 18;
 
@@ -201,13 +213,97 @@ static int32_t drawTextBlock(const char *text, int32_t x, int32_t y, int32_t max
   return cy;
 }
 
-static void drawSong(const char *title, const char *year, const char *duration, bool /*live*/, bool muted) {
+static void formatMmSs(int32_t sec, char *buf, size_t n) {
+  if (sec < 0) sec = 0;
+  snprintf(buf, n, "%02d:%02d", (int)(sec / 60), (int)(sec % 60));
+}
+
+static void stopLocalCountdown() {
+  s_cd_running = false;
+  s_cd_remain_sec = -1;
+  s_cd_last_shown = -1;
+}
+
+static void armLocalCountdown(int32_t remain_sec, bool running) {
+  if (remain_sec < 0) remain_sec = 0;
+  s_cd_remain_sec = remain_sec;
+  s_cd_anchor_sec = remain_sec;
+  s_cd_anchor_ms = millis();
+  s_cd_last_shown = remain_sec;
+  s_cd_running = running && remain_sec > 0;
+  formatMmSs(remain_sec, s_duration, sizeof(s_duration));
+}
+
+/**
+ * Three fixed meta slots — year left, MM:SS center-ish, position right.
+ * Never concatenate into one reflowing string (content length must not shove neighbors).
+ */
+static void drawMetaSlots(int32_t metaY, uint16_t textColor, uint16_t bg) {
+  const int32_t W = tft.width();
+  constexpr int32_t kPad = 6;
+  const bool multi = s_duration[0] || s_position[0];
+  const uint8_t metaSize = multi ? 3 : 7;
+  const int32_t cw = 6 * metaSize;
+  const int32_t yearX = kPad;
+  // Fixed columns independent of string length.
+  const int32_t durX = W / 2 - (5 * cw) / 2;          // "MM:SS" centered
+  const int32_t posX = W - kPad - 6 * cw;             // "01/24" / "IN/24" right slot
+
+  tft.setTextSize(metaSize);
+  tft.setTextColor(textColor, bg);
+  if (s_year[0]) {
+    tft.setCursor(yearX, metaY);
+    tft.print(s_year);
+  }
+  if (s_duration[0]) {
+    tft.setCursor(durX, metaY);
+    tft.print(s_duration);
+  }
+  if (s_position[0]) {
+    tft.setCursor(posX < kPad ? kPad : posX, metaY);
+    tft.print(s_position);
+  }
+}
+
+/** Redraw only the year/duration band — avoids full fillScreen hitching LEDs. */
+static void redrawMetaLineOnly() {
+  if (s_showing_waiting) return;
+  const int32_t W = tft.width();
+  const int32_t H = tft.height();
+  const uint16_t bg = s_muted ? C_NAVY : C_BLACK;
+  const uint16_t textColor = s_muted ? C_YELLOW : C_LIME;
+  constexpr int32_t kPad = 6;
+  const bool multi = s_duration[0] || s_position[0];
+  const uint8_t metaSize = multi ? 3 : 7;
+  const int32_t metaLineH = 8 * metaSize + 2;
+  const int32_t metaBottom = H - kPad - PATTERN_FOOTER_H;
+  const int32_t metaY = metaBottom - metaLineH;
+  tft.fillRect(0, metaY, W, metaBottom - metaY, bg);
+  drawMetaSlots(metaY, textColor, bg);
+}
+
+static void tickLocalCountdown() {
+  if (!s_cd_running || s_cd_remain_sec < 0) return;
+  const uint32_t elapsed_ms = millis() - s_cd_anchor_ms;
+  int32_t shown = s_cd_anchor_sec - (int32_t)(elapsed_ms / 1000U);
+  if (shown < 0) shown = 0;
+  if (shown == s_cd_last_shown) return;
+  s_cd_last_shown = shown;
+  s_cd_remain_sec = shown;
+  formatMmSs(shown, s_duration, sizeof(s_duration));
+  redrawMetaLineOnly();
+  if (shown == 0) s_cd_running = false;
+}
+
+static void drawSong(const char *title, const char *year, const char *duration, const char *position,
+                     const char *next, bool /*live*/, bool muted) {
   const int32_t W = tft.width();
   const int32_t H = tft.height();
   const int32_t mid = H / 2;
   const uint16_t bg = muted ? C_NAVY : C_BLACK;
   const uint16_t textColor = muted ? C_YELLOW : C_LIME;
   constexpr uint8_t kTitleSize = 5;
+  constexpr uint8_t kNextSize = 2;  // slightly smaller than meta size 3
   constexpr int32_t kPad = 6;
 
   if (title != s_title) {
@@ -222,25 +318,44 @@ static void drawSong(const char *title, const char *year, const char *duration, 
     strncpy(s_duration, duration ? duration : "", sizeof(s_duration) - 1);
     s_duration[sizeof(s_duration) - 1] = '\0';
   }
+  if (position != s_position) {
+    strncpy(s_position, position ? position : "", sizeof(s_position) - 1);
+    s_position[sizeof(s_position) - 1] = '\0';
+  }
+  if (next != s_next) {
+    strncpy(s_next, next ? next : "", sizeof(s_next) - 1);
+    s_next[sizeof(s_next) - 1] = '\0';
+  }
   s_muted = muted;
   s_showing_waiting = false;
 
   tft.fillScreen(bg);
 
-  drawTextBlock(s_title, kPad, kPad, W - 2 * kPad, mid - kPad, textColor, kTitleSize, bg, 0);
-  char meta[48];
-  if (s_year[0] && s_duration[0]) {
-    snprintf(meta, sizeof(meta), "%s     %s", s_year, s_duration);
-  } else {
-    snprintf(meta, sizeof(meta), "%s%s", s_year, s_duration);
+  // Pin year/duration/position to fixed slots at the bottom (above pattern footer),
+  // independent of how many lines the title wraps to.
+  const bool multi = s_duration[0] || s_position[0];
+  const uint8_t metaSize = multi ? 3 : 7;
+  const int32_t metaLineH = 8 * metaSize + 2;
+  const int32_t nextLineH = 8 * kNextSize + 2;
+  const int32_t metaBottom = H - kPad - PATTERN_FOOTER_H;
+  const int32_t metaY = metaBottom - metaLineH;
+  // Next song sits just above meta (static); title must not draw into that band.
+  const int32_t nextY = metaY - nextLineH - 2;
+  const int32_t titleMaxY = (s_next[0] ? nextY : metaY) - kPad;
+  drawTextBlock(s_title, kPad, kPad, W - 2 * kPad, titleMaxY > kPad ? titleMaxY : mid - kPad, C_CYAN,
+                kTitleSize, bg, 0);
+  if (s_next[0]) {
+    // Single line, hard clip (maxLines=1) — no wrap. Prefix matches CrowPanel / PC preview.
+    char nextBuf[176];
+    snprintf(nextBuf, sizeof(nextBuf), "Next : %s", s_next);
+    drawTextBlock(nextBuf, kPad, nextY, W - 2 * kPad, nextY + nextLineH + 1, textColor, kNextSize, bg, 1);
   }
-  const uint8_t metaSize = s_duration[0] ? 3 : 7;
-  drawTextBlock(meta, kPad, mid + kPad / 2, W - 2 * kPad, H - kPad - PATTERN_FOOTER_H, textColor, metaSize,
-                bg, 0);
+  drawMetaSlots(metaY, textColor, bg);
   drawPatternFooter(bg, textColor);
 }
 
 static void drawWaitingScreen() {
+  stopLocalCountdown();
   const int32_t H = tft.height();
   const uint16_t bg = C_BLACK;
   s_showing_waiting = true;
@@ -248,6 +363,8 @@ static void drawWaitingScreen() {
   strncpy(s_title, "Waiting", sizeof(s_title) - 1);
   s_year[0] = '\0';
   s_duration[0] = '\0';
+  s_position[0] = '\0';
+  s_next[0] = '\0';
 
   tft.fillScreen(bg);
   tft.setTextSize(3);
@@ -272,7 +389,7 @@ static void refreshDisplayForPatternChange() {
   if (s_showing_waiting) {
     drawWaitingScreen();
   } else {
-    drawSong(s_title, s_year, s_duration, true, s_muted);
+    drawSong(s_title, s_year, s_duration, s_position, s_next, true, s_muted);
   }
 }
 
@@ -427,9 +544,19 @@ static void handleSerialLine(const String &line) {
   const char *t = doc["t"] | "";
   const char *c = doc["c"] | "";
   const char *d = doc["d"] | "";
+  const char *n = doc["n"] | "";
+  const char *x = doc["x"] | "";
   bool l = doc["l"] | true;
   bool m = doc["m"] | false;
-  drawSong(t, c, d, l, m);
+  const bool has_r = !doc["r"].isNull();
+  const char *duration_for_ui = d;
+  if (has_r) {
+    armLocalCountdown(doc["r"].as<int32_t>(), doc["p"] | false);
+    duration_for_ui = s_duration;
+  } else {
+    stopLocalCountdown();
+  }
+  drawSong(t, c, duration_for_ui, n, x, l, m);
 }
 
 void setup() {
@@ -478,6 +605,12 @@ void setup() {
 void loop() {
   esp_task_wdt_reset();
 
+  // LED refresh first so serial/TFT work never starves WS2812 timing.
+  patternsTick();
+  if (patternsConsumeFooterDirty()) {
+    refreshDisplayForPatternChange();
+  }
+
   while (Serial.available()) {
     char ch = static_cast<char>(Serial.read());
     if (ch == '\r') continue;
@@ -494,8 +627,5 @@ void loop() {
   pollTouchMuteToggle();
 #endif
 
-  patternsTick();
-  if (patternsConsumeFooterDirty()) {
-    refreshDisplayForPatternChange();
-  }
+  tickLocalCountdown();
 }

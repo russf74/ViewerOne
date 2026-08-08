@@ -2,6 +2,8 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 namespace {
 
@@ -637,6 +639,14 @@ void tickRollerDerby(uint32_t now) {
 
 }  // namespace
 
+static SemaphoreHandle_t g_patMu = nullptr;
+static void patLock() {
+  if (g_patMu) xSemaphoreTakeRecursive(g_patMu, portMAX_DELAY);
+}
+static void patUnlock() {
+  if (g_patMu) xSemaphoreGiveRecursive(g_patMu);
+}
+
 const char *patternName(PatternId id) {
   switch (id) {
     case PATTERN_KNIGHT_RIDER: return "knight_rider";
@@ -718,19 +728,26 @@ void patternLabelDisplay(PatternId id, char *out, size_t n) {
 }
 
 void patternsBegin(CRGB *leds, uint16_t count) {
+  if (!g_patMu) g_patMu = xSemaphoreCreateRecursiveMutex();
+  patLock();
   g_leds = leds;
   g_count = count > NUM_LEDS ? NUM_LEDS : count;
   memset(g_heat, 0, sizeof(g_heat));
+  patUnlock();
   patternsSet(DEFAULT_PATTERN);
 }
 
 void patternsClear() {
-  if (!g_leds) return;
-  fill_solid(g_leds, g_count, CRGB::Black);
-  FastLED.show();
+  patLock();
+  if (g_leds) {
+    fill_solid(g_leds, g_count, CRGB::Black);
+    FastLED.show();
+  }
+  patUnlock();
 }
 
 void patternsSet(PatternId id) {
+  patLock();
   g_pattern = id;
   g_pos = 0;
   g_pos2 = halfLen() > 0 ? (uint16_t)(halfLen() - 1) : 0;
@@ -765,7 +782,11 @@ void patternsSet(PatternId id) {
   g_dir = g_cDir[0];
   g_dir2 = g_cDir[1];
 
-  patternsClear();
+  if (g_leds) {
+    fill_solid(g_leds, g_count, CRGB::Black);
+    FastLED.show();
+  }
+  patUnlock();
   if (id == PATTERN_OFF || id == PATTERN_BLACKOUT) return;
 }
 
@@ -778,8 +799,10 @@ bool patternsConsumeFooterDirty() {
 }
 
 void patternsSetBrightness(uint8_t brightness) {
+  patLock();
   FastLED.setBrightness(brightness);
   FastLED.show();
+  patUnlock();
 }
 
 /** Reset animation state without changing g_pattern / random rotator schedule. */
@@ -811,7 +834,11 @@ static void resetAnimState() {
 }
 
 void patternsTick() {
-  if (!g_leds || g_pattern == PATTERN_OFF || g_pattern == PATTERN_BLACKOUT) return;
+  patLock();
+  if (!g_leds || g_pattern == PATTERN_OFF || g_pattern == PATTERN_BLACKOUT) {
+    patUnlock();
+    return;
+  }
   const uint32_t now = millis();
 
   PatternId run = g_pattern;
@@ -823,7 +850,10 @@ void patternsTick() {
       g_randomChild = (PatternId)next;
       g_randomNextMs = now + kRandomRotateMs;
       resetAnimState();
-      patternsClear();
+      if (g_leds) {
+        fill_solid(g_leds, g_count, CRGB::Black);
+        FastLED.show();
+      }
       g_footerDirty = true;
     }
     run = g_randomChild;
@@ -853,4 +883,5 @@ void patternsTick() {
     case PATTERN_BLACKOUT: break;
     default: break;
   }
+  patUnlock();
 }

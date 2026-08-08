@@ -258,6 +258,13 @@ export function pushEsp32Prompt(prompt: 1 | 2, on: boolean): void {
   writeSerialLine(JSON.stringify({ prompt, on }) + '\n', `prompt ${prompt}`)
 }
 
+/** Host wall clock HH:MM for CrowPanel brand bar (ESP has no reliable RTC). */
+export function pushEsp32Clock(hm: string): void {
+  const t = (hm ?? '').trim()
+  if (!/^\d{2}:\d{2}$/.test(t)) return
+  writeSerialLine(JSON.stringify({ hm: t }) + '\n', 'clock')
+}
+
 export function shutdownEsp32Serial(): void {
   clearReconnectTimer()
   openGeneration++

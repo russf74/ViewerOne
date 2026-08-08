@@ -2,6 +2,8 @@ import easymidi from 'easymidi'
 import {
   CUBASE_MUTE_CC,
   CUBASE_MUTE_CHANNEL,
+  CUBASE_SYNTH_MUTE_CC,
+  CUBASE_PIANO_MUTE_CC,
   MIXER_MUTE_CC,
   MIXER_MUTE_CHANNEL
 } from '../shared/midiConfig.js'
@@ -81,7 +83,15 @@ type EasymidiMsg = {
 
 function isKnownMuteCc(channel0: number | undefined, controller: number | undefined): boolean {
   if (typeof channel0 !== 'number' || typeof controller !== 'number') return false
-  if (channel0 === CUBASE_MUTE_CHANNEL - 1 && controller === CUBASE_MUTE_CC) return true
+  if (channel0 === CUBASE_MUTE_CHANNEL - 1) {
+    if (
+      controller === CUBASE_MUTE_CC ||
+      controller === CUBASE_SYNTH_MUTE_CC ||
+      controller === CUBASE_PIANO_MUTE_CC
+    ) {
+      return true
+    }
+  }
   if (channel0 === MIXER_MUTE_CHANNEL - 1 && controller === MIXER_MUTE_CC) return true
   return false
 }
@@ -195,10 +205,12 @@ export function formatMidiSpyEvent(
     const role = classifyMidiSpyRole(kind, msg, context)
     let summary = `ch${ch ?? '?'} CC ${msg.controller ?? '?'} = ${msg.value ?? 0}`
     if (role === 'MUTE') {
-      const which =
-        msg.channel === CUBASE_MUTE_CHANNEL - 1 && msg.controller === CUBASE_MUTE_CC
-          ? 'FX mute'
-          : 'mixer mute'
+      let which = 'mixer mute'
+      if (msg.channel === CUBASE_MUTE_CHANNEL - 1) {
+        if (msg.controller === CUBASE_MUTE_CC) which = 'FX mute'
+        else if (msg.controller === CUBASE_SYNTH_MUTE_CC) which = 'Synth mute'
+        else if (msg.controller === CUBASE_PIANO_MUTE_CC) which = 'Piano mute'
+      }
       summary = `${which} ch${ch ?? '?'} CC${msg.controller ?? '?'} = ${msg.value ?? 0}`
     } else if (role === 'TRANSPORT') {
       const mapped =

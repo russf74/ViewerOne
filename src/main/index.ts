@@ -4,7 +4,13 @@ import { setupAppMenu } from './menu.js'
 import { existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createAppStore, getState, setState, newSetlistItem } from './store.js'
+import {
+  clampCountdownStartLeadMs,
+  createAppStore,
+  getState,
+  setState,
+  newSetlistItem
+} from './store.js'
 import { MidiService, listInputs, listOutputs, parseMmcTransportCommand } from './midi.js'
 import {
   pushEsp32Payload,
@@ -12,6 +18,7 @@ import {
   pushEsp32LedPattern,
   pushEsp32LedBrightness,
   pushEsp32Prompt,
+  pushEsp32Clock,
   setEsp32ConnectionHandler,
   setEsp32LineHandler,
   setEsp32SerialPort,
@@ -34,6 +41,11 @@ import {
   CUBASE_MIDI_SPY_LIMIT,
   CUBASE_MUTE_CHANNEL,
   CUBASE_MUTE_CC,
+  CUBASE_SYNTH_MUTE_CC,
+  CUBASE_PIANO_MUTE_CC,
+  CUBASE_CHANNEL_MUTE_INVERTED,
+  CUBASE_MUTE_ECHO_IGNORE_MS,
+  cubaseMuteCcValue,
   MIXER_MUTE_CHANNEL,
   MIXER_MUTE_CC,
   MIXER_MUTE_INVERTED,
@@ -133,6 +145,7 @@ function quitViewerOne(): void {
   isQuitting = true
   clearMidiReconnectTimer()
   stopCountdownTicker()
+  stopEsp32ClockSync()
   shutdownEsp32Serial()
   try {
     midi.closeInput()
@@ -151,6 +164,10 @@ function quitViewerOne(): void {
 
 /** Ignore CC echo for a short window after we send mute CC (touch → out → Cubase/mixer → in). */
 let muteCcSentAtMs = 0
+/** Per-controller last Cubase mute CC we sent — suppress delayed Generic Remote echoes. */
+const cubaseMuteSentByCc = new Map<number, { value: number; atMs: number }>()
+let muteBootSyncTimer: ReturnType<typeof setTimeout> | null = null
+let muteBootSyncFollowUpTimer: ReturnType<typeof setTimeout> | null = null
 
 /** Live MIDI connection status, surfaced in the UI since ports are auto-detected with no manual config. */
 let cubaseInputName: string | null = null
@@ -321,6 +338,11 @@ function countdownSnapshot(): PublicState['countdown'] {
   }
 }
 
+function countdownIsAtFullLength(): boolean {
+  if (countdownTotalSeconds <= 0) return false
+  return countdownRemainingMs >= countdownTotalSeconds * 1000 - 50
+}
+
 function resetCountdownForSong(songId: string | null, keepRunning = false): void {
   const st = getState(store)
   const row = songId ? st.setlist.find((item) => item.id === songId) : null
@@ -344,7 +366,11 @@ function bindCountdownToCurrentSong(): void {
   resetCountdownForSong(st.currentSongId, false)
 }
 
-function beginCountdownRunning(now: number): void {
+/**
+ * Begin/resume wall-clock countdown. When arming from full song length, optionally
+ * backdate the start by {@link AppState.countdownStartLeadMs} to absorb Cubase Start lag.
+ */
+function beginCountdownRunning(now: number, opts?: { applyLead?: boolean }): void {
   const st = getState(store)
   bindCountdownToCurrentSong()
   countdownRemainingMs = Math.max(0, countdownRemainingMs)
@@ -353,6 +379,12 @@ function beginCountdownRunning(now: number): void {
   countdownLastClockCorrectAtMs = now
   countdownRunning = st.currentSongId !== null && countdownRemainingMs > 0
   countdownStartedAtMs = countdownRunning ? now : null
+  if (opts?.applyLead && countdownRunning && countdownIsAtFullLength()) {
+    const lead = clampCountdownStartLeadMs(st.countdownStartLeadMs)
+    if (lead > 0 && countdownStartedAtMs != null) {
+      countdownStartedAtMs = now - lead
+    }
+  }
   // Resume / Start may show a higher remaining than the previous published second.
   countdownLastPublishedSecond = null
   midiClockTicksSincePlay = 0
@@ -423,8 +455,13 @@ function publishCountdownIfSecondChanged(): void {
     countdownRunning = false
     countdownStartedAtMs = null
     midiClockTicksSincePlay = 0
+    // Hit zero — push once so the device freezes at 00:00 (no per-second spam while running).
+    broadcastState()
+    return
   }
-  broadcastState()
+  // UI only — CrowPanel/CYD tick MM:SS locally from the last r/p arm; serial every second
+  // was stalling WS2812 refresh.
+  broadcastUiState()
 }
 
 /**
@@ -470,7 +507,8 @@ function handleTransportStart(source: string): void {
   } else if (priorRunning) {
     countdownRemainingMs = countdownRemainingNowMs(now)
   }
-  beginCountdownRunning(now)
+  // Lead only when arming from full length (fresh Start / rewind) — never on pause-resume.
+  beginCountdownRunning(now, { applyLead: shouldReset || countdownIsAtFullLength() })
   console.log(
     `[ViewerOne] MIDI: transport Start (${source}) — playing=${transportPlaying} reset=${shouldReset} countdown=${countdownSnapshot().display || 'length unknown'}`
   )
@@ -487,11 +525,13 @@ function handleTransportContinue(source: string): void {
   if (countdownRunning) {
     countdownRemainingMs = countdownRemainingNowMs(now)
   }
+  let armedFromFull = false
   if (countdownRemainingMs <= 0 && countdownTotalSeconds > 0) {
     // Empty remaining on continue — arm full length once (fresh song / exhausted).
     resetCountdownForSong(getState(store).currentSongId, false)
+    armedFromFull = true
   }
-  beginCountdownRunning(now)
+  beginCountdownRunning(now, { applyLead: armedFromFull || countdownIsAtFullLength() })
   console.log(
     `[ViewerOne] MIDI: transport Continue (${source}) — playing=${transportPlaying} countdown=${countdownSnapshot().display || 'length unknown'}`
   )
@@ -697,11 +737,71 @@ function applyPromptPc(pc: 120 | 121 | 122 | 123): void {
   broadcastUiState()
 }
 
-/** Song title/year/duration/mute JSON only — does not change LEDs. */
+/** Last JSON line pushed to the board — skip identical re-sends (same-song PC chase / mute echoes). */
+let lastEsp32DisplayJson: string | null = null
+
+/** Song title/year/duration/mute JSON only — does not change LEDs. Arms device countdown via r/p. */
 function broadcastEsp32DisplayIfEnabled(): void {
   const st = getState(store)
   if (!st.esp32Enabled) return
-  pushEsp32Payload(buildEsp32DisplayPayload(st, countdownSnapshot().display))
+  const snap = countdownSnapshot()
+  const payload = buildEsp32DisplayPayload(st, snap.display, {
+    remainingSeconds: snap.remainingSeconds,
+    running: snap.running
+  })
+  const json = JSON.stringify(payload)
+  if (json === lastEsp32DisplayJson) return
+  lastEsp32DisplayJson = json
+  pushEsp32Payload(payload)
+}
+
+/** Local HH:MM for CrowPanel right pad column — ESP has no reliable RTC. */
+function formatLocalHm(d = new Date()): string {
+  const h = String(d.getHours()).padStart(2, '0')
+  const m = String(d.getMinutes()).padStart(2, '0')
+  return `${h}:${m}`
+}
+
+let lastEsp32ClockHm: string | null = null
+let esp32ClockTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearEsp32ClockTimer(): void {
+  if (esp32ClockTimer) {
+    clearTimeout(esp32ClockTimer)
+    esp32ClockTimer = null
+  }
+}
+
+/** Lightweight `{"hm":"HH:MM"}` — skip serial when minute string unchanged. */
+function pushEsp32ClockIfChanged(force = false): void {
+  const st = getState(store)
+  if (!st.esp32Enabled) return
+  const hm = formatLocalHm()
+  if (!force && hm === lastEsp32ClockHm) return
+  lastEsp32ClockHm = hm
+  pushEsp32Clock(hm)
+}
+
+/** Send now, then again shortly after each minute boundary (~once/min). */
+function scheduleEsp32ClockTicks(): void {
+  clearEsp32ClockTimer()
+  const now = new Date()
+  const msToNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds() + 80
+  esp32ClockTimer = setTimeout(() => {
+    pushEsp32ClockIfChanged(true)
+    scheduleEsp32ClockTicks()
+  }, Math.max(250, msToNextMinute))
+}
+
+function startEsp32ClockSync(): void {
+  lastEsp32ClockHm = null
+  pushEsp32ClockIfChanged(true)
+  scheduleEsp32ClockTicks()
+}
+
+function stopEsp32ClockSync(): void {
+  clearEsp32ClockTimer()
+  lastEsp32ClockHm = null
 }
 
 /** Push settings brightness unless between-song idle dim is active. */
@@ -779,8 +879,10 @@ function previewLedPattern(rawId: unknown): void {
 
 /** Push current song/mute JSON only — board keeps its own LED state until PC 125/126/127. */
 function onEsp32SerialOpened(): void {
+  lastEsp32DisplayJson = null
   pushEsp32HelloRequest()
   broadcastEsp32DisplayIfEnabled()
+  startEsp32ClockSync()
   const st = getState(store)
   if (st.esp32Enabled) {
     pushEsp32Prompt(1, prompt1On)
@@ -797,13 +899,30 @@ function ccValueToFxMuted(value: number, inverted = false): boolean {
  * via its own "X32 Mutes" track for its own automation-driven use cases). This is also how song
  * changes reach Cubase, so it's a single well-tested path for everything ViewerOne sends there.
  */
-function sendMuteCcToCubase(muted: boolean): void {
-  muteCcSentAtMs = Date.now()
-  const value = muted ? 0 : 127
-  cubaseLastSentAtMs = Date.now()
-  cubaseLastSentCc = { channel: CUBASE_MUTE_CHANNEL - 1, controller: CUBASE_MUTE_CC, value }
-  console.log(`[ViewerOne] MIDI: sending mute=${muted} to Cubase (ch ${CUBASE_MUTE_CHANNEL}, CC ${CUBASE_MUTE_CC}, val ${value}) on "${cubaseOutputName ?? '(no output port)'}"`)
-  midi.sendControlChange(CUBASE_MUTE_CHANNEL, CUBASE_MUTE_CC, value)
+function sendMuteCcToCubase(muted: boolean, controller = CUBASE_MUTE_CC): void {
+  const now = Date.now()
+  muteCcSentAtMs = now
+  // FX CC85: muted→0; Synth/Piano CC86/87: inverted muted→127 (Jump/Value).
+  const value = cubaseMuteCcValue(muted, controller)
+  cubaseLastSentAtMs = now
+  cubaseLastSentCc = { channel: CUBASE_MUTE_CHANNEL - 1, controller, value }
+  cubaseMuteSentByCc.set(controller, { value, atMs: now })
+  console.log(
+    `[ViewerOne] MIDI: sending mute=${muted} to Cubase (ch ${CUBASE_MUTE_CHANNEL}, CC ${controller}, val ${value}) on "${cubaseOutputName ?? '(no output port)'}"`
+  )
+  midi.sendControlChange(CUBASE_MUTE_CHANNEL, controller, value)
+}
+
+/** True when this CC is our own mute echo (global window or per-controller Generic Remote delay). */
+function isOwnCubaseMuteEcho(controller: number, value: number): boolean {
+  const now = Date.now()
+  if (now - muteCcSentAtMs < 90) return true
+  const last = cubaseMuteSentByCc.get(controller)
+  if (!last) return false
+  if (now - last.atMs < CUBASE_MUTE_ECHO_IGNORE_MS) return true
+  // Same absolute value we last sent — ignore late duplicate feedback.
+  if (last.value === value && now - last.atMs < CUBASE_MUTE_ECHO_IGNORE_MS * 3) return true
+  return false
 }
 
 /**
@@ -847,6 +966,91 @@ function toggleAllMutedFromEsp(): void {
   broadcastState()
 }
 
+function applyChannelMuted(
+  which: 'synth' | 'piano',
+  muted: boolean,
+  opts: { sendToCubase: boolean; source?: string }
+): void {
+  const st = getState(store)
+  const key = which === 'synth' ? 'synthMuted' : 'pianoMuted'
+  const prev = Boolean(st[key])
+  const changed = prev !== muted
+  const cc = which === 'synth' ? CUBASE_SYNTH_MUTE_CC : CUBASE_PIANO_MUTE_CC
+  const value = cubaseMuteCcValue(muted, cc)
+  const source = opts.source ?? 'host'
+  console.log(
+    `[ViewerOne] MIDI: ${which} mute press source=${source} prev=${prev} → next=${muted} ` +
+      `changed=${changed} CC=${cc} val=${value} send=${opts.sendToCubase}`
+  )
+  if (changed) setState(store, { [key]: muted })
+  // Absolute CC; Synth/Piano polarity inverted vs FX (see cubaseMuteCcValue).
+  if (opts.sendToCubase) {
+    sendMuteCcToCubase(muted, cc)
+    console.log(
+      `[ViewerOne] MIDI: ${which} mute CC sent (one absolute) muted=${muted} CC=${cc} val=${value}`
+    )
+  } else {
+    console.log(`[ViewerOne] MIDI: ${which} mute UI-only (no CC out) muted=${muted}`)
+  }
+  if (changed) broadcastState()
+}
+
+/**
+ * CrowPanel synth/piano pads send absolute `muted` after their local flip.
+ * Host SETs that value once and sends one CC — never toggle on top of the device flip.
+ */
+function applyChannelMutedFromEsp(which: 'synth' | 'piano', mutedRaw: unknown): void {
+  const st = getState(store)
+  const muted =
+    typeof mutedRaw === 'boolean'
+      ? mutedRaw
+      : which === 'synth'
+        ? !st.synthMuted
+        : !st.pianoMuted
+  console.log(
+    `[ViewerOne] MIDI: ${which} mute from ESP raw=${JSON.stringify(mutedRaw)} → absolute muted=${muted}`
+  )
+  applyChannelMuted(which, muted, { sendToCubase: true, source: 'esp' })
+}
+
+/**
+ * After Cubase out opens: push absolute mute CCs matching UI (FX + inverted Synth/Piano).
+ * Do NOT send an opposite edge — with Generic Remote Toggle flags that yields an odd
+ * toggle count and permanently inverts Cubase vs pads (two-click / every-other symptom).
+ */
+function syncMutesToCubaseOnConnect(): void {
+  if (muteBootSyncTimer) {
+    clearTimeout(muteBootSyncTimer)
+    muteBootSyncTimer = null
+  }
+  if (muteBootSyncFollowUpTimer) {
+    clearTimeout(muteBootSyncFollowUpTimer)
+    muteBootSyncFollowUpTimer = null
+  }
+  if (!cubaseOutputOpen) return
+
+  const st = getState(store)
+  const targets: { label: string; muted: boolean; cc: number }[] = [
+    { label: 'synth', muted: st.synthMuted, cc: CUBASE_SYNTH_MUTE_CC },
+    { label: 'piano', muted: st.pianoMuted, cc: CUBASE_PIANO_MUTE_CC },
+    { label: 'fx', muted: st.fxMuted, cc: CUBASE_MUTE_CC }
+  ]
+  console.log(
+    `[ViewerOne] MIDI: boot-sync mutes (absolute only) → Cubase synth=${st.synthMuted} ` +
+      `piano=${st.pianoMuted} fx=${st.fxMuted}`
+  )
+  for (const t of targets) {
+    sendMuteCcToCubase(t.muted, t.cc)
+  }
+  // One identical settle for all channels (even count if remote is Toggle; Value ignores dup).
+  muteBootSyncTimer = setTimeout(() => {
+    muteBootSyncTimer = null
+    for (const t of targets) {
+      sendMuteCcToCubase(t.muted, t.cc)
+    }
+  }, 45)
+}
+
 function applyLedPatternFromEsp(name: unknown): void {
   if (typeof name !== 'string' || !name.trim()) return
   const next = name.trim()
@@ -867,12 +1071,16 @@ function handleEsp32Line(msg: Esp32FromDeviceMsg): void {
 
   const evt = msg['evt']
   if (evt === 'mute_toggle') {
-    // CrowPanel groups are independent: ALL = Group1 state; FX/legacy bare = Group6 CC path.
+    // CrowPanel groups are independent: ALL / FX / Synth / Piano.
     const group = typeof msg['group'] === 'string' ? msg['group'].toLowerCase() : ''
     if (!group || group === 'fx') {
       toggleFxMutedFromEsp()
     } else if (group === 'all') {
       toggleAllMutedFromEsp()
+    } else if (group === 'synth') {
+      applyChannelMutedFromEsp('synth', msg['muted'])
+    } else if (group === 'piano') {
+      applyChannelMutedFromEsp('piano', msg['muted'])
     } else {
       console.log(`[ViewerOne] ESP32 mute_toggle ignored for group=${group}`)
     }
@@ -881,7 +1089,9 @@ function handleEsp32Line(msg: Esp32FromDeviceMsg): void {
     applyLedPatternFromEsp(msg['led'])
     // Board reset — resend display JSON only; strip keeps firmware boot KR until PC 125/126/127.
     console.log('[ViewerOne] ESP32 reported boot/reset — resending display state')
+    lastEsp32DisplayJson = null
     broadcastEsp32DisplayIfEnabled()
+    startEsp32ClockSync()
   }
   if (evt === 'led' && msg['ok'] === true) {
     applyLedPatternFromEsp(msg['name'])
@@ -900,6 +1110,7 @@ function syncEsp32SerialFromStore(): void {
   if (st.esp32Enabled) {
     setEsp32SerialPort(ESP32_SERIAL_PORT_AUTO, () => onEsp32SerialOpened())
   } else {
+    stopEsp32ClockSync()
     setEsp32SerialPort(null)
   }
 }
@@ -999,12 +1210,40 @@ function connectMidi(): void {
         // Display + queue only — LEDs change via PC 125/126/127.
         console.log(`[ViewerOne] MIDI: song PC ${pc} → "${row.title}" (ch ${channel0 + 1})`)
         const sameSongRefired = s.currentSongId === row.id
-        setState(store, { currentSongId: row.id })
         // New song → full length. Same-song PC echo must NOT reset a frozen pause remaining
         // (Cubase often re-chases the song PC around Stop — that was wiping the countdown).
         if (!sameSongRefired) {
+          const wasPlaying = transportPlaying || countdownRunning
+          if (wasPlaying && countdownSongId != null && countdownTotalSeconds > 0) {
+            const leftover = countdownRemainingNowMs()
+            // Snap ending song to 0 at the arranger boundary (push once before arming next).
+            countdownRemainingMs = 0
+            countdownAnchorRemainingMs = 0
+            countdownClockBiasMs = 0
+            countdownRunning = false
+            countdownStartedAtMs = null
+            countdownLastPublishedSecond = 0
+            broadcastState()
+            // Conservative auto-cal: leftover at block end ≈ Cubase Start lag to absorb next time.
+            if (leftover >= 500 && leftover <= 10000) {
+              const prev = clampCountdownStartLeadMs(getState(store).countdownStartLeadMs)
+              const blended = clampCountdownStartLeadMs(Math.round(prev * 0.35 + leftover * 0.65))
+              if (blended !== prev) {
+                setState(store, { countdownStartLeadMs: blended })
+                console.log(
+                  `[ViewerOne] countdown start lead auto-calibrated: ${prev} → ${blended}ms (boundary leftover ${Math.round(leftover)}ms)`
+                )
+              }
+            }
+          }
+          setState(store, { currentSongId: row.id })
           resetCountdownForSong(row.id, false)
+          if (wasPlaying) {
+            // Already rolling into the next arranger block — arm with Start-lead compensation.
+            beginCountdownRunning(Date.now(), { applyLead: true })
+          }
         } else {
+          setState(store, { currentSongId: row.id })
           countdownSongId = row.id
         }
         broadcastState()
@@ -1014,11 +1253,28 @@ function connectMidi(): void {
     },
     onControlChange: (msg) => {
       tryMappedTransport('cc', msg.channel, msg.controller, msg.value)
-      if (msg.channel !== cubaseMuteCh0 || msg.controller !== CUBASE_MUTE_CC) return
-      if (Date.now() - muteCcSentAtMs < 90) return
-      const muted = ccValueToFxMuted(msg.value)
+      if (msg.channel !== cubaseMuteCh0) return
+      if (isOwnCubaseMuteEcho(msg.controller, msg.value)) return
       // Cubase already owns telling the mixer for its own automation, so nothing echoed back out.
-      applyFxMuted(muted, { sendToCubase: false, sendToMixer: false })
+      // UI-only apply — never sendToCubase (echo must not double-drive mute).
+      if (msg.controller === CUBASE_MUTE_CC) {
+        applyFxMuted(ccValueToFxMuted(msg.value), { sendToCubase: false, sendToMixer: false })
+        return
+      }
+      if (msg.controller === CUBASE_SYNTH_MUTE_CC) {
+        // Inverted Jump/Value: 127=muted, 0=live (opposite of FX CC85).
+        applyChannelMuted('synth', ccValueToFxMuted(msg.value, CUBASE_CHANNEL_MUTE_INVERTED), {
+          sendToCubase: false,
+          source: 'cubase-echo'
+        })
+        return
+      }
+      if (msg.controller === CUBASE_PIANO_MUTE_CC) {
+        applyChannelMuted('piano', ccValueToFxMuted(msg.value, CUBASE_CHANNEL_MUTE_INVERTED), {
+          sendToCubase: false,
+          source: 'cubase-echo'
+        })
+      }
     },
     onNoteOn: (msg) => {
       tryMappedTransport('note', msg.channel, msg.note, msg.velocity)
@@ -1061,7 +1317,8 @@ function connectMidi(): void {
   mixerInputOpen = midi.openMixerInput(mixer.input, (msg) => {
     mixerLastMessageAtMs = Date.now()
     mixerLastCc = msg
-    broadcastState()
+    // UI MIDI status only — do not spam full song JSON to CrowPanel on every mixer CC.
+    broadcastUiState()
     if (msg.channel !== mixerMuteCh0 || msg.controller !== MIXER_MUTE_CC) return
     if (Date.now() - muteCcSentAtMs < 90) return
     const muted = ccValueToFxMuted(msg.value, MIXER_MUTE_INVERTED)
@@ -1076,9 +1333,18 @@ function connectMidi(): void {
       `Mixer in=${mixerInputName ?? '—'}(${mixerInputOpen ? 'open' : 'closed'}) ` +
       `out=${mixerOutputName ?? '—'}(${mixerOutputOpen ? 'open' : 'closed'})`
   )
+  if (cubaseOutputOpen) syncMutesToCubaseOnConnect()
 }
 
 function disconnectMidi(): void {
+  if (muteBootSyncTimer) {
+    clearTimeout(muteBootSyncTimer)
+    muteBootSyncTimer = null
+  }
+  if (muteBootSyncFollowUpTimer) {
+    clearTimeout(muteBootSyncFollowUpTimer)
+    muteBootSyncFollowUpTimer = null
+  }
   midi.closeInput()
   midi.closeMixerInput()
   midi.closeMixerOutput()
@@ -1531,6 +1797,10 @@ function registerIpc(): void {
     const allowed: Partial<AppState> = {}
     // fxMuted goes through applyFxMuted for CC out + display tint (not LEDs).
     const mutedToApply = patch.fxMuted !== undefined ? Boolean(patch.fxMuted) : undefined
+    const synthMutedToApply =
+      patch.synthMuted !== undefined ? Boolean(patch.synthMuted) : undefined
+    const pianoMutedToApply =
+      patch.pianoMuted !== undefined ? Boolean(patch.pianoMuted) : undefined
     if (patch.allMuted !== undefined) allowed.allMuted = Boolean(patch.allMuted)
     if (patch.esp32Enabled !== undefined) allowed.esp32Enabled = Boolean(patch.esp32Enabled)
     if (patch.arrangerMidi && typeof patch.arrangerMidi === 'object') {
@@ -1561,6 +1831,13 @@ function registerIpc(): void {
           `stop=${allowed.transportMidi.stopNumber}`
       )
     }
+    if (patch.countdownStartLeadMs !== undefined) {
+      allowed.countdownStartLeadMs = clampCountdownStartLeadMs(
+        patch.countdownStartLeadMs,
+        st.countdownStartLeadMs
+      )
+      console.log(`[ViewerOne] countdown start lead set to ${allowed.countdownStartLeadMs}ms`)
+    }
 
     let nextExternal =
       patch.ledExternalPower !== undefined ? Boolean(patch.ledExternalPower) : st.ledExternalPower
@@ -1575,6 +1852,12 @@ function registerIpc(): void {
     setState(store, allowed)
     if (mutedToApply !== undefined) {
       applyFxMuted(mutedToApply, { sendToCubase: true, sendToMixer: true })
+    }
+    if (synthMutedToApply !== undefined) {
+      applyChannelMuted('synth', synthMutedToApply, { sendToCubase: true, source: 'preview/ui' })
+    }
+    if (pianoMutedToApply !== undefined) {
+      applyChannelMuted('piano', pianoMutedToApply, { sendToCubase: true, source: 'preview/ui' })
     }
     if (allowed.esp32Enabled !== undefined) {
       syncEsp32SerialFromStore()
@@ -1798,6 +2081,7 @@ if (!gotTheLock) {
     isQuitting = true
     clearMidiReconnectTimer()
     stopCountdownTicker()
+    stopEsp32ClockSync()
     shutdownEsp32Serial()
     midi.closeInput()
     midi.closeMixerInput()

@@ -30,8 +30,9 @@
  *    → song PC 1, wire 118 → song PC 119).
  *  - Song select: PC 1–119 only (wire 0–118). Selecting a song updates the display and queues
  *    that song’s LED pattern — it does NOT push LEDs to the ESP.
- *  - PC 120/121 (wire 119/120): PROMPT 1 indicator on/off (absolute state).
- *  - PC 122/123 (wire 121/122): PROMPT 2 indicator on/off (absolute state).
+ *  - PC 120/121 (wire 119/120): legacy PROMPT 1 on/off (host Detail tests; no CrowPanel pads).
+ *  - PC 122/123 (wire 121/122): legacy PROMPT 2 on/off (host Detail tests; no CrowPanel pads).
+ *  - CrowPanel SYNTH / PIANO pads: Cubase mixer mute via CC 86 / 87 on ch 1 (see below).
  *  - PC 124 (wire 123): reserved.
  *  - PC 125 (wire 124): LED blackout — all LEDs off (pattern id 99).
  *  - PC 126 (wire 125): LED idle — dim slow knight rider (pattern id 0) between songs.
@@ -107,6 +108,40 @@ export const LED_IDLE_DIM_BRIGHTNESS = 32
 /** Cubase's own mute CC convention: muted = value 0, unmuted = value 127. */
 export const CUBASE_MUTE_CHANNEL = 1
 export const CUBASE_MUTE_CC = 85
+
+/**
+ * CrowPanel SYNTH / PIANO pads → Cubase mixer channel mutes on ViewerOneToCubase.
+ * Channel {@link CUBASE_MUTE_CHANNEL}. Polarity is **inverted vs FX CC85** for Jump/Value
+ * Generic Remote: muted → 127, live/unmuted → 0 (see {@link CUBASE_CHANNEL_MUTE_INVERTED}).
+ *
+ * Cubase Generic Remote (map on the ViewerOne → Cubase port):
+ *  - CC {@link CUBASE_SYNTH_MUTE_CC} → Mixer Channel 1 ("Synth") Mute
+ *  - CC {@link CUBASE_PIANO_MUTE_CC} → Mixer Channel 2 ("Piano") Mute
+ *
+ * Flags: **Jump / Value** (absolute) — do NOT enable Toggle or Push Button.
+ * Optionally reverse-map the same CCs on CubaseToViewerOne (same inverted polarity).
+ */
+export const CUBASE_SYNTH_MUTE_CC = 86
+export const CUBASE_PIANO_MUTE_CC = 87
+
+/**
+ * Synth/Piano (CC86/87) Jump/Value polarity vs Cubase mixer mute.
+ * true → muted=127, live=0 (opposite of FX CC85). UI green=live stays unchanged.
+ */
+export const CUBASE_CHANNEL_MUTE_INVERTED = true
+
+export function isCubaseChannelMuteCc(controller: number): boolean {
+  return controller === CUBASE_SYNTH_MUTE_CC || controller === CUBASE_PIANO_MUTE_CC
+}
+
+/** Absolute Cubase mute CC value. FX CC85: 0=muted; Synth/Piano when inverted: 127=muted. */
+export function cubaseMuteCcValue(muted: boolean, controller = CUBASE_MUTE_CC): number {
+  const inverted = CUBASE_CHANNEL_MUTE_INVERTED && isCubaseChannelMuteCc(controller)
+  return inverted ? (muted ? 127 : 0) : muted ? 0 : 127
+}
+
+/** Ignore Cubase mute CC echoes for this long after we send on that controller. */
+export const CUBASE_MUTE_ECHO_IGNORE_MS = 450
 
 /** The mixer's own (X32) channel-mute CC convention: muted = value 127, unmuted = value 0. */
 export const MIXER_MUTE_CHANNEL = 2

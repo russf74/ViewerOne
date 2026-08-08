@@ -6,12 +6,34 @@ export type Esp32DisplayPayload = {
   c: string
   /** song duration / live remaining time in mm:ss */
   d: string
+  /**
+   * Setlist song position for CrowPanel bottom meta line, e.g. `01/24`, `IN/24`,
+   * `SC/24`, `OU/24`. INTRO/SOUNDCHECK/OUTRO use labels; total = real arranger songs
+   * only (excludes blue rows and unvisited retained rows).
+   */
+  n?: string
+  /**
+   * Next setlist row title (song-change only). Empty/omitted on the last song or
+   * when waiting. CrowPanel + PC preview render it clipped above the meta row.
+   */
+  x?: string
   /** live — kept for firmware compatibility; colour is mute-driven only */
   l: boolean
   /** FX mute — yellow on navy when true; green on black when false */
   m?: boolean
   /** Group1 / ALL mute; CrowPanel only (CYD ignores unknown fields). */
   a?: boolean
+  /** Cubase mixer ch1 Synth mute; CrowPanel SYNTH pad. */
+  s?: boolean
+  /** Cubase mixer ch2 Piano mute; CrowPanel PIANO pad (`i` — `p` is countdown playing). */
+  i?: boolean
+  /**
+   * Remaining seconds for device-side countdown. When present, firmware arms a local
+   * MM:SS tick and the host must NOT spam full display JSON every second.
+   */
+  r?: number
+  /** Countdown playing — device ticks remaining down while true; freezes while false. */
+  p?: boolean
 }
 
 export type Esp32DeviceType = 'cyd' | 'crowpanel7' | 'unknown'
@@ -105,10 +127,14 @@ export type ArrangerScanState = {
 }
 
 export type AppState = {
-  /** Cubase / mixer ↔ ViewerOne / ESP: muted = tint + CC 0/127 out (see shared/midiConfig.ts) */
+  /** Cubase / mixer ↔ ViewerOne / ESP: muted tint; CC polarity in shared/midiConfig.ts */
   fxMuted: boolean
   /** CrowPanel Group1 / ALL mute, independent from Group6 / FX. */
   allMuted: boolean
+  /** Cubase mixer channel 1 (Synth) mute — CrowPanel SYNTH pad / CC 86. */
+  synthMuted: boolean
+  /** Cubase mixer channel 2 (Piano) mute — CrowPanel PIANO pad / CC 87. */
+  pianoMuted: boolean
   setlist: SetlistItem[]
   /** Row id from last matched program change; null until first PC */
   currentSongId: string | null
@@ -122,6 +148,11 @@ export type AppState = {
   arrangerMidi: ArrangerMidiMapping
   /** Cubase → ViewerOne Start/Stop mapping (notes/CC); realtime + MMC always on. */
   transportMidi: TransportMidiMapping
+  /**
+   * Cubase Start lag compensation (ms). When arming a countdown from full song length,
+   * the wall-clock anchor is backdated by this amount so remaining hits 0 with the arranger block.
+   */
+  countdownStartLeadMs: number
 }
 
 /** Live MIDI connection status, so the UI isn't "blind" even though ports are auto-detected/hardcoded. */

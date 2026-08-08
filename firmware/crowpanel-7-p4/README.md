@@ -73,21 +73,18 @@ Hold **BOOT**, tap **RESET**, release **BOOT** if upload fails to enter download
 ## UI
 
 - **Left (~75%)**: song title + `YYYY     MM:SS` (full length or live remaining time), mute colours (muted = yellow on navy, live = lime on black), LED pattern footer, polished idle “Waiting for signal”.
-- **Right**: four double-height items — pressable **ALL** (Group1) and **FX** (Group6, same as CYD/main-stage touch), followed by non-clickable **PROMPT 1** and **PROMPT 2** status lights.
-- PROMPT PCs use absolute LED-style state: **120 = PROMPT 1 on**, **121 = off**, **122 = PROMPT 2 on**, **123 = off**. ViewerOne translates these to serial JSON.
-- Mute feedback is optimistic: touch-down updates and presents the local LVGL frame first, then sends the serial event to ViewerOne. The desktop echo remains authoritative for later synchronization.
+- **Right**: four pressable pads — **ALL** (Group1), **FX** (Group6 / main-stage), **SYNTH** (Cubase mixer ch1), **PIANO** (Cubase mixer ch2).
+- Synth/Piano: filled green = live/unmuted, filled dark grey = muted. Serial `mute_toggle` includes absolute `muted` so the host SETs once (no double-toggle). Host sends Cubase CC 86 / 87 on ch 1 inverted vs FX (127=muted, 0=unmuted) for Jump/Value Generic Remote.
+- Legacy prompt PCs 120–123 remain accepted by the host for Detail tests but no longer drive CrowPanel pads.
+- Mute feedback is optimistic: touch-down flips local pad style and sends serial immediately. Under **180° software rotation**, pad handlers must not call `lv_refr_now()` (full-frame rotate_copy + vsync would lag the next touch).
 
 ## Serial protocol (compatible with ViewerOne desktop)
 
 PC → ESP:
 
 ```json
-{"t":"Title","c":"1999","d":"04:32","l":true,"m":false,"a":false}
+{"t":"Title","c":"1999","d":"04:32","l":true,"m":false,"a":false,"s":false,"i":false}
 {"cmd":"hello"}
-{"prompt":1,"on":true}
-{"prompt":1,"on":false}
-{"prompt":2,"on":true}
-{"prompt":2,"on":false}
 ```
 
 ESP → PC:
@@ -96,7 +93,8 @@ ESP → PC:
 {"evt":"mute_toggle"}
 {"evt":"mute_toggle","group":"fx"}
 {"evt":"mute_toggle","group":"all"}
-{"evt":"prompt","ok":true,"prompt":1,"on":true}
+{"evt":"mute_toggle","group":"synth","muted":true}
+{"evt":"mute_toggle","group":"piano"}
 {"evt":"boot","device":"crowpanel7","model":"Elecrow CrowPanel Advanced 7","w":1024,"h":600,"fw":"5.10.0",...}
 {"evt":"hello","device":"crowpanel7","model":"Elecrow CrowPanel Advanced 7","w":1024,"h":600,"fw":"5.10.0",...}
 ```

@@ -1,17 +1,28 @@
 /**
  * ViewerOne — CrowPanel Advanced 7" ESP32-P4 (EK79007 MIPI-DSI 1024×600 + GT911)
  *
- * PC @ 115200 — display:
- *   {"t":"Title","c":"1999","d":"04:32","l":true,"m":false,"a":false}
+ * PC @ 115200 — display (transport / song change only — not every second):
+ *   {"t":"Title","c":"1999","d":"04:32","n":"01/24","x":"Next Title","r":272,"p":true,"l":true,"m":false,"a":false,"s":false,"i":false}
+ *   m=FX, a=ALL, s=Synth (Cubase ch1), i=Piano (Cubase ch2) mute flags.
+ *   n = setlist position (`01/24`, `IN/24`, `SC/24`, `OU/24`) — updates with song UI only.
+ *   x = next setlist row title — hard-clipped (no ellipsis); label updates only when x changes.
+ *   r = remaining seconds, p = playing. Firmware ticks MM:SS locally while p=true
+ *   so USB serial does not stall WS2812 refresh each second.
+ *   Duration is a narrow LVGL label; 1Hz updates are deferred (dirty flag) and LED
+ *   refresh runs on a high-priority task on the opposite core from LVGL.
+ * PC @ 115200 — wall clock (host has RTC; ESP does not):
+ *   {"hm":"14:05"}  (alias: "clk") — right-pad-column top HH:MM; label set only when string changes.
  *
  * PC @ 115200 — LED (optional, crowpanel-7-p4-led env):
  *   {"led":"pattern","id":0} / brightness / off / status
- * PC @ 115200 — prompt indicators:
- *   {"prompt":1,"on":true} / {"prompt":2,"on":false}
+ * PC @ 115200 — legacy prompt JSON is accepted but no longer drives pads
+ *   (bottom pads are Cubase channel mutes: Synth / Piano).
  *
  * ESP→PC touch:
  *   {"evt":"mute_toggle","group":"fx"}     FX pad / main text stage (Group6)
  *   {"evt":"mute_toggle","group":"all"}    Group1 / ALL pad
+ *   {"evt":"mute_toggle","group":"synth","muted":true|false}  Cubase ch1 — absolute after local flip
+ *   {"evt":"mute_toggle","group":"piano","muted":true|false}  Cubase ch2 — absolute after local flip
  * Boot/identity: {"evt":"boot","device":"crowpanel7","model":"Elecrow CrowPanel Advanced 7","w":1024,"h":600,...}
  * PC may request it again with {"cmd":"hello"}.
  */
@@ -23,6 +34,8 @@
 #include <esp_idf_version.h>
 #include <esp_ldo_regulator.h>
 #include <esp_task_wdt.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include "board_config.h"
 #include "esp_panel_board_custom_conf.h"
@@ -42,7 +55,7 @@ static CRGB s_leds[NUM_LEDS];
 using namespace esp_panel::drivers;
 using namespace esp_panel::board;
 
-static constexpr const char *VIEWERONE_FW_VERSION = "5.10.0";
+static constexpr const char *VIEWERONE_FW_VERSION = "5.12.24";
 static constexpr uint32_t WDT_TIMEOUT_S = 8;
 
 static constexpr int SCREEN_W = H_size;
@@ -50,7 +63,8 @@ static constexpr int SCREEN_H = V_size;
 static constexpr int PAD_COL_W = 260;
 static constexpr int MAIN_W = SCREEN_W - PAD_COL_W;
 static constexpr int PAD_COUNT = 4;
-static constexpr uint32_t PAD_COOLDOWN_MS = 120;
+/** Anti-chatter — long enough to avoid double mute_toggle from GT911 bounce. */
+static constexpr uint32_t PAD_COOLDOWN_MS = 180;
 
 static constexpr int kMainPad = 18;
 static constexpr int kBrandH = 34;
@@ -61,8 +75,13 @@ static constexpr int kTextBoxBotGap = 10;
 
 /** LVGL built-in Montserrat tops out at 48px; zoom (256 = 1x) matches PC preview proportions on 1024×600. */
 static constexpr uint16_t kTitleZoom = 400;  // ~75px visual
-static constexpr uint16_t kYearZoom = 330;   // ~62px visual; fits "YYYY     MM:SS"
+static constexpr uint16_t kYearZoom = 330;   // ~62px visual; fits "YYYY     MM:SS     01/24"
+static constexpr uint16_t kNextZoom = 250;   // smaller than meta (~47px visual)
 static constexpr uint16_t kIdleZoom = 400;   // ~75px visual
+/** Hard cap for next-song title (host also truncates); no ellipsis — CLIP only. */
+static constexpr size_t kNextTitleMaxChars = 36;
+/** Bottom-align next-song label this many px above the meta band (logical, pre-zoom). */
+static constexpr int kNextAboveMeta = 72;
 
 /** Grow down/right from top-left so left-justified layout stays inside the text box. */
 static void applyTextZoom(lv_obj_t *obj, uint16_t zoom) {
@@ -85,30 +104,56 @@ static constexpr int PIN_LCD_BK_POWER = 29;
 enum PadId : uint8_t {
   PAD_ALL = 0,
   PAD_FX = 1,
-  PAD_PROMPT_1 = 2,
-  PAD_PROMPT_2 = 3,
+  PAD_SYNTH = 2,
+  PAD_PIANO = 3,
 };
 
-static const char *const kPadLabels[PAD_COUNT] = {"ALL", "FX", "PROMPT 1", "PROMPT 2"};
+static const char *const kPadLabels[PAD_COUNT] = {"ALL", "FX", "SYNTH", "PIANO"};
 
 static char s_title[160] = "Waiting";
-static char s_year[48] = "";
+/** Year only (from PC `c`); duration is a separate narrow label for 1Hz ticks. */
+static char s_year_only[16] = "";
+static char s_duration[16] = "";
+/** Song position from PC `n` — changes on song select only (not 1Hz). */
+static char s_position[16] = "";
+/** Next setlist title from PC `x` — song select only (not 1Hz). */
+static char s_next[160] = "";
+/** Local wall clock HH:MM from PC `hm` / `clk` — update label only when string changes. */
+static char s_clock[8] = "";
 static bool s_fx_muted = false;
 static bool s_showing_waiting = true;
-/** ALL/FX: muted state. PROMPT 1/2: illuminated state. */
+/** ALL / FX / Synth / Piano: muted=true means channel/group muted (pad dark). */
 static bool s_pad_muted[PAD_COUNT] = {false, false, false, false};
 static PatternId s_pattern = DEFAULT_PATTERN;
+
+/** Device-side countdown — host arms via r/p; firmware ticks without per-second USB. */
+static int32_t s_cd_remain_sec = -1;
+static bool s_cd_running = false;
+static uint32_t s_cd_anchor_ms = 0;
+static int32_t s_cd_anchor_sec = 0;
+static int32_t s_cd_last_shown = -1;
+/** Defer LVGL duration label work off the LED critical path (set from tick, cleared under lock). */
+static volatile bool s_duration_dirty = false;
 
 static lv_obj_t *s_scr = nullptr;
 static lv_obj_t *s_main = nullptr;
 static lv_obj_t *s_brand = nullptr;
+static lv_obj_t *s_ver_lbl = nullptr;
+static lv_obj_t *s_clock_lbl = nullptr;
 static lv_obj_t *s_text_box = nullptr;
 static lv_obj_t *s_title_lbl = nullptr;
+static lv_obj_t *s_next_lbl = nullptr;
 static lv_obj_t *s_year_lbl = nullptr;
+static lv_obj_t *s_duration_lbl = nullptr;
+static lv_obj_t *s_position_lbl = nullptr;
 static lv_obj_t *s_footer_lbl = nullptr;
 static lv_obj_t *s_idle_lbl = nullptr;
 static lv_obj_t *s_pad_btns[PAD_COUNT] = {nullptr};
 static lv_obj_t *s_pad_status[PAD_COUNT] = {nullptr};
+
+#if defined(VIEWERONE_ENABLE_LED)
+static TaskHandle_t s_led_task = nullptr;
+#endif
 
 static String lineBuf;
 static uint32_t s_last_pad_ms[PAD_COUNT] = {0};
@@ -119,40 +164,48 @@ static void applyMainTheme(bool muted) {
   if (!s_main) return;
   const lv_color_t bg = muted ? col_hex(0x000088) : col_hex(0x050608);
   const lv_color_t fg = muted ? col_hex(0xFFE600) : col_hex(0x39FF14);
+  /** Now-playing title — cyan (matches PC totals / preview), not theme lime/yellow. */
+  const lv_color_t titleFg = col_hex(0x00E5FF);
   lv_obj_set_style_bg_color(s_main, bg, 0);
-  if (s_title_lbl) lv_obj_set_style_text_color(s_title_lbl, fg, 0);
+  if (s_title_lbl) lv_obj_set_style_text_color(s_title_lbl, titleFg, 0);
+  if (s_next_lbl) lv_obj_set_style_text_color(s_next_lbl, fg, 0);
   if (s_year_lbl) lv_obj_set_style_text_color(s_year_lbl, fg, 0);
+  if (s_duration_lbl) lv_obj_set_style_text_color(s_duration_lbl, fg, 0);
+  if (s_position_lbl) lv_obj_set_style_text_color(s_position_lbl, fg, 0);
   if (s_footer_lbl) lv_obj_set_style_text_color(s_footer_lbl, fg, 0);
   if (s_idle_lbl) lv_obj_set_style_text_color(s_idle_lbl, col_hex(0xFFE600), 0);
   if (s_brand) {
     lv_obj_set_style_text_color(s_brand, muted ? col_hex(0xC9B44A) : col_hex(0x6B7280), 0);
   }
+  // Version stays dim grey — not part of the mute theme flash.
+  if (s_ver_lbl) {
+    lv_obj_set_style_text_color(s_ver_lbl, col_hex(0x6B7280), 0);
+  }
 }
 
 static void refreshPadVisual(int idx) {
   if (idx < 0 || idx >= PAD_COUNT || !s_pad_btns[idx]) return;
-  const bool active = s_pad_muted[idx];
-  const bool indicator = idx == PAD_PROMPT_1 || idx == PAD_PROMPT_2;
+  const bool muted = s_pad_muted[idx];
+  const bool channel_pad = idx == PAD_SYNTH || idx == PAD_PIANO;
   lv_color_t bg;
   lv_color_t border;
   lv_color_t fg;
-  if (idx == PAD_PROMPT_1 && active) {
-    bg = col_hex(0xFF1493);
-    border = col_hex(0xFF9AD1);
-    fg = col_hex(0xFFFFFF);
-  } else if (idx == PAD_PROMPT_2 && active) {
-    bg = col_hex(0xFFD600);
-    border = col_hex(0xFFF176);
-    fg = col_hex(0x171300);
-  } else if (indicator) {
-    bg = col_hex(0x11151C);
-    border = col_hex(0x252C37);
-    fg = col_hex(0x737D8E);
-  } else if (idx == PAD_FX && active) {
+  if (channel_pad) {
+    // Filled green = live/unmuted; filled dark grey = muted/off.
+    if (muted) {
+      bg = col_hex(0x14171C);
+      border = col_hex(0x2A303A);
+      fg = col_hex(0x6B7280);
+    } else {
+      bg = col_hex(0x1B5E20);
+      border = col_hex(0x2ECC71);
+      fg = col_hex(0xE8FFE8);
+    }
+  } else if (idx == PAD_FX && muted) {
     bg = col_hex(0x000088);
     border = col_hex(0x2E8BFF);
     fg = col_hex(0xEAF4FF);
-  } else if (active) {
+  } else if (muted) {
     bg = col_hex(0x5C1A1A);
     border = col_hex(0xFF6A00);
     fg = col_hex(0xFFCC66);
@@ -161,22 +214,29 @@ static void refreshPadVisual(int idx) {
     border = col_hex(0x2ECC71);
     fg = col_hex(0xB8F5C8);
   }
-  lv_obj_set_style_bg_color(s_pad_btns[idx], bg, 0);
-  lv_obj_set_style_border_color(s_pad_btns[idx], border, 0);
-  lv_obj_set_style_text_color(s_pad_btns[idx], fg, 0);
+  // Instant mute colors (theme TRANSITION_TIME=0 / GROW=0). Same fill for PRESSED —
+  // do NOT set style_transition(nullptr): LVGL can fault on press if that dsc is null.
+  lv_obj_t *btn = s_pad_btns[idx];
+  lv_obj_set_style_bg_color(btn, bg, 0);
+  lv_obj_set_style_bg_color(btn, bg, LV_STATE_PRESSED);
+  lv_obj_set_style_border_color(btn, border, 0);
+  lv_obj_set_style_border_color(btn, border, LV_STATE_PRESSED);
+  lv_obj_set_style_border_width(btn, 2, LV_STATE_PRESSED);
+  lv_obj_set_style_text_color(btn, fg, 0);
+  // Kill theme btn press recolor (darken filter) without touching transition pointers.
+  lv_obj_set_style_color_filter_opa(btn, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_color_filter_opa(btn, LV_OPA_TRANSP, LV_STATE_PRESSED);
+  lv_obj_set_style_outline_width(btn, 0, LV_STATE_PRESSED);
+  lv_obj_set_style_outline_opa(btn, LV_OPA_TRANSP, LV_STATE_PRESSED);
+  lv_obj_set_style_transform_width(btn, 0, LV_STATE_PRESSED);
+  lv_obj_set_style_transform_height(btn, 0, LV_STATE_PRESSED);
   if (s_pad_status[idx]) {
-    lv_label_set_text(s_pad_status[idx],
-                      indicator ? (active ? "ON" : "STANDBY") : (active ? "MUTED" : "LIVE"));
+    lv_label_set_text(s_pad_status[idx], muted ? "MUTED" : "LIVE");
     lv_obj_set_style_text_color(
         s_pad_status[idx],
-        idx == PAD_PROMPT_1 && active
-            ? col_hex(0xFFFFFF)
-            : idx == PAD_PROMPT_2 && active
-                  ? col_hex(0x171300)
-                  : indicator
-                        ? col_hex(0x596170)
-                        : (active ? (idx == PAD_FX ? col_hex(0x9DCEFF) : col_hex(0xFF8A4C))
-                                  : col_hex(0x5CDE8A)),
+        muted ? (channel_pad ? col_hex(0x6B7280)
+                             : (idx == PAD_FX ? col_hex(0x9DCEFF) : col_hex(0xFF8A4C)))
+              : (channel_pad ? col_hex(0xA7F3B0) : col_hex(0x5CDE8A)),
         0);
   }
 }
@@ -212,63 +272,195 @@ static void showWaitingUi(bool waiting) {
       lv_obj_clear_flag(s_year_lbl, LV_OBJ_FLAG_HIDDEN);
     }
   }
+  if (s_duration_lbl) {
+    if (waiting) {
+      lv_obj_add_flag(s_duration_lbl, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_clear_flag(s_duration_lbl, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+  if (s_position_lbl) {
+    if (waiting) {
+      lv_obj_add_flag(s_position_lbl, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_clear_flag(s_position_lbl, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+  if (s_next_lbl) {
+    if (waiting) {
+      lv_obj_add_flag(s_next_lbl, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_clear_flag(s_next_lbl, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
 }
 
-/** Keep year about half one zoomed title line below the actual (possibly wrapped) title. */
-static void positionYearBelowTitle() {
-  if (!s_title_lbl || !s_year_lbl) return;
-  lv_obj_update_layout(s_title_lbl);
-  const int title_y = 28;
-  const int title_visual_h = lv_obj_get_height(s_title_lbl) * (int)kTitleZoom / 256;
-  const int title_visual_font_h = 48 * (int)kTitleZoom / 256;
-  lv_obj_set_y(s_year_lbl, title_y + title_visual_h + title_visual_font_h / 2);
+static void formatMmSs(int32_t sec, char *buf, size_t n) {
+  if (sec < 0) sec = 0;
+  snprintf(buf, n, "%02d:%02d", (int)(sec / 60), (int)(sec % 60));
 }
 
-static void drawSongUi(const char *title, const char *year, const char *duration, bool muted) {
+/**
+ * Three fixed meta slots (logical/pre-zoom coords). Content length must never move neighbors:
+ * year left, MM:SS in the middle slot, song position in the right slot.
+ * Duration stays narrow so 1Hz LVGL invalidation remains LED-friendly.
+ */
+static int yearLabelLogicalW() { return 5 * 28; }       // "YYYY"
+static int durationLabelLogicalW() { return 5 * 30; }  // "MM:SS"
+static int positionLabelLogicalW() { return 7 * 28; }  // "01/24" / "IN/24"
+static constexpr int kMetaSlotGap = 36;
+static int yearLabelX() { return 0; }
+static int durationLabelX() {
+  return yearLabelLogicalW() * (int)kYearZoom / 256 + kMetaSlotGap;
+}
+static int positionLabelX() {
+  return durationLabelX() + durationLabelLogicalW() * (int)kYearZoom / 256 + kMetaSlotGap;
+}
+
+/** Pin a meta label into its fixed slot (bottom of text box). Call at create time only. */
+static void placeMetaLabel(lv_obj_t *lbl, int x, int logical_w, lv_text_align_t align) {
+  if (!lbl) return;
+  lv_obj_set_width(lbl, logical_w);
+  lv_obj_set_style_text_align(lbl, align, 0);
+  lv_obj_align(lbl, LV_ALIGN_BOTTOM_LEFT, x, 0);
+}
+
+/** Apply pending MM:SS only — never blocks waiting for LVGL (LEDs win). */
+static void flushDurationLabelIfDirty() {
+  if (!s_duration_dirty) return;
+  if (!lvgl_port_lock(0)) return;
+  s_duration_dirty = false;
+  if (s_duration_lbl && !s_showing_waiting) {
+    lv_label_set_text(s_duration_lbl, s_duration[0] ? s_duration : "");
+  }
+  lvgl_port_unlock();
+}
+
+/** Host wall clock — cheap label set; skip when HH:MM unchanged (LEDs stay smooth). */
+static void applyHostClock(const char *hm) {
+  if (!hm || !hm[0]) return;
+  char buf[8];
+  strncpy(buf, hm, sizeof(buf) - 1);
+  buf[sizeof(buf) - 1] = '\0';
+  if (strcmp(s_clock, buf) == 0) return;
+  memcpy(s_clock, buf, sizeof(s_clock));
+  if (!s_clock_lbl) return;
+  if (lvgl_port_lock(20)) {
+    lv_label_set_text(s_clock_lbl, s_clock);
+    lvgl_port_unlock();
+  }
+}
+
+static void stopLocalCountdown() {
+  s_cd_running = false;
+  s_cd_remain_sec = -1;
+  s_cd_last_shown = -1;
+  s_duration_dirty = false;
+}
+
+static void armLocalCountdown(int32_t remain_sec, bool running) {
+  if (remain_sec < 0) remain_sec = 0;
+  s_cd_remain_sec = remain_sec;
+  s_cd_anchor_sec = remain_sec;
+  s_cd_anchor_ms = millis();
+  s_cd_last_shown = remain_sec;
+  s_cd_running = running && remain_sec > 0;
+  formatMmSs(remain_sec, s_duration, sizeof(s_duration));
+  s_duration_dirty = false;  // drawSongUi / caller sets the label under an existing lock
+}
+
+/** Tick local MM:SS when host armed with p=true; only dirties a flag — no LVGL on this path. */
+static void tickLocalCountdown() {
+  if (!s_cd_running || s_cd_remain_sec < 0) return;
+  const uint32_t elapsed_ms = millis() - s_cd_anchor_ms;
+  int32_t shown = s_cd_anchor_sec - (int32_t)(elapsed_ms / 1000U);
+  if (shown < 0) shown = 0;
+  if (shown == s_cd_last_shown) return;
+  s_cd_last_shown = shown;
+  s_cd_remain_sec = shown;
+  formatMmSs(shown, s_duration, sizeof(s_duration));
+  s_duration_dirty = true;
+  if (shown == 0) s_cd_running = false;
+}
+
+static void drawSongUi(const char *title, const char *year, const char *duration,
+                       const char *position, const char *next, bool muted) {
   strncpy(s_title, title && title[0] ? title : "-", sizeof(s_title) - 1);
   s_title[sizeof(s_title) - 1] = '\0';
-  const char *safe_year = year ? year : "";
-  const char *safe_duration = duration ? duration : "";
-  if (safe_year[0] && safe_duration[0]) {
-    snprintf(s_year, sizeof(s_year), "%s     %s", safe_year, safe_duration);
-  } else {
-    snprintf(s_year, sizeof(s_year), "%s%s", safe_year, safe_duration);
+  strncpy(s_year_only, year ? year : "", sizeof(s_year_only) - 1);
+  s_year_only[sizeof(s_year_only) - 1] = '\0';
+  strncpy(s_duration, duration ? duration : "", sizeof(s_duration) - 1);
+  s_duration[sizeof(s_duration) - 1] = '\0';
+  strncpy(s_position, position ? position : "", sizeof(s_position) - 1);
+  s_position[sizeof(s_position) - 1] = '\0';
+  // Next title — update label only when the string actually changes (mute / PC chase / re-arm
+  // must not invalidate this band; LONG_DOT redraws were overlapping title/duration).
+  char nextIn[sizeof(s_next)];
+  nextIn[0] = '\0';
+  if (next && next[0]) {
+    strncpy(nextIn, next, kNextTitleMaxChars);
+    nextIn[kNextTitleMaxChars] = '\0';
+    nextIn[sizeof(nextIn) - 1] = '\0';
   }
+  const bool nextChanged = strcmp(s_next, nextIn) != 0;
+  if (nextChanged) {
+    strncpy(s_next, nextIn, sizeof(s_next) - 1);
+    s_next[sizeof(s_next) - 1] = '\0';
+  }
+  s_duration_dirty = false;
   s_fx_muted = muted;
   s_pad_muted[PAD_FX] = muted;
   showWaitingUi(false);
   if (s_title_lbl) lv_label_set_text(s_title_lbl, s_title);
-  if (s_year_lbl) lv_label_set_text(s_year_lbl, s_year[0] ? s_year : "-");
-  positionYearBelowTitle();
+  // Text only — slot X/width stay fixed so year/countdown/position never shove each other.
+  if (s_year_lbl) lv_label_set_text(s_year_lbl, s_year_only[0] ? s_year_only : "");
+  if (s_duration_lbl) lv_label_set_text(s_duration_lbl, s_duration[0] ? s_duration : "");
+  if (s_position_lbl) lv_label_set_text(s_position_lbl, s_position[0] ? s_position : "");
+  // Next song — change-only; empty at last song (label stays reserved above meta).
+  if (s_next_lbl && nextChanged) {
+    if (s_next[0]) {
+      char nextBuf[176];
+      snprintf(nextBuf, sizeof(nextBuf), "Next : %s", s_next);
+      lv_label_set_text(s_next_lbl, nextBuf);
+    } else {
+      lv_label_set_text(s_next_lbl, "");
+    }
+  }
   applyMainTheme(muted);
   refreshPadVisual(PAD_FX);
   refreshFooter();
 }
 
 static void drawWaitingUi() {
+  stopLocalCountdown();
   s_fx_muted = false;
   s_pad_muted[PAD_FX] = false;
   strncpy(s_title, "Waiting", sizeof(s_title) - 1);
-  s_year[0] = '\0';
+  s_year_only[0] = '\0';
+  s_duration[0] = '\0';
+  s_position[0] = '\0';
+  s_next[0] = '\0';
+  if (s_next_lbl) lv_label_set_text(s_next_lbl, "");
   showWaitingUi(true);
   applyMainTheme(false);
   refreshPadVisual(PAD_FX);
   refreshFooter();
 }
 
-static void sendMuteEvent(const char *group) {
-  // One JSON line only (avoid double-toggle). Bare mute_toggle remains CYD firmware.
-  // CrowPanel always includes group; desktop ignores unknown groups and treats fx/all/missing.
+static void sendMuteEvent(const char *group, bool muted) {
+  // One JSON line only. Synth/Piano include absolute muted so the host SETs once
+  // (local pad already flipped — host must not toggle again).
+  // Bare mute_toggle remains CYD firmware; CrowPanel always includes group.
   if (!group || !group[0]) {
     Serial.println("{\"evt\":\"mute_toggle\"}");
     return;
   }
+  if (strcmp(group, "synth") == 0 || strcmp(group, "piano") == 0) {
+    Serial.printf(
+        "{\"evt\":\"mute_toggle\",\"group\":\"%s\",\"muted\":%s}\n", group, muted ? "true" : "false");
+    return;
+  }
   Serial.printf("{\"evt\":\"mute_toggle\",\"group\":\"%s\"}\n", group);
-}
-
-/** Present optimistic mute styling before notifying the desktop over serial. */
-static void presentLocalUiNow() {
-  lv_refr_now(lv_disp_get_default());
 }
 
 static void sendDeviceIdentity(const char *evt) {
@@ -284,24 +476,34 @@ static void onPadPressed(int idx) {
   if (now - s_last_pad_ms[idx] < PAD_COOLDOWN_MS) return;
   s_last_pad_ms[idx] = now;
 
+  // Paint then serial. Do NOT call lv_refr_now(): 180° software rotation would force
+  // full-frame rotate_copy + vsync and delay the next touch read.
   if (idx == PAD_ALL) {
     s_pad_muted[PAD_ALL] = !s_pad_muted[PAD_ALL];
     refreshPadVisual(PAD_ALL);
-    presentLocalUiNow();
-    sendMuteEvent("all");
+    sendMuteEvent("all", s_pad_muted[PAD_ALL]);
     return;
   }
   if (idx == PAD_FX) {
-    // Optimistic local flip; PC echo via {"m":...} is authoritative.
     s_pad_muted[PAD_FX] = !s_pad_muted[PAD_FX];
     s_fx_muted = s_pad_muted[PAD_FX];
     applyMainTheme(s_fx_muted);
     refreshPadVisual(PAD_FX);
-    presentLocalUiNow();
-    sendMuteEvent("fx");
+    sendMuteEvent("fx", s_fx_muted);
     return;
   }
-  // PROMPT indicators are serial-driven and deliberately non-clickable.
+  if (idx == PAD_SYNTH) {
+    s_pad_muted[PAD_SYNTH] = !s_pad_muted[PAD_SYNTH];
+    refreshPadVisual(PAD_SYNTH);
+    sendMuteEvent("synth", s_pad_muted[PAD_SYNTH]);
+    return;
+  }
+  if (idx == PAD_PIANO) {
+    s_pad_muted[PAD_PIANO] = !s_pad_muted[PAD_PIANO];
+    refreshPadVisual(PAD_PIANO);
+    sendMuteEvent("piano", s_pad_muted[PAD_PIANO]);
+    return;
+  }
 }
 
 static void pad_event_cb(lv_event_t *e) {
@@ -344,11 +546,24 @@ static void buildUi() {
   lv_obj_add_event_cb(s_main, stage_mute_cb, LV_EVENT_PRESSED, nullptr);
 
   s_brand = lv_label_create(s_main);
-  lv_label_set_text(s_brand, "VIEWERONE  -  LIVE HMI");
+  lv_label_set_text(s_brand, "VIEWERONE");
   lv_obj_set_style_text_font(s_brand, &lv_font_montserrat_22, 0);
   lv_obj_set_style_text_letter_space(s_brand, 3, 0);
   lv_obj_align(s_brand, LV_ALIGN_TOP_LEFT, 0, 0);
   lv_obj_clear_flag(s_brand, LV_OBJ_FLAG_CLICKABLE);
+
+  // Firmware version — subtle top-right of brand bar (clock lives on the pad column).
+  s_ver_lbl = lv_label_create(s_main);
+  {
+    char vbuf[24];
+    snprintf(vbuf, sizeof(vbuf), "v%s", VIEWERONE_FW_VERSION);
+    lv_label_set_text(s_ver_lbl, vbuf);
+  }
+  lv_obj_set_style_text_font(s_ver_lbl, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(s_ver_lbl, col_hex(0x6B7280), 0);
+  lv_obj_set_style_text_opa(s_ver_lbl, LV_OPA_70, 0);
+  lv_obj_align(s_ver_lbl, LV_ALIGN_TOP_RIGHT, 0, 4);
+  lv_obj_clear_flag(s_ver_lbl, LV_OBJ_FLAG_CLICKABLE);
 
   s_footer_lbl = lv_label_create(s_main);
   lv_obj_set_style_text_font(s_footer_lbl, &lv_font_montserrat_28, 0);
@@ -391,17 +606,46 @@ static void buildUi() {
   lv_obj_add_flag(s_title_lbl, LV_OBJ_FLAG_HIDDEN);
   lv_obj_clear_flag(s_title_lbl, LV_OBJ_FLAG_CLICKABLE);
 
+  // Next song — bottom-aligned above meta; hard CLIP (no DOTS/ellipsis), no wrap.
+  s_next_lbl = lv_label_create(s_text_box);
+  lv_label_set_long_mode(s_next_lbl, LV_LABEL_LONG_CLIP);
+  lv_obj_set_width(s_next_lbl, textBoxLabelW(kNextZoom));
+  lv_obj_set_height(s_next_lbl, 48);
+  lv_obj_set_style_text_font(s_next_lbl, &lv_font_montserrat_48, 0);
+  applyTextZoom(s_next_lbl, kNextZoom);
+  lv_obj_set_style_text_align(s_next_lbl, LV_TEXT_ALIGN_LEFT, 0);
+  lv_obj_align(s_next_lbl, LV_ALIGN_BOTTOM_LEFT, 0, -kNextAboveMeta);
+  lv_obj_add_flag(s_next_lbl, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(s_next_lbl, LV_OBJ_FLAG_CLICKABLE);
+
+  // Fixed-slot meta band: year | MM:SS | position — never one concatenated reflowing string.
   s_year_lbl = lv_label_create(s_text_box);
-  lv_label_set_long_mode(s_year_lbl, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(s_year_lbl, textBoxLabelW(kYearZoom));
+  lv_label_set_long_mode(s_year_lbl, LV_LABEL_LONG_CLIP);
   lv_obj_set_style_text_font(s_year_lbl, &lv_font_montserrat_48, 0);
   applyTextZoom(s_year_lbl, kYearZoom);
-  lv_obj_set_style_text_align(s_year_lbl, LV_TEXT_ALIGN_LEFT, 0);
-  lv_obj_align(s_year_lbl, LV_ALIGN_TOP_LEFT, 0, 200);
+  placeMetaLabel(s_year_lbl, yearLabelX(), yearLabelLogicalW(), LV_TEXT_ALIGN_LEFT);
   lv_obj_add_flag(s_year_lbl, LV_OBJ_FLAG_HIDDEN);
   lv_obj_clear_flag(s_year_lbl, LV_OBJ_FLAG_CLICKABLE);
 
-  // Right pad column
+  // Narrow MM:SS label — 1Hz ticks must only invalidate this small region (not the whole stage).
+  s_duration_lbl = lv_label_create(s_text_box);
+  lv_label_set_long_mode(s_duration_lbl, LV_LABEL_LONG_CLIP);
+  lv_obj_set_style_text_font(s_duration_lbl, &lv_font_montserrat_48, 0);
+  applyTextZoom(s_duration_lbl, kYearZoom);
+  placeMetaLabel(s_duration_lbl, durationLabelX(), durationLabelLogicalW(), LV_TEXT_ALIGN_CENTER);
+  lv_obj_add_flag(s_duration_lbl, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(s_duration_lbl, LV_OBJ_FLAG_CLICKABLE);
+
+  // Song position — song-change only (not 1Hz); separate label keeps countdown region small.
+  s_position_lbl = lv_label_create(s_text_box);
+  lv_label_set_long_mode(s_position_lbl, LV_LABEL_LONG_CLIP);
+  lv_obj_set_style_text_font(s_position_lbl, &lv_font_montserrat_48, 0);
+  applyTextZoom(s_position_lbl, kYearZoom);
+  placeMetaLabel(s_position_lbl, positionLabelX(), positionLabelLogicalW(), LV_TEXT_ALIGN_LEFT);
+  lv_obj_add_flag(s_position_lbl, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(s_position_lbl, LV_OBJ_FLAG_CLICKABLE);
+
+  // Right pad column — clock on top, four mute pads (~20% shorter than prior 116px).
   lv_obj_t *col = lv_obj_create(s_scr);
   lv_obj_set_size(col, PAD_COL_W - 10, SCREEN_H - 16);
   lv_obj_set_pos(col, MAIN_W + 2, 8);
@@ -409,40 +653,53 @@ static void buildUi() {
   lv_obj_set_style_border_width(col, 1, 0);
   lv_obj_set_style_border_color(col, col_hex(0x222833), 0);
   lv_obj_set_style_radius(col, 18, 0);
-  lv_obj_set_style_pad_all(col, 12, 0);
-  lv_obj_set_style_pad_row(col, 8, 0);
+  lv_obj_set_style_pad_all(col, 10, 0);
+  lv_obj_set_style_pad_row(col, 6, 0);
   lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(col, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
 
-  lv_obj_t *col_title = lv_label_create(col);
-  lv_label_set_text(col_title, "CONTROLS");
-  lv_obj_set_style_text_font(col_title, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(col_title, col_hex(0x8B92A0), 0);
-  lv_obj_set_style_text_letter_space(col_title, 2, 0);
+  // Host-synced wall clock — yellow bold HH:MM, centered at top of pad column.
+  s_clock_lbl = lv_label_create(col);
+  lv_label_set_text(s_clock_lbl, s_clock[0] ? s_clock : "--:--");
+  lv_obj_set_style_text_font(s_clock_lbl, &lv_font_montserrat_48, 0);
+  lv_obj_set_style_text_color(s_clock_lbl, col_hex(0xFFE600), 0);
+  lv_obj_set_style_text_letter_space(s_clock_lbl, 2, 0);
+  lv_obj_set_style_bg_color(s_clock_lbl, col_hex(0x000000), 0);
+  lv_obj_set_style_bg_opa(s_clock_lbl, LV_OPA_COVER, 0);
+  lv_obj_set_style_pad_ver(s_clock_lbl, 6, 0);
+  lv_obj_set_style_pad_hor(s_clock_lbl, 10, 0);
+  lv_obj_set_style_radius(s_clock_lbl, 8, 0);
+  lv_obj_set_width(s_clock_lbl, PAD_COL_W - 36);
+  lv_obj_set_style_text_align(s_clock_lbl, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_clear_flag(s_clock_lbl, LV_OBJ_FLAG_CLICKABLE);
 
   const int item_w = PAD_COL_W - 36;
-  const int item_h = 116;
+  const int item_h = 93;  // was 116 (~20% shorter) — room for clock without overflow
   for (int i = 0; i < PAD_COUNT; i++) {
-    const bool indicator = i == PAD_PROMPT_1 || i == PAD_PROMPT_2;
-    s_pad_btns[i] = indicator ? lv_obj_create(col) : lv_btn_create(col);
+    // lv_btn (stable press/indev path). Animations killed via lv_conf GROW=0 /
+    // TRANSITION_TIME=0 plus per-pad filter/outline/transform overrides below.
+    s_pad_btns[i] = lv_btn_create(col);
     lv_obj_set_size(s_pad_btns[i], item_w, item_h);
     lv_obj_set_style_radius(s_pad_btns[i], 12, 0);
     lv_obj_set_style_border_width(s_pad_btns[i], 2, 0);
     lv_obj_set_style_pad_all(s_pad_btns[i], 8, 0);
     lv_obj_clear_flag(s_pad_btns[i], LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_shadow_width(s_pad_btns[i], indicator ? 3 : 12, 0);
-    lv_obj_set_style_shadow_opa(s_pad_btns[i], indicator ? LV_OPA_20 : LV_OPA_50, 0);
-    lv_obj_set_style_shadow_color(s_pad_btns[i], col_hex(0x000000), 0);
-    if (indicator) {
-      lv_obj_clear_flag(s_pad_btns[i], LV_OBJ_FLAG_CLICKABLE);
-    } else {
-      lv_obj_add_event_cb(s_pad_btns[i], pad_event_cb, LV_EVENT_PRESSED, (void *)(intptr_t)i);
-    }
+    lv_obj_set_style_shadow_width(s_pad_btns[i], 0, 0);
+    lv_obj_set_style_shadow_opa(s_pad_btns[i], LV_OPA_TRANSP, 0);
+    lv_obj_set_style_outline_width(s_pad_btns[i], 0, 0);
+    lv_obj_set_style_outline_width(s_pad_btns[i], 0, LV_STATE_PRESSED);
+    lv_obj_set_style_outline_opa(s_pad_btns[i], LV_OPA_TRANSP, 0);
+    lv_obj_set_style_outline_opa(s_pad_btns[i], LV_OPA_TRANSP, LV_STATE_PRESSED);
+    lv_obj_set_style_transform_width(s_pad_btns[i], 0, LV_STATE_PRESSED);
+    lv_obj_set_style_transform_height(s_pad_btns[i], 0, LV_STATE_PRESSED);
+    lv_obj_set_style_color_filter_opa(s_pad_btns[i], LV_OPA_TRANSP, 0);
+    lv_obj_set_style_color_filter_opa(s_pad_btns[i], LV_OPA_TRANSP, LV_STATE_PRESSED);
+    lv_obj_add_event_cb(s_pad_btns[i], pad_event_cb, LV_EVENT_PRESSED, (void *)(intptr_t)i);
 
     lv_obj_t *lbl = lv_label_create(s_pad_btns[i]);
     lv_label_set_text(lbl, kPadLabels[i]);
-    lv_obj_set_style_text_font(lbl, indicator ? &lv_font_montserrat_24 : &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
     lv_obj_align(lbl, LV_ALIGN_CENTER, 0, -10);
     lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
 
@@ -454,13 +711,6 @@ static void buildUi() {
 
     refreshPadVisual(i);
   }
-
-  lv_obj_t *ver = lv_label_create(col);
-  char vbuf[40];
-  snprintf(vbuf, sizeof(vbuf), "v%s", VIEWERONE_FW_VERSION);
-  lv_label_set_text(ver, vbuf);
-  lv_obj_set_style_text_font(ver, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(ver, col_hex(0x4B5563), 0);
 
   drawWaitingUi();
 }
@@ -562,19 +812,14 @@ static void handleLedCommand(JsonDocument &doc) {
 #endif
 
 static void handlePromptCommand(JsonDocument &doc) {
+  // Pads 3–4 are Cubase Synth/Piano mutes; prompt JSON is accepted for host compat only.
   const int prompt = doc["prompt"] | 0;
   if ((prompt != 1 && prompt != 2) || doc["on"].isNull()) {
     Serial.println("{\"evt\":\"prompt\",\"ok\":false,\"err\":\"prompt_needs_1_or_2_and_on\"}");
     return;
   }
   const bool on = doc["on"].as<bool>();
-  const int idx = prompt == 1 ? PAD_PROMPT_1 : PAD_PROMPT_2;
-  if (lvgl_port_lock(-1)) {
-    s_pad_muted[idx] = on;
-    refreshPadVisual(idx);
-    lvgl_port_unlock();
-  }
-  Serial.printf("{\"evt\":\"prompt\",\"ok\":true,\"prompt\":%d,\"on\":%s}\n", prompt,
+  Serial.printf("{\"evt\":\"prompt\",\"ok\":true,\"prompt\":%d,\"on\":%s,\"ui\":false}\n", prompt,
                 on ? "true" : "false");
 }
 
@@ -596,20 +841,52 @@ static void handleSerialLine(const String &line) {
     handleLedCommand(doc);
     return;
   }
+
+  // Lightweight clock-only line from host: {"hm":"14:05"} (alias clk).
+  const char *hm_field = nullptr;
+  if (!doc["hm"].isNull()) hm_field = doc["hm"] | "";
+  else if (!doc["clk"].isNull()) hm_field = doc["clk"] | "";
+  if (hm_field && hm_field[0]) applyHostClock(hm_field);
   if (doc["t"].isNull()) return;
 
   const char *t = doc["t"] | "";
   const char *c = doc["c"] | "";
   const char *d = doc["d"] | "";
+  const char *n = doc["n"] | "";
+  const char *x = doc["x"] | "";
   bool m = doc["m"] | false;
   const bool has_all = !doc["a"].isNull();
   const bool all_muted = doc["a"] | false;
+  const bool has_synth = !doc["s"].isNull();
+  const bool synth_muted = doc["s"] | false;
+  const bool has_piano = !doc["i"].isNull();
+  const bool piano_muted = doc["i"] | false;
+  const bool has_r = !doc["r"].isNull();
+
+  const char *duration_for_ui = d;
+  if (has_r) {
+    const int32_t remain = doc["r"].as<int32_t>();
+    const bool playing = doc["p"] | false;
+    armLocalCountdown(remain, playing);
+    duration_for_ui = s_duration;
+  } else {
+    // Legacy host / waiting / static length — no local tick.
+    stopLocalCountdown();
+  }
 
   if (lvgl_port_lock(-1)) {
-    drawSongUi(t, c, d, m);
+    drawSongUi(t, c, duration_for_ui, n, x, m);
     if (has_all) {
       s_pad_muted[PAD_ALL] = all_muted;
       refreshPadVisual(PAD_ALL);
+    }
+    if (has_synth) {
+      s_pad_muted[PAD_SYNTH] = synth_muted;
+      refreshPadVisual(PAD_SYNTH);
+    }
+    if (has_piano) {
+      s_pad_muted[PAD_PIANO] = piano_muted;
+      refreshPadVisual(PAD_PIANO);
     }
     lvgl_port_unlock();
   }
@@ -635,6 +912,16 @@ static bool initPanelPower() {
   digitalWrite(PIN_LCD_BK_POWER, HIGH);
   return true;
 }
+
+#if defined(VIEWERONE_ENABLE_LED)
+/** High-priority LED pump — must not share a core with LVGL flush / avoid-tear waits. */
+static void ledTask(void * /*arg*/) {
+  for (;;) {
+    patternsTick();
+    vTaskDelay(pdMS_TO_TICKS(2));
+  }
+}
+#endif
 
 void setup() {
   Serial.begin(115200);
@@ -687,6 +974,15 @@ void setup() {
   FastLED.clear(true);
   patternsBegin(s_leds, NUM_LEDS);
   s_pattern = patternsCurrent();
+  // LED refresh on the opposite core from LVGL so MIPI full-frame flushes cannot stall WS2812.
+  {
+    BaseType_t led_core = 0;
+#if defined(ARDUINO_RUNNING_CORE)
+    led_core = (ARDUINO_RUNNING_CORE == 0) ? 1 : 0;
+#endif
+    // Priority above LVGL_PORT_TASK_PRIORITY (2) so pattern frames win over display work.
+    xTaskCreatePinnedToCore(ledTask, "led", 4096, nullptr, 5, &s_led_task, led_core);
+  }
 #endif
 
   Serial.printf("ViewerOne CrowPanel ready @ 115200 (LVGL, GT911 touch");
@@ -714,8 +1010,11 @@ void loop() {
     }
   }
 
+  // Math only — LVGL label set is deferred so a 1Hz tick never races FastLED.show.
+  tickLocalCountdown();
+  flushDurationLabelIfDirty();
+
 #if defined(VIEWERONE_ENABLE_LED)
-  patternsTick();
   if (patternsConsumeFooterDirty()) {
     s_pattern = patternsCurrent();
     if (lvgl_port_lock(20)) {

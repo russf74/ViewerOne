@@ -19,6 +19,8 @@ type AppStore = Store<AppState>
 const defaults: AppState = {
   fxMuted: false,
   allMuted: false,
+  synthMuted: false,
+  pianoMuted: false,
   setlist: [],
   currentSongId: null,
   esp32Enabled: false,
@@ -35,7 +37,16 @@ const defaults: AppState = {
     channel: CUBASE_TRANSPORT_CHANNEL,
     startNumber: CUBASE_TRANSPORT_START_NOTE,
     stopNumber: CUBASE_TRANSPORT_STOP_NOTE
-  }
+  },
+  /** Cubase Start often arrives ~2s late vs arranger block — backdate full-length arms. */
+  countdownStartLeadMs: 2500
+}
+
+/** Clamp persisted / patched start-lead (ms). */
+export function clampCountdownStartLeadMs(value: unknown, fallback = 2500): number {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(0, Math.min(15000, Math.round(parsed)))
 }
 
 export function createAppStore(): AppStore {
@@ -115,13 +126,16 @@ export function getState(store: AppStore): AppState {
   return {
     fxMuted: Boolean(store.get('fxMuted')),
     allMuted: Boolean(store.get('allMuted')),
+    synthMuted: Boolean(store.get('synthMuted')),
+    pianoMuted: Boolean(store.get('pianoMuted')),
     setlist: normalizeSetlist(store.get('setlist')),
     currentSongId: (store.get('currentSongId') as string | null | undefined) ?? null,
     esp32Enabled: Boolean(store.get('esp32Enabled')),
     ledBrightness,
     ledExternalPower,
     arrangerMidi: normalizeArrangerMidi(store.get('arrangerMidi')),
-    transportMidi: normalizeTransportMidi(store.get('transportMidi'))
+    transportMidi: normalizeTransportMidi(store.get('transportMidi')),
+    countdownStartLeadMs: clampCountdownStartLeadMs(store.get('countdownStartLeadMs'), 2500)
   }
 }
 

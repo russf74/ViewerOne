@@ -80,8 +80,10 @@
 /*Default display refresh period. LVG will redraw changed areas with this period time*/
 #define LV_DISP_DEF_REFR_PERIOD 16      /*[ms]*/
 
-/*Input device read period in milliseconds*/
-#define LV_INDEV_DEF_READ_PERIOD 10     /*[ms]*/
+/*Input device read period in milliseconds.
+ * Keep short: 180° software rotation already costs a full-frame rotate_copy per refresh;
+ * a slower indev period compounds perceived touch lag. */
+#define LV_INDEV_DEF_READ_PERIOD 5      /*[ms]*/
 
 /*Use a custom tick source that tells the elapsed time in milliseconds.
  *It removes the need to manually update the tick with `lv_tick_inc()`)*/
@@ -579,11 +581,11 @@
     /*0: Light mode; 1: Dark mode*/
     #define LV_THEME_DEFAULT_DARK 0
 
-    /*1: Enable grow on press*/
-    #define LV_THEME_DEFAULT_GROW 1
+    /*1: Enable grow on press — off: CrowPanel pads use instant color only*/
+    #define LV_THEME_DEFAULT_GROW 0
 
-    /*Default transition time in [ms]*/
-    #define LV_THEME_DEFAULT_TRANSITION_TIME 80
+    /*Default transition time in [ms] — 0: no border/outline/style animation on press*/
+    #define LV_THEME_DEFAULT_TRANSITION_TIME 0
 #endif /*LV_USE_THEME_DEFAULT*/
 
 /*A very simple theme that is a good starting point for a custom theme*/

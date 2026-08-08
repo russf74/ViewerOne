@@ -353,17 +353,19 @@ export function App() {
             <h1 className="app-title">ViewerOne</h1>
             <p className="sub">v{state.appVersion} · Live control</p>
           </div>
-          <button
-            type="button"
-            className={`detail-toggle${detailMode ? ' detail-toggle--active' : ''}`}
-            aria-pressed={detailMode}
-            onClick={(e) => {
-              flashButton(e.currentTarget)
-              setDetailMode((open) => !open)
-            }}
-          >
-            Detail {detailMode ? 'On' : 'Off'}
-          </button>
+          <div className="header-actions">
+            <button
+              type="button"
+              className={`detail-toggle${detailMode ? ' detail-toggle--active' : ''}`}
+              aria-pressed={detailMode}
+              onClick={(e) => {
+                flashButton(e.currentTarget)
+                setDetailMode((open) => !open)
+              }}
+            >
+              Detail {detailMode ? 'On' : 'Off'}
+            </button>
+          </div>
         </header>
 
         <div className="top-columns">
@@ -616,7 +618,27 @@ export function App() {
                         }
                       />
                     </div>
+                    <div className="field">
+                      <label htmlFor="countdown-start-lead">Start lead (ms)</label>
+                      <input
+                        id="countdown-start-lead"
+                        type="number"
+                        min={0}
+                        max={15000}
+                        step={100}
+                        value={state.countdownStartLeadMs}
+                        title="Backdate full-length countdown start to absorb Cubase Start lag (auto-tunes at song boundaries while playing)"
+                        onChange={(e) =>
+                          void patchSettings({ countdownStartLeadMs: Number(e.target.value) })
+                        }
+                      />
+                    </div>
                   </div>
+                  <p className="midi-reconnect-help">
+                    Start lead compensates for Cubase Start arriving late vs the arranger block.
+                    Default 2500 ms. If the counter still has leftover at song change while Playing,
+                    ViewerOne blends the lead toward that leftover (0.5–10 s).
+                  </p>
                 </section>
                 <section className="detail-section" aria-labelledby="arranger-mapping-heading">
                   <h3 id="arranger-mapping-heading">Arranger MIDI mapping</h3>

@@ -19,6 +19,13 @@ type Props = {
 }
 
 const FLASH_MS = 500
+const BRAND_CLOCK_MS = 30_000
+
+function formatLocalHm(d = new Date()): string {
+  const h = String(d.getHours()).padStart(2, '0')
+  const m = String(d.getMinutes()).padStart(2, '0')
+  return `${h}:${m}`
+}
 
 function activePatternId(ledPattern: string): number {
   const found = LED_PATTERNS.find((p) => p.name === ledPattern)
@@ -26,26 +33,41 @@ function activePatternId(ledPattern: string): number {
 }
 
 const PREVIEW_PADS = [
-  { id: 'all', label: 'ALL', kind: 'button' },
-  { id: 'fx', label: 'FX', kind: 'button' },
-  { id: 'prompt1', label: 'PROMPT1', kind: 'indicator' },
-  { id: 'prompt2', label: 'PROMPT2', kind: 'indicator' }
-] as const
+  { id: 'all', label: 'ALL', kind: 'button' as const },
+  { id: 'fx', label: 'FX', kind: 'button' as const },
+  { id: 'synth', label: 'SYNTH', kind: 'channel' as const },
+  { id: 'piano', label: 'PIANO', kind: 'channel' as const }
+]
 
 /** Mirrors the full CrowPanel 1024×600 HMI: broad stage plus four stacked right pads. */
 export function Esp32Preview({ state, detailMode }: Props) {
+  // Same builder as host serial broadcast — includes c/d/n for the three meta slots.
   const payload = useMemo(
     () => buildEsp32DisplayPayload(state, state.countdown.display),
-    [state.setlist, state.currentSongId, state.fxMuted, state.allMuted, state.countdown.display]
+    [
+      state.setlist,
+      state.currentSongId,
+      state.fxMuted,
+      state.allMuted,
+      state.synthMuted,
+      state.pianoMuted,
+      state.countdown.display
+    ]
   )
 
   const fxMuted = Boolean(payload.m)
-  /** Match firmware: muted = yellow on navy; unmuted = lime on black. */
+  /** Match firmware: muted = yellow on navy; unmuted = lime on black (meta / next / footer). */
   const textColor = fxMuted ? '#ffe600' : '#39ff14'
+  /** Now-playing title — cyan on black (matches CrowPanel + totals `--cyan`). */
+  const titleColor = '#00e5ff'
   const footerColor = state.ledPattern === 'off' || !state.esp32Enabled ? '#8b92a0' : textColor
   const isWaiting = payload.t === ESP32_WAITING_TITLE && !payload.c && !payload.d
-  const yearAndDuration =
-    payload.c && payload.d ? `${payload.c}     ${payload.d}` : payload.c || payload.d
+  const metaYear = isWaiting ? '' : payload.c || ''
+  const metaDuration = isWaiting ? '' : payload.d || ''
+  const metaPosition = isWaiting ? '' : payload.n || ''
+  const nextSong = isWaiting ? '' : payload.x || ''
+  const nextSongLabel = nextSong ? `Next : ${nextSong}` : ''
+  const hasMeta = Boolean(metaYear || metaDuration || metaPosition)
   const patternLabel = formatLedPatternLabel(state.ledPattern)
   const selectedId = activePatternId(state.ledPattern)
   const previewDisplay = getEsp32PreviewDisplay(state.esp32Display)
@@ -73,6 +95,13 @@ export function Esp32Preview({ state, detailMode }: Props) {
 
   const [flashPc, setFlashPc] = useState<125 | 126 | 127 | null>(null)
   const [flashPromptPc, setFlashPromptPc] = useState<120 | 121 | 122 | 123 | null>(null)
+  const [padClock, setPadClock] = useState(formatLocalHm)
+
+  useEffect(() => {
+    setPadClock(formatLocalHm())
+    const id = window.setInterval(() => setPadClock(formatLocalHm()), BRAND_CLOCK_MS)
+    return () => window.clearInterval(id)
+  }, [])
 
   useEffect(() => {
     const pc = state.ledMidiPulse
@@ -125,20 +154,36 @@ export function Esp32Preview({ state, detailMode }: Props) {
         {isCrowPanel ? (
           <>
             <div className="esp32-sim-stage">
-              <div className="esp32-sim-brand">VIEWERONE · LIVE HMI</div>
+              <div className="esp32-sim-brand-bar">
+                <div className="esp32-sim-brand">VIEWERONE</div>
+                <span className="esp32-sim-version" aria-label="App version">
+                  v{state.appVersion || '—'}
+                </span>
+              </div>
               <div className="esp32-sim-inner">
                 <div className="esp32-sim-half esp32-sim-half--title">
                   <div
                     className="esp32-sim-title-fill"
-                    style={{ color: textColor }}
+                    style={{ color: isWaiting ? '#ffe600' : titleColor }}
                     title={isWaiting ? 'Idle text matches firmware + PC default' : undefined}
                   >
                     {isWaiting ? 'Waiting for signal' : payload.t || '—'}
                   </div>
                 </div>
                 <div className="esp32-sim-half esp32-sim-half--year">
-                  <div className="esp32-sim-year-fill" style={{ color: textColor }}>
-                    {isWaiting ? '' : yearAndDuration || '—'}
+                  <div
+                    className="esp32-sim-next-song"
+                    style={{ color: textColor }}
+                    title={nextSong || undefined}
+                  >
+                    {nextSongLabel}
+                  </div>
+                  <div className="esp32-sim-meta-row" style={{ color: textColor }}>
+                    <span className="esp32-sim-meta-slot esp32-sim-meta-slot--year">
+                      {hasMeta ? metaYear : '—'}
+                    </span>
+                    <span className="esp32-sim-meta-slot esp32-sim-meta-slot--duration">{metaDuration}</span>
+                    <span className="esp32-sim-meta-slot esp32-sim-meta-slot--position">{metaPosition}</span>
                   </div>
                   <div className="esp32-sim-pattern" style={{ color: footerColor }} title="Active LED pattern on strip">
                     {patternLabel}
@@ -146,50 +191,54 @@ export function Esp32Preview({ state, detailMode }: Props) {
                 </div>
               </div>
             </div>
-            <div className="esp32-sim-pads" role="group" aria-label="CrowPanel controls and prompt indicators">
-              <div className="esp32-sim-pads-title">CONTROLS</div>
+            <div className="esp32-sim-pads" role="group" aria-label="CrowPanel mute controls">
+              <time className="esp32-sim-pad-clock" dateTime={padClock} aria-label="Local time">
+                {padClock}
+              </time>
               {PREVIEW_PADS.map((pad) => {
-                const active =
+                const muted =
                   pad.id === 'fx'
                     ? fxMuted
-                    : pad.id === 'prompt1'
-                      ? state.prompt1On
-                      : pad.id === 'prompt2'
-                        ? state.prompt2On
+                    : pad.id === 'synth'
+                      ? state.synthMuted
+                      : pad.id === 'piano'
+                        ? state.pianoMuted
                         : state.allMuted
-                if (pad.kind === 'indicator') {
-                  return (
-                    <div
-                      key={pad.id}
-                      className={`esp32-sim-pad esp32-sim-pad--indicator esp32-sim-pad--${pad.id}${
-                        active ? ' esp32-sim-pad--on' : ' esp32-sim-pad--standby'
-                      }`}
-                      role="status"
-                      aria-label={`${pad.label} ${active ? 'on' : 'off'}`}
-                      title={`${pad.label} — MIDI-controlled status indicator`}
-                    >
-                      <span className="esp32-sim-pad-light" aria-hidden="true" />
-                      <span className="esp32-sim-pad-label">{pad.label}</span>
-                    </div>
-                  )
-                }
+                const title =
+                  pad.id === 'fx'
+                    ? 'FX mute (Group6 / Cubase CC85)'
+                    : pad.id === 'synth'
+                      ? 'Cubase mixer ch1 Synth mute (CC86)'
+                      : pad.id === 'piano'
+                        ? 'Cubase mixer ch2 Piano mute (CC87)'
+                        : 'ALL mute (Group1 preview state)'
                 return (
                   <button
                     key={pad.id}
                     type="button"
                     className={`esp32-sim-pad esp32-sim-pad--button esp32-sim-pad--${pad.id}${
-                      active ? ' esp32-sim-pad--muted' : ' esp32-sim-pad--live'
+                      muted ? ' esp32-sim-pad--muted' : ' esp32-sim-pad--live'
                     }`}
-                    title={`${pad.label} mute button${pad.id === 'fx' ? ' (follows FX mute)' : ' (preview state)'}`}
+                    title={title}
+                    aria-pressed={muted}
                     onClick={() => {
                       if (pad.id === 'fx') {
                         void window.viewer.patchSettings({ fxMuted: !fxMuted })
+                        return
+                      }
+                      if (pad.id === 'synth') {
+                        void window.viewer.patchSettings({ synthMuted: !state.synthMuted })
+                        return
+                      }
+                      if (pad.id === 'piano') {
+                        void window.viewer.patchSettings({ pianoMuted: !state.pianoMuted })
                         return
                       }
                       void window.viewer.patchSettings({ allMuted: !state.allMuted })
                     }}
                   >
                     <span className="esp32-sim-pad-label">{pad.label}</span>
+                    <span className="esp32-sim-pad-status">{muted ? 'MUTED' : 'LIVE'}</span>
                   </button>
                 )
               })}
@@ -200,15 +249,26 @@ export function Esp32Preview({ state, detailMode }: Props) {
             <div className="esp32-sim-half esp32-sim-half--title">
               <div
                 className="esp32-sim-title-fill"
-                style={{ color: textColor }}
+                style={{ color: isWaiting ? '#ffe600' : titleColor }}
                 title={isWaiting ? 'Idle text matches firmware + PC default' : undefined}
               >
                 {isWaiting ? 'Waiting for signal' : payload.t || '—'}
               </div>
             </div>
             <div className="esp32-sim-half esp32-sim-half--year">
-              <div className="esp32-sim-year-fill" style={{ color: textColor }}>
-                {isWaiting ? '' : yearAndDuration || '—'}
+              <div
+                className="esp32-sim-next-song"
+                style={{ color: textColor }}
+                title={nextSong || undefined}
+              >
+                {nextSongLabel}
+              </div>
+              <div className="esp32-sim-meta-row" style={{ color: textColor }}>
+                <span className="esp32-sim-meta-slot esp32-sim-meta-slot--year">
+                  {hasMeta ? metaYear : '—'}
+                </span>
+                <span className="esp32-sim-meta-slot esp32-sim-meta-slot--duration">{metaDuration}</span>
+                <span className="esp32-sim-meta-slot esp32-sim-meta-slot--position">{metaPosition}</span>
               </div>
               <div className="esp32-sim-pattern" style={{ color: footerColor }} title="Active LED pattern on strip">
                 {patternLabel}
@@ -225,7 +285,7 @@ export function Esp32Preview({ state, detailMode }: Props) {
       </p>
       {detailMode ? (
         <div className="preview-detail-tools">
-          <div className="preview-tool-label">Prompt PC tests</div>
+          <div className="preview-tool-label">Prompt PC tests (no CrowPanel pads — Synth/Piano replaced them)</div>
           <div className="esp32-sim-pc-btns" role="group" aria-label="Simulate prompt program changes">
           {[
             [MIDI_PC_PROMPT_1_ON, 'Prompt 1 on'],
@@ -237,7 +297,7 @@ export function Esp32Preview({ state, detailMode }: Props) {
               type="button"
               key={flashPromptPc === pc ? `prompt-${pc}-${state.promptMidiPulseAt}` : `prompt-${pc}`}
               className={`esp32-sim-pc-btn${flashPromptPc === pc ? ' esp32-sim-pc-btn--flash' : ''}`}
-              title={`Simulate PC ${pc} — ${label}`}
+              title={`Simulate PC ${pc} — ${label} (host state only; pads are Synth/Piano)`}
               onClick={(e) => {
                 e.currentTarget.classList.remove('btn-click-flash')
                 void e.currentTarget.offsetWidth

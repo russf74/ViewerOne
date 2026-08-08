@@ -687,6 +687,7 @@ static lv_indev_t *indev_init(Touch *tp)
     indev_drv_tp.read_cb = touchpad_read;
     indev_drv_tp.user_data = (void *)tp;
 
+    /* LV_INDEV_DEF_READ_PERIOD (5ms) is applied when the read timer is created. */
     return lv_indev_drv_register(&indev_drv_tp);
 }
 

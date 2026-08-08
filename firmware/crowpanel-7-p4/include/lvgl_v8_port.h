@@ -44,7 +44,7 @@
 /**
  * LVGL timer handle task related parameters, can be adjusted by users
  */
-#define LVGL_PORT_TASK_MAX_DELAY_MS             (16)        // Keep touch/refresh latency below one display frame
+#define LVGL_PORT_TASK_MAX_DELAY_MS             (8)         // Wake LVGL often enough for 5ms touch reads
 #define LVGL_PORT_TASK_MIN_DELAY_MS             (2)         // The minimum delay of the LVGL timer task, in milliseconds
 #define LVGL_PORT_TASK_STACK_SIZE               (6 * 1024)  // The stack size of the LVGL timer task, in bytes
 #define LVGL_PORT_TASK_PRIORITY                 (2)         // The priority of the LVGL timer task
@@ -82,6 +82,10 @@
  * When avoid tearing is enabled, the LVGL software rotation `lv_disp_set_rotation()` is not supported.
  * But users can set the rotation degree(0/90/180/270) here, but this function will reduce FPS.
  *
+ * Latency note (180°): each full refresh runs rotate_copy_pixel over the whole frame before
+ * the panel swap. That is the main extra cost vs rotation 0 — touch mirrorX/Y is cheap by
+ * comparison. Prefer faster indev reads and never force lv_refr_now() from pad handlers.
+ *
  * Set the rotation degree:
  *      - 0: 0 degree
  *      - 90: 90 degree
@@ -92,7 +96,7 @@
 #define LVGL_PORT_ROTATION_DEGREE               (CONFIG_LVGL_PORT_ROTATION_DEGREE)
                                                         // Valid if using ESP-IDF
 #else
-#define LVGL_PORT_ROTATION_DEGREE               (0)     // Valid if using Arduino
+#define LVGL_PORT_ROTATION_DEGREE               (180)   // Valid if using Arduino — cable-oriented mount
 #endif
 
 /**
