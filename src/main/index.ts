@@ -44,11 +44,19 @@ import {
   CUBASE_SYNTH_MUTE_CC,
   CUBASE_PIANO_MUTE_CC,
   CUBASE_CHANNEL_MUTE_INVERTED,
-  CUBASE_MUTE_ECHO_IGNORE_MS,
+  MUTE_ECHO_IGNORE_MS,
   cubaseMuteCcValue,
+  mixerMuteCcValue,
+  ccValueToMuted,
+  ccValueToMixerMuted,
   MIXER_MUTE_CHANNEL,
-  MIXER_MUTE_CC,
-  MIXER_MUTE_INVERTED,
+  isMixerMuteCc,
+  BRIDGED_MUTES,
+  bridgedMuteByCubaseCc,
+  bridgedMuteByMixerCc,
+  bridgedMuteByEspGroup,
+  type BridgedMuteDef,
+  type BridgedMuteId,
   MIDI_PC_SONG_MAX,
   MIDI_PC_PROMPT_1_ON,
   MIDI_PC_PROMPT_1_OFF,
@@ -145,6 +153,7 @@ function quitViewerOne(): void {
   isQuitting = true
   clearMidiReconnectTimer()
   stopCountdownTicker()
+  clearEsp32DisplayCoalesceTimer()
   stopEsp32ClockSync()
   shutdownEsp32Serial()
   try {
@@ -162,10 +171,15 @@ function quitViewerOne(): void {
   }, 750).unref()
 }
 
-/** Ignore CC echo for a short window after we send mute CC (touch → out → Cubase/mixer → in). */
-let muteCcSentAtMs = 0
-/** Per-controller last Cubase mute CC we sent — suppress delayed Generic Remote echoes. */
-const cubaseMuteSentByCc = new Map<number, { value: number; atMs: number }>()
+/**
+ * Echo ignore keyed by source+CC (`cubase:88`, `mixer:80`) — never bare CC alone.
+ * Cubase ALL CC88 and mixer MG1 CC80 must not share a key (that collision caused the flash loop).
+ */
+type MuteEchoSource = 'cubase' | 'mixer'
+const muteSentBySourceCc = new Map<string, { value: number; atMs: number }>()
+function muteEchoKey(source: MuteEchoSource, controller: number): string {
+  return `${source}:${controller}`
+}
 let muteBootSyncTimer: ReturnType<typeof setTimeout> | null = null
 let muteBootSyncFollowUpTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -739,9 +753,20 @@ function applyPromptPc(pc: 120 | 121 | 122 | 123): void {
 
 /** Last JSON line pushed to the board — skip identical re-sends (same-song PC chase / mute echoes). */
 let lastEsp32DisplayJson: string | null = null
+/** Trailing coalesce — rapid Prev/Next/PC must not flood CrowPanel LVGL under 180° rotate. */
+const ESP32_DISPLAY_COALESCE_MS = 80
+let lastEsp32DisplayPushAt = 0
+let esp32DisplayCoalesceTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearEsp32DisplayCoalesceTimer(): void {
+  if (esp32DisplayCoalesceTimer) {
+    clearTimeout(esp32DisplayCoalesceTimer)
+    esp32DisplayCoalesceTimer = null
+  }
+}
 
 /** Song title/year/duration/mute JSON only — does not change LEDs. Arms device countdown via r/p. */
-function broadcastEsp32DisplayIfEnabled(): void {
+function pushEsp32DisplayNow(): void {
   const st = getState(store)
   if (!st.esp32Enabled) return
   const snap = countdownSnapshot()
@@ -752,7 +777,28 @@ function broadcastEsp32DisplayIfEnabled(): void {
   const json = JSON.stringify(payload)
   if (json === lastEsp32DisplayJson) return
   lastEsp32DisplayJson = json
+  lastEsp32DisplayPushAt = Date.now()
   pushEsp32Payload(payload)
+}
+
+/**
+ * Push display JSON to ESP. Rapid song flips coalesce (~80ms, latest wins) so the panel
+ * never processes a full serial flood per arranger flick. Pass force on serial open.
+ */
+function broadcastEsp32DisplayIfEnabled(force = false): void {
+  const st = getState(store)
+  if (!st.esp32Enabled) return
+  if (force) {
+    clearEsp32DisplayCoalesceTimer()
+    pushEsp32DisplayNow()
+    return
+  }
+  const delay = Math.max(0, ESP32_DISPLAY_COALESCE_MS - (Date.now() - lastEsp32DisplayPushAt))
+  clearEsp32DisplayCoalesceTimer()
+  esp32DisplayCoalesceTimer = setTimeout(() => {
+    esp32DisplayCoalesceTimer = null
+    pushEsp32DisplayNow()
+  }, delay)
 }
 
 /** Local HH:MM for CrowPanel right pad column — ESP has no reliable RTC. */
@@ -880,8 +926,9 @@ function previewLedPattern(rawId: unknown): void {
 /** Push current song/mute JSON only — board keeps its own LED state until PC 125/126/127. */
 function onEsp32SerialOpened(): void {
   lastEsp32DisplayJson = null
+  lastEsp32DisplayPushAt = 0
   pushEsp32HelloRequest()
-  broadcastEsp32DisplayIfEnabled()
+  broadcastEsp32DisplayIfEnabled(true)
   startEsp32ClockSync()
   const st = getState(store)
   if (st.esp32Enabled) {
@@ -890,80 +937,104 @@ function onEsp32SerialOpened(): void {
   }
 }
 
-function ccValueToFxMuted(value: number, inverted = false): boolean {
-  return inverted ? value >= 64 : value < 64
-}
-
 /**
- * Sends mute state to Cubase (its own private ch1/CC85 convention — Cubase relays this onward
- * via its own "X32 Mutes" track for its own automation-driven use cases). This is also how song
- * changes reach Cubase, so it's a single well-tested path for everything ViewerOne sends there.
+ * Sends mute state to Cubase (ch1 CC88/85/86/87). Mixer bridge is separate via
+ * {@link sendMuteCcToMixer} — Cubase no longer needs a parallel "X32 Mutes" → X-USB track.
  */
 function sendMuteCcToCubase(muted: boolean, controller = CUBASE_MUTE_CC): void {
   const now = Date.now()
-  muteCcSentAtMs = now
-  // FX CC85: muted→0; Synth/Piano CC86/87: inverted muted→127 (Jump/Value).
+  // FX CC85 / ALL CC88: muted→0; Synth/Piano CC86/87: inverted muted→127 (Jump/Value).
   const value = cubaseMuteCcValue(muted, controller)
   cubaseLastSentAtMs = now
   cubaseLastSentCc = { channel: CUBASE_MUTE_CHANNEL - 1, controller, value }
-  cubaseMuteSentByCc.set(controller, { value, atMs: now })
+  muteSentBySourceCc.set(muteEchoKey('cubase', controller), { value, atMs: now })
   console.log(
     `[ViewerOne] MIDI: sending mute=${muted} to Cubase (ch ${CUBASE_MUTE_CHANNEL}, CC ${controller}, val ${value}) on "${cubaseOutputName ?? '(no output port)'}"`
   )
   midi.sendControlChange(CUBASE_MUTE_CHANNEL, controller, value)
 }
 
-/** True when this CC is our own mute echo (global window or per-controller Generic Remote delay). */
+/** True when this Cubase CC is our own echo — keyed by source+CC only (never bare CC / global window). */
 function isOwnCubaseMuteEcho(controller: number, value: number): boolean {
   const now = Date.now()
-  if (now - muteCcSentAtMs < 90) return true
-  const last = cubaseMuteSentByCc.get(controller)
+  const last = muteSentBySourceCc.get(muteEchoKey('cubase', controller))
   if (!last) return false
-  if (now - last.atMs < CUBASE_MUTE_ECHO_IGNORE_MS) return true
+  if (now - last.atMs < MUTE_ECHO_IGNORE_MS) return true
   // Same absolute value we last sent — ignore late duplicate feedback.
-  if (last.value === value && now - last.atMs < CUBASE_MUTE_ECHO_IGNORE_MS * 3) return true
+  if (last.value === value && now - last.atMs < MUTE_ECHO_IGNORE_MS * 3) return true
   return false
 }
 
 /**
- * Sends mute state directly to the mixer's own USB MIDI port, using its native ch2/CC63
- * convention (inverted: 127 = muted). Independent of Cubase, so this keeps working even with
- * Cubase closed. If ViewerOne couldn't open the mixer output (e.g. Cubase already has it open
- * for its own relay), this is a silent no-op — see midi.ts openMixerOutput.
+ * Sends mute directly to the mixer's USB MIDI port (mute groups: 0 = muted/active).
+ * Controller comes from {@link BRIDGED_MUTES} (FX=MG6/CC85, ALL=MG1/CC80). Same absolute pattern.
  */
-function sendMuteCcToMixer(muted: boolean): void {
-  muteCcSentAtMs = Date.now()
-  const value = MIXER_MUTE_INVERTED ? (muted ? 127 : 0) : muted ? 0 : 127
-  mixerLastSentAtMs = Date.now()
-  mixerLastSentCc = { channel: MIXER_MUTE_CHANNEL - 1, controller: MIXER_MUTE_CC, value }
-  console.log(`[ViewerOne] MIDI: sending mute=${muted} to mixer (ch ${MIXER_MUTE_CHANNEL}, CC ${MIXER_MUTE_CC}, val ${value}) on "${mixerOutputName ?? '(no output port)'}"`)
-  midi.sendMixerControlChange(MIXER_MUTE_CHANNEL, MIXER_MUTE_CC, value)
+function sendMuteCcToMixer(
+  muted: boolean,
+  controller: number,
+  group: BridgedMuteId | 'boot'
+): void {
+  const now = Date.now()
+  const value = mixerMuteCcValue(muted)
+  muteSentBySourceCc.set(muteEchoKey('mixer', controller), { value, atMs: now })
+  mixerLastSentAtMs = now
+  mixerLastSentCc = { channel: MIXER_MUTE_CHANNEL - 1, controller, value }
+  console.log(
+    `[ViewerOne] MIDI: mixer TX group=${group} CC=${controller} val=${value} muted=${muted} ` +
+      `ch=${MIXER_MUTE_CHANNEL} port="${mixerOutputName ?? '(no output port)'}"`
+  )
+  midi.sendMixerControlChange(MIXER_MUTE_CHANNEL, controller, value)
 }
 
-function applyFxMuted(muted: boolean, opts: { sendToCubase: boolean; sendToMixer: boolean }): void {
+/** Mixer echo ignore — keyed by source+CC (`mixer:80` ≠ `cubase:88`). */
+function isOwnMixerMuteEcho(controller: number, value: number): boolean {
+  const now = Date.now()
+  const last = muteSentBySourceCc.get(muteEchoKey('mixer', controller))
+  if (!last) return false
+  if (now - last.atMs < MUTE_ECHO_IGNORE_MS) return true
+  if (last.value === value && now - last.atMs < MUTE_ECHO_IGNORE_MS * 3) return true
+  return false
+}
+
+/**
+ * Single Cubase ↔ ViewerOne ↔ mixer mute apply for FX and ALL.
+ * Absolute SET. Always emit absolute CCs when opts request TX (same as pre-bridge FX —
+ * re-asserts mixer/Cubase if store drifted). Only {@link BridgedMuteDef} CCs/state differ.
+ */
+function applyBridgedMute(
+  def: BridgedMuteDef,
+  muted: boolean,
+  opts: { sendToCubase: boolean; sendToMixer: boolean }
+): void {
   const st = getState(store)
-  const changed = st.fxMuted !== muted
+  const prev = Boolean(st[def.stateKey])
+  const changed = prev !== muted
   if (changed) {
-    setState(store, { fxMuted: muted })
+    setState(store, { [def.stateKey]: muted })
+  } else {
+    console.log(
+      `[ViewerOne] MIDI: bridged ${def.id} state already muted=${muted} ` +
+        `(still TX absolute if flagged) cubaseCC=${def.cubaseCc} mixerCC=${def.mixerCc}`
+    )
   }
-  if (opts.sendToCubase) sendMuteCcToCubase(muted)
-  if (opts.sendToMixer) sendMuteCcToMixer(muted)
-  if (changed) {
-    // Mute updates display tint + CC only — LEDs stay on PC 125/126/127 (and pattern preview).
-    broadcastState()
-  }
+  if (opts.sendToCubase) sendMuteCcToCubase(muted, def.cubaseCc)
+  if (opts.sendToMixer) sendMuteCcToMixer(muted, def.mixerCc, def.id)
+  console.log(
+    `[ViewerOne] MIDI: bridged ${def.id} origin-flags cubase=${opts.sendToCubase} mixer=${opts.sendToMixer} ` +
+      `prev=${prev} next=${muted} changed=${changed} cubaseCC=${def.cubaseCc} mixerCC=${def.mixerCc}`
+  )
+  // Mute updates display tint + CC only — LEDs stay on PC 125/126/127 (and pattern preview).
+  if (changed) broadcastState()
 }
 
-function toggleFxMutedFromEsp(): void {
+/** CrowPanel / CYD mute pad — absolute `muted` when provided, else host toggle (legacy CYD FX). */
+function applyBridgedMuteFromEsp(def: BridgedMuteDef, mutedRaw: unknown): void {
   const st = getState(store)
-  applyFxMuted(!st.fxMuted, { sendToCubase: true, sendToMixer: true })
-}
-
-/** Group1 / ALL is a separate CrowPanel state and must never enter the Group6 / FX CC path. */
-function toggleAllMutedFromEsp(): void {
-  const st = getState(store)
-  setState(store, { allMuted: !st.allMuted })
-  broadcastState()
+  const muted = typeof mutedRaw === 'boolean' ? mutedRaw : !Boolean(st[def.stateKey])
+  console.log(
+    `[ViewerOne] MIDI: ${def.id} mute from ESP raw=${JSON.stringify(mutedRaw)} → absolute muted=${muted}`
+  )
+  applyBridgedMute(def, muted, { sendToCubase: true, sendToMixer: true })
 }
 
 function applyChannelMuted(
@@ -1014,7 +1085,7 @@ function applyChannelMutedFromEsp(which: 'synth' | 'piano', mutedRaw: unknown): 
 }
 
 /**
- * After Cubase out opens: push absolute mute CCs matching UI (FX + inverted Synth/Piano).
+ * After Cubase out opens: push absolute mute CCs matching UI (bridged FX/ALL + inverted Synth/Piano).
  * Do NOT send an opposite edge — with Generic Remote Toggle flags that yields an odd
  * toggle count and permanently inverts Cubase vs pads (two-click / every-other symptom).
  */
@@ -1031,13 +1102,18 @@ function syncMutesToCubaseOnConnect(): void {
 
   const st = getState(store)
   const targets: { label: string; muted: boolean; cc: number }[] = [
+    ...BRIDGED_MUTES.map((b) => ({
+      label: b.id,
+      muted: Boolean(st[b.stateKey]),
+      cc: b.cubaseCc
+    })),
     { label: 'synth', muted: st.synthMuted, cc: CUBASE_SYNTH_MUTE_CC },
-    { label: 'piano', muted: st.pianoMuted, cc: CUBASE_PIANO_MUTE_CC },
-    { label: 'fx', muted: st.fxMuted, cc: CUBASE_MUTE_CC }
+    { label: 'piano', muted: st.pianoMuted, cc: CUBASE_PIANO_MUTE_CC }
   ]
   console.log(
-    `[ViewerOne] MIDI: boot-sync mutes (absolute only) → Cubase synth=${st.synthMuted} ` +
-      `piano=${st.pianoMuted} fx=${st.fxMuted}`
+    `[ViewerOne] MIDI: boot-sync mutes (absolute only) → Cubase ` +
+      BRIDGED_MUTES.map((b) => `${b.id}=${st[b.stateKey]}`).join(' ') +
+      ` synth=${st.synthMuted} piano=${st.pianoMuted}`
   )
   for (const t of targets) {
     sendMuteCcToCubase(t.muted, t.cc)
@@ -1049,6 +1125,23 @@ function syncMutesToCubaseOnConnect(): void {
       sendMuteCcToCubase(t.muted, t.cc)
     }
   }, 45)
+}
+
+/**
+ * After mixer out opens: push absolute FX/ALL mute CCs matching UI.
+ * Required when Cubase is closed — otherwise store and X32 can disagree and the first
+ * VO press looks like a no-op (TX of the value the mixer already has).
+ */
+function syncMutesToMixerOnConnect(): void {
+  if (!mixerOutputOpen) return
+  const st = getState(store)
+  console.log(
+    `[ViewerOne] MIDI: boot-sync mutes (absolute only) → mixer ` +
+      BRIDGED_MUTES.map((b) => `${b.id}=${st[b.stateKey]}→CC${b.mixerCc}`).join(' ')
+  )
+  for (const b of BRIDGED_MUTES) {
+    sendMuteCcToMixer(Boolean(st[b.stateKey]), b.mixerCc, 'boot')
+  }
 }
 
 function applyLedPatternFromEsp(name: unknown): void {
@@ -1071,12 +1164,11 @@ function handleEsp32Line(msg: Esp32FromDeviceMsg): void {
 
   const evt = msg['evt']
   if (evt === 'mute_toggle') {
-    // CrowPanel groups are independent: ALL / FX / Synth / Piano.
+    // CrowPanel groups: bridged FX/ALL share one path; Synth/Piano stay separate.
     const group = typeof msg['group'] === 'string' ? msg['group'].toLowerCase() : ''
-    if (!group || group === 'fx') {
-      toggleFxMutedFromEsp()
-    } else if (group === 'all') {
-      toggleAllMutedFromEsp()
+    const bridged = bridgedMuteByEspGroup(group)
+    if (bridged) {
+      applyBridgedMuteFromEsp(bridged, msg['muted'])
     } else if (group === 'synth') {
       applyChannelMutedFromEsp('synth', msg['muted'])
     } else if (group === 'piano') {
@@ -1110,6 +1202,8 @@ function syncEsp32SerialFromStore(): void {
   if (st.esp32Enabled) {
     setEsp32SerialPort(ESP32_SERIAL_PORT_AUTO, () => onEsp32SerialOpened())
   } else {
+    clearEsp32DisplayCoalesceTimer()
+    lastEsp32DisplayJson = null
     stopEsp32ClockSync()
     setEsp32SerialPort(null)
   }
@@ -1128,11 +1222,9 @@ function broadcastState(): void {
 }
 
 /**
- * Connects to Cubase (one-way in: song changes + its own auto-mute automation, over a loopMIDI
- * cable pair; one-way out: ViewerOne's own mute changes, so Cubase's state/automation stays in
- * sync) and to the mixer (two-way, directly over its own USB MIDI port, independent of Cubase).
- * Everything is auto-detected by name — see shared/midiAutoDetect.ts — and the channel/CC
- * conventions are fixed in shared/midiConfig.ts.
+ * Connects Cubase (loopMIDI: song/transport + mute CCs) and the mixer (X-USB mute bridge).
+ * Cubase FX (CC85) ↔ mixer mute group 6 (ch2/CC85); Cubase ALL (CC88) ↔ mixer mute group 1 (ch2/CC80).
+ * Port names are auto-detected — see shared/midiAutoDetect.ts; CC conventions in midiConfig.ts.
  *
  * Always closes existing handles first so a Reconnect refreshes the OS device list cleanly.
  */
@@ -1254,25 +1346,34 @@ function connectMidi(): void {
     onControlChange: (msg) => {
       tryMappedTransport('cc', msg.channel, msg.controller, msg.value)
       if (msg.channel !== cubaseMuteCh0) return
-      if (isOwnCubaseMuteEcho(msg.controller, msg.value)) return
-      // Cubase already owns telling the mixer for its own automation, so nothing echoed back out.
-      // UI-only apply — never sendToCubase (echo must not double-drive mute).
-      if (msg.controller === CUBASE_MUTE_CC) {
-        applyFxMuted(ccValueToFxMuted(msg.value), { sendToCubase: false, sendToMixer: false })
+      if (isOwnCubaseMuteEcho(msg.controller, msg.value)) {
+        console.log(
+          `[ViewerOne] MIDI: ignoring Cubase mute echo (ch ${msg.channel + 1} CC ${msg.controller}=${msg.value})`
+        )
+        return
+      }
+      // Cubase mute → ViewerOne UI/ESP + forward to X32. Never sendToCubase (would loop Generic Remote).
+      const bridged = bridgedMuteByCubaseCc(msg.controller)
+      if (bridged) {
+        const muted = ccValueToMuted(msg.value)
+        console.log(
+          `[ViewerOne] MIDI: Cubase ${bridged.id}/CC${bridged.cubaseCc}=${msg.value} → muted=${muted} (forward mixer)`
+        )
+        applyBridgedMute(bridged, muted, { sendToCubase: false, sendToMixer: true })
         return
       }
       if (msg.controller === CUBASE_SYNTH_MUTE_CC) {
         // Inverted Jump/Value: 127=muted, 0=live (opposite of FX CC85).
-        applyChannelMuted('synth', ccValueToFxMuted(msg.value, CUBASE_CHANNEL_MUTE_INVERTED), {
+        applyChannelMuted('synth', ccValueToMuted(msg.value, CUBASE_CHANNEL_MUTE_INVERTED), {
           sendToCubase: false,
-          source: 'cubase-echo'
+          source: 'cubase'
         })
         return
       }
       if (msg.controller === CUBASE_PIANO_MUTE_CC) {
-        applyChannelMuted('piano', ccValueToFxMuted(msg.value, CUBASE_CHANNEL_MUTE_INVERTED), {
+        applyChannelMuted('piano', ccValueToMuted(msg.value, CUBASE_CHANNEL_MUTE_INVERTED), {
           sendToCubase: false,
-          source: 'cubase-echo'
+          source: 'cubase'
         })
       }
     },
@@ -1319,11 +1420,24 @@ function connectMidi(): void {
     mixerLastCc = msg
     // UI MIDI status only — do not spam full song JSON to CrowPanel on every mixer CC.
     broadcastUiState()
-    if (msg.channel !== mixerMuteCh0 || msg.controller !== MIXER_MUTE_CC) return
-    if (Date.now() - muteCcSentAtMs < 90) return
-    const muted = ccValueToFxMuted(msg.value, MIXER_MUTE_INVERTED)
-    // Tell Cubase so its own state stays in sync; don't echo straight back out to the mixer.
-    applyFxMuted(muted, { sendToCubase: true, sendToMixer: false })
+    if (msg.channel !== mixerMuteCh0 || !isMixerMuteCc(msg.controller)) {
+      // Still surface other mixer CCs in Live status (mixerLastCc); only bridged mutes drive state.
+      return
+    }
+    if (isOwnMixerMuteEcho(msg.controller, msg.value)) {
+      console.log(
+        `[ViewerOne] MIDI: ignoring mixer mute echo (ch ${msg.channel + 1} CC ${msg.controller}=${msg.value})`
+      )
+      return
+    }
+    const bridged = bridgedMuteByMixerCc(msg.controller)
+    if (!bridged) return
+    // Mute-group polarity (MG6/MG1): 0=active/muted — opposite of bus/channel 127=muted.
+    const muted = ccValueToMixerMuted(msg.value)
+    console.log(
+      `[ViewerOne] MIDI: mixer RX group=${bridged.id} CC=${msg.controller} val=${msg.value} muted=${muted} (forward Cubase, no mixer echo)`
+    )
+    applyBridgedMute(bridged, muted, { sendToCubase: true, sendToMixer: false })
   })
   mixerOutputOpen = midi.openMixerOutput(mixer.output)
 
@@ -1333,6 +1447,25 @@ function connectMidi(): void {
       `Mixer in=${mixerInputName ?? '—'}(${mixerInputOpen ? 'open' : 'closed'}) ` +
       `out=${mixerOutputName ?? '—'}(${mixerOutputOpen ? 'open' : 'closed'})`
   )
+  if (mixerInputOpen && mixerOutputOpen) {
+    console.log(
+      `[ViewerOne] MIDI: mute bridges armed — ` +
+        BRIDGED_MUTES.map(
+          (b) =>
+            `${b.id} Cubase CC${b.cubaseCc} ↔ mixer ch${MIXER_MUTE_CHANNEL}/CC${b.mixerCc}`
+        ).join('; ')
+    )
+  } else if (!mixerInputOpen && mixerInputName) {
+    console.warn(
+      `[ViewerOne] MIDI: mixer input "${mixerInputName}" did not open — mixer→ViewerOne mute will not work (Cubase exclusive X-USB IN?)`
+    )
+  } else if (!mixerOutputOpen && mixerOutputName) {
+    console.warn(
+      `[ViewerOne] MIDI: mixer output "${mixerOutputName}" did not open — ViewerOne/Cubase→mixer mute will not work (port in use?)`
+    )
+  }
+  // Mixer path must work with Cubase closed — sync absolute FX/ALL to X32 whenever out is open.
+  if (mixerOutputOpen) syncMutesToMixerOnConnect()
   if (cubaseOutputOpen) syncMutesToCubaseOnConnect()
 }
 
@@ -1795,13 +1928,17 @@ function registerIpc(): void {
     if (!patch || typeof patch !== 'object') return buildPublicState()
     const st = getState(store)
     const allowed: Partial<AppState> = {}
-    // fxMuted goes through applyFxMuted for CC out + display tint (not LEDs).
-    const mutedToApply = patch.fxMuted !== undefined ? Boolean(patch.fxMuted) : undefined
+    // Bridged FX/ALL mutes go through applyBridgedMute for CC out + display tint (not LEDs).
+    const bridgedPatches: { def: BridgedMuteDef; muted: boolean }[] = []
+    for (const def of BRIDGED_MUTES) {
+      if (patch[def.stateKey] !== undefined) {
+        bridgedPatches.push({ def, muted: Boolean(patch[def.stateKey]) })
+      }
+    }
     const synthMutedToApply =
       patch.synthMuted !== undefined ? Boolean(patch.synthMuted) : undefined
     const pianoMutedToApply =
       patch.pianoMuted !== undefined ? Boolean(patch.pianoMuted) : undefined
-    if (patch.allMuted !== undefined) allowed.allMuted = Boolean(patch.allMuted)
     if (patch.esp32Enabled !== undefined) allowed.esp32Enabled = Boolean(patch.esp32Enabled)
     if (patch.arrangerMidi && typeof patch.arrangerMidi === 'object') {
       const raw = patch.arrangerMidi
@@ -1850,8 +1987,8 @@ function registerIpc(): void {
     }
 
     setState(store, allowed)
-    if (mutedToApply !== undefined) {
-      applyFxMuted(mutedToApply, { sendToCubase: true, sendToMixer: true })
+    for (const { def, muted } of bridgedPatches) {
+      applyBridgedMute(def, muted, { sendToCubase: true, sendToMixer: true })
     }
     if (synthMutedToApply !== undefined) {
       applyChannelMuted('synth', synthMutedToApply, { sendToCubase: true, source: 'preview/ui' })

@@ -75,6 +75,7 @@ Hold **BOOT**, tap **RESET**, release **BOOT** if upload fails to enter download
 - **Left (~75%)**: song title + `YYYY     MM:SS` (full length or live remaining time), mute colours (muted = yellow on navy, live = lime on black), LED pattern footer, polished idle “Waiting for signal”.
 - **Right**: four pressable pads — **ALL** (Group1), **FX** (Group6 / main-stage), **SYNTH** (Cubase mixer ch1), **PIANO** (Cubase mixer ch2).
 - Synth/Piano: filled green = live/unmuted, filled dark grey = muted. Serial `mute_toggle` includes absolute `muted` so the host SETs once (no double-toggle). Host sends Cubase CC 86 / 87 on ch 1 inverted vs FX (127=muted, 0=unmuted) for Jump/Value Generic Remote.
+- ALL (Group1): same absolute serial `muted` pattern; host sends Cubase **CC 88** on ch 1 with FX polarity (0=muted, 127=live). Map Jump/Value Generic Remote to Cubase Group 1 Mute (CC88 outside X32 MG 80–85; ≠ mixer MG1 CC80; not 86/87).
 - Legacy prompt PCs 120–123 remain accepted by the host for Detail tests but no longer drive CrowPanel pads.
 - Mute feedback is optimistic: touch-down flips local pad style and sends serial immediately. Under **180° software rotation**, pad handlers must not call `lv_refr_now()` (full-frame rotate_copy + vsync would lag the next touch).
 
@@ -91,17 +92,17 @@ ESP → PC:
 
 ```json
 {"evt":"mute_toggle"}
-{"evt":"mute_toggle","group":"fx"}
-{"evt":"mute_toggle","group":"all"}
+{"evt":"mute_toggle","group":"fx","muted":true}
+{"evt":"mute_toggle","group":"all","muted":true}
 {"evt":"mute_toggle","group":"synth","muted":true}
-{"evt":"mute_toggle","group":"piano"}
+{"evt":"mute_toggle","group":"piano","muted":false}
 {"evt":"boot","device":"crowpanel7","model":"Elecrow CrowPanel Advanced 7","w":1024,"h":600,"fw":"5.10.0",...}
 {"evt":"hello","device":"crowpanel7","model":"Elecrow CrowPanel Advanced 7","w":1024,"h":600,"fw":"5.10.0",...}
 ```
 
-Each pad press emits one event. FX/ALL include `group`; the desktop accepts grouped and legacy ungrouped
-`mute_toggle` events. ViewerOne requests `hello` whenever the serial port opens, so identity detection does not
-depend on catching the boot line.
+Each pad press emits one event. FX/ALL/Synth/Piano include `group` and absolute `muted`.
+The desktop accepts grouped and legacy ungrouped `mute_toggle` events. ViewerOne requests `hello`
+whenever the serial port opens, so identity detection does not depend on catching the boot line.
 
 ## Optional WS2812 LEDs
 

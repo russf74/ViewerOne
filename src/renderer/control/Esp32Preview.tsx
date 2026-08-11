@@ -55,7 +55,7 @@ export function Esp32Preview({ state, detailMode }: Props) {
     ]
   )
 
-  const fxMuted = Boolean(payload.m)
+  const fxMuted = Boolean(state.fxMuted)
   /** Match firmware: muted = yellow on navy; unmuted = lime on black (meta / next / footer). */
   const textColor = fxMuted ? '#ffe600' : '#39ff14'
   /** Now-playing title — cyan on black (matches CrowPanel + totals `--cyan`). */
@@ -198,7 +198,7 @@ export function Esp32Preview({ state, detailMode }: Props) {
               {PREVIEW_PADS.map((pad) => {
                 const muted =
                   pad.id === 'fx'
-                    ? fxMuted
+                    ? state.fxMuted
                     : pad.id === 'synth'
                       ? state.synthMuted
                       : pad.id === 'piano'
@@ -211,7 +211,7 @@ export function Esp32Preview({ state, detailMode }: Props) {
                       ? 'Cubase mixer ch1 Synth mute (CC86)'
                       : pad.id === 'piano'
                         ? 'Cubase mixer ch2 Piano mute (CC87)'
-                        : 'ALL mute (Group1 preview state)'
+                        : 'ALL mute (Group1 / Cubase CC88)'
                 return (
                   <button
                     key={pad.id}
@@ -223,7 +223,7 @@ export function Esp32Preview({ state, detailMode }: Props) {
                     aria-pressed={muted}
                     onClick={() => {
                       if (pad.id === 'fx') {
-                        void window.viewer.patchSettings({ fxMuted: !fxMuted })
+                        void window.viewer.patchSettings({ fxMuted: !state.fxMuted })
                         return
                       }
                       if (pad.id === 'synth') {

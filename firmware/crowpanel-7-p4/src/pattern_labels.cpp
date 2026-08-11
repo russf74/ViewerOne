@@ -11,7 +11,7 @@ static const char *const kNames[PATTERN_COUNT] = {
     "starfield",    "cyber_rain",     "rainbow_ripple", "neon_pulse",    "galaxy",
     "strobe_wave",  "disco_ball",     "laser_sweep",    "bass_pulse",    "confetti_storm",
     "hyper_chase",  "prism_spin",     "spark_shower",   "color_bomb",    "roller_derby",
-    "random",
+    "random",       "static_low_blue",
 };
 
 static const char *const kTitles[PATTERN_COUNT] = {
@@ -19,7 +19,7 @@ static const char *const kTitles[PATTERN_COUNT] = {
     "Starfield",    "Cyber Rain",     "Rainbow Ripple", "Neon Pulse",    "Galaxy",
     "Strobe Wave",  "Disco Ball",     "Laser Sweep",    "Bass Pulse",    "Confetti Storm",
     "Hyper Chase",  "Prism Spin",     "Spark Shower",   "Color Bomb",    "Roller Derby",
-    "Random",
+    "Random",       "Static low blue",
 };
 
 const char *patternName(PatternId id) {

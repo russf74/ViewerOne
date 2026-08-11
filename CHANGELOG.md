@@ -1,5 +1,69 @@
 # Changelog
 
+## v5.12.38
+
+- Cubase ALL mute CC moved **84 → 88**: CC84 is X32 native Mute Group 5, so any CC84 that
+  reached the mixer also muted MG5 when Cubase loaded. CC88 is outside MG range 80–85 and
+  not used by synth/piano (86/87). Mixer ALL stays ch2 **CC80** (MG1); FX Cubase↔mixer **CC85**
+  unchanged. Remap Cubase Generic Remote Group1 from CC84 → CC88 (Jump/Value).
+
+## v5.12.37
+
+- **Root cause (not a shared-path bug):** FX was bridged to **bus 16 CC63**, while the user
+  presses **Mute Group 6** which TXes **CC85** (plus member bus CCs). VO→mixer sent CC63 so
+  bus 16 changed but MG6 LED did not — looked like TX failure. Mixer→VO for FX only worked
+  because engaging MG6 also emits member CC63=127.
+- Map FX mixer CC **63 → 85** (Mute Group 6). ALL stays MG1 **CC80**.
+- **Mute-group polarity ≠ bus polarity** (live X-USB): MG active → CC=0, off → CC=127; bus
+  mute → 127/0. Flip mixer encode/decode for bridged MG1+MG6 to **0=muted** (fixes ALL
+  inversion both ways). Cubase CC84/85 polarity unchanged.
+- CrowPanel firmware version string only (mute serial already symmetric).
+
+## v5.12.36
+
+- FX and ALL VO↔mixer path are identical (shared `applyBridgedMute` / `BRIDGED_MUTES`): same
+  polarity, same absolute TX, same origin flags. Only mixer CC (63 vs 80), Cubase CC (85 vs 84),
+  and state keys differ.
+- ViewerOne/ESP/preview mute toggles always `sendToMixer: true` with absolute value (no longer
+  skip mixer TX when store already matches — that made FX look dead when store/X32 drifted).
+- Boot-sync absolute FX/ALL mutes to the mixer whenever X-USB out opens (works with Cubase closed).
+- CrowPanel FX pad now sends absolute `muted` like ALL (host SETs once; no host-side toggle).
+- Mixer TX log: `group`, `CC`, `val`, `muted`.
+
+## v5.12.35
+
+- Broke ALL/MG1 mute flash loop: Cubase ALL mute CC moved **80 → 84** so it no longer shares a
+  number with mixer mute group 1 (ch2/CC80). Same pattern as working FX (Cubase CC85 ≠ mixer CC63).
+  Remap Cubase Generic Remote Group1 from CC80 → CC84 (Jump/Value). Echo ignore keys by
+  source+CC (`cubase:84` vs `mixer:80`); bridged apply still TX only when state changes.
+
+## v5.12.34
+
+- FX and ALL mute now share one `applyBridgedMute` path / `BRIDGED_MUTES` table. Only Cubase CC,
+  mixer CC, state key, and ESP group differ — same polarity, echo ignore, forward flags, boot sync,
+  and absolute SET. Removed ALL-only special cases that drifted from FX.
+
+## v5.12.33
+
+- ALL / MG1 mute bridge now mirrors the working FX path 1:1 (absolute SET, same echo ignore,
+  same mixer↔Cubase forward rules). Only CCs differ: Cubase CC80 ↔ X32 ch2/CC80 vs Cubase CC85
+  ↔ X32 ch2/CC63. Removed the 5.12.32 ALL-only bridge lock / longer echo windows that caused
+  every-other / double-press. If CC80 still needs two presses, set Cubase Generic Remote for
+  CC80 to Jump/Value like CC85 (not Toggle).
+
+## v5.12.32
+
+- Fixed X32 Mute Group 1 (ALL) rapid flash: Cubase ch1/CC80 ↔ mixer ch2/CC80 feedback loop.
+  Longer echo suppress on both ports, bridge lock against opposite values, TX only when
+  `allMuted` changes, and clear ignore vs apply logs. Polarity unchanged vs FX boundary
+  convert: Cubase 0=muted/127=live, X32 127=muted/0=unmuted (same as bus 16).
+
+## v5.12.31
+
+- Bridged X32 Mute Group 1 (ch2/CC80) ↔ ViewerOne ALL (`allMuted`) ↔ Cubase ch1/CC80, mirroring
+  the existing FX path (mixer ch2/CC63 ↔ Cubase CC85). CrowPanel / Cubase ALL now also TX mute
+  group 1 to the mixer when X-USB is open.
+
 ## v5.10.1
 
 - Live status now shows Cubase transport **Playing/Stopped** plus the last Start/Stop source

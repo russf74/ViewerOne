@@ -59,9 +59,10 @@ export type SetlistItem = {
   /** Release year, typically 4 digits */
   year: string
   /**
-   * LED pattern id 0–20 or 99 (blackout) for this song (see shared/ledPatterns.ts).
+   * LED pattern id 0–21 or 99 (blackout) for this song (see shared/ledPatterns.ts).
    * Default is 20 (random — sequential rotate of 1..19 on ESP).
    * Id 0 (knight_rider) is boot / between-songs idle (also PC 126).
+   * Id 21 (static_low_blue) is manual/special — not in the random rotator.
    * Id 99 (blackout) is manual/special — also MIDI PC 125; not in the random rotator.
    * Queued when the song is selected for display; applied via MIDI PC 127
    * (or the control UI simulate / pattern preview).
@@ -129,7 +130,7 @@ export type ArrangerScanState = {
 export type AppState = {
   /** Cubase / mixer ↔ ViewerOne / ESP: muted tint; CC polarity in shared/midiConfig.ts */
   fxMuted: boolean
-  /** CrowPanel Group1 / ALL mute, independent from Group6 / FX. */
+  /** CrowPanel Group1 / ALL mute — Cubase CC88 ↔ X32 mute group 1 (ch2/CC80); MG polarity. */
   allMuted: boolean
   /** Cubase mixer channel 1 (Synth) mute — CrowPanel SYNTH pad / CC 86. */
   synthMuted: boolean

@@ -8,7 +8,7 @@ export type LedPatternDef = {
   label: string
 }
 
-/** Zero-padded id matching pattern id: 0 → `00 - …`, 20 → `20 - …`, 99 → `99 - …`. */
+/** Zero-padded id matching pattern id: 0 → `00 - …`, 21 → `21 - …`, 99 → `99 - …`. */
 function numberedLabel(id: number, title: string): string {
   return `${String(id).padStart(2, '0')} - ${title}`
 }
@@ -36,6 +36,8 @@ export const LED_PATTERNS: readonly LedPatternDef[] = [
   { id: 19, name: 'roller_derby', label: numberedLabel(19, 'Roller Derby') },
   { id: 20, name: 'random', label: numberedLabel(20, 'Random') },
   /** Manual/special only — not in random rotator (1..19). */
+  { id: 21, name: 'static_low_blue', label: numberedLabel(21, 'Static low blue') },
+  /** Manual/special only — not in random rotator (1..19). */
   { id: 99, name: 'blackout', label: numberedLabel(99, 'Blackout') }
 ] as const
 
@@ -45,7 +47,7 @@ export const DEFAULT_LED_PATTERN_ID = 0
 /** Default song pattern: sequential rotator through busy disco set (1..19). */
 export const RANDOM_LED_PATTERN_ID = 20
 
-/** Manual all-off; sparse id — not contiguous with 0–20. */
+/** Manual all-off; sparse id — not contiguous with 0–21. */
 export const BLACKOUT_LED_PATTERN_ID = 99
 
 /** @deprecated Prefer RANDOM_LED_PATTERN_ID — songs all use random now. */

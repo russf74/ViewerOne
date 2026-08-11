@@ -42,7 +42,10 @@ enum PatternId : uint8_t {
   PATTERN_COLOR_BOMB = 18,
   PATTERN_ROLLER_DERBY = 19,
   PATTERN_RANDOM = 20,
-  PATTERN_COUNT = 21,
+  /** Manual/special — static dim blue; not in random rotator (1..19). */
+  PATTERN_STATIC_LOW_BLUE = 21,
+  /** Contiguous named ids are 0..21; PATTERN_COUNT is array/loop size only. */
+  PATTERN_COUNT = 22,
   PATTERN_BLACKOUT = 99,
   PATTERN_OFF = 255
 };

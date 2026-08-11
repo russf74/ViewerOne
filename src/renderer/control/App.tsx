@@ -427,6 +427,16 @@ export function App() {
               <p className="midi-reconnect-help">
                 Cubase usually does not need restart; use Reconnect MIDI if ports were busy.
               </p>
+              {detailMode ? (
+                <p className="midi-reconnect-help">
+                  Mute CCs on ch1 (Jump/Value): ALL/Group1 <strong>CC88</strong> and FX{' '}
+                  <strong>CC85</strong> = 0 muted / 127 live; Synth <strong>CC86</strong> / Piano{' '}
+                  <strong>CC87</strong> = inverted (127 muted / 0 live). Map Cubase Generic Remote
+                  both ways on the loopMIDI pair. Mixer bridge: ALL ↔ X32 mute group 1 (ch2/CC80);
+                  FX ↔ mute group 6 (ch2/CC85). Mute groups: 0=active/muted, 127=off (≠ bus
+                  127=muted). Cubase ALL is CC88 (outside X32 MG 80–85; ≠ mixer CC80; not 86/87).
+                </p>
+              ) : null}
               <div className="transport-status" role="status" aria-live="polite">
                 <div className="transport-status-row">
                   <span
@@ -461,61 +471,63 @@ export function App() {
                     {state.midi.transportHint}
                   </p>
                 ) : null}
-                <div className="midi-spy" aria-label="Incoming Cubase MIDI activity">
-                  <div className="midi-spy-heading">
-                    <span>MIDI spy</span>
-                    <span className="midi-spy-sub">
-                      {state.midi.cubaseSpy.length || 0} on{' '}
-                      {state.midi.cubaseInputName ?? 'CubaseToViewerOne'}
-                    </span>
-                  </div>
-                  <p className="midi-spy-help">
-                    Press Play/Stop in Cubase — look for lines tagged TRANSPORT. Song PCs and mute
-                    CCs are normal and ignored for countdown.
-                  </p>
-                  <div className="midi-spy-filters" role="toolbar" aria-label="MIDI spy filter">
-                    {SPY_FILTERS.map((f) => (
-                      <button
-                        key={f.id}
-                        type="button"
-                        className={`midi-spy-filter${spyFilter === f.id ? ' midi-spy-filter--active' : ''}`}
-                        aria-pressed={spyFilter === f.id}
-                        onClick={() => setSpyFilter(f.id)}
-                      >
-                        {f.label}
-                      </button>
-                    ))}
-                  </div>
-                  {state.midi.cubaseSpy.length === 0 ? (
-                    <p className="midi-spy-empty">
-                      No messages yet. If Play adds nothing tagged TRANSPORT, route Clock/MMC/Generic
-                      Remote to this port.
+                {detailMode ? (
+                  <div className="midi-spy" aria-label="Incoming Cubase MIDI activity">
+                    <div className="midi-spy-heading">
+                      <span>MIDI spy</span>
+                      <span className="midi-spy-sub">
+                        {state.midi.cubaseSpy.length || 0} on{' '}
+                        {state.midi.cubaseInputName ?? 'CubaseToViewerOne'}
+                      </span>
+                    </div>
+                    <p className="midi-spy-help">
+                      Press Play/Stop in Cubase — look for lines tagged TRANSPORT. Song PCs and mute
+                      CCs are normal and ignored for countdown.
                     </p>
-                  ) : filteredSpy.length === 0 ? (
-                    <p className="midi-spy-empty">
-                      No {spyFilter === 'transport' ? 'TRANSPORT' : spyFilter} messages in the recent
-                      list — switch to All or press Play/Stop.
-                    </p>
-                  ) : (
-                    <ul className="midi-spy-list">
-                      {[...filteredSpy].reverse().map((ev, i) => {
-                        const role = spyEventRole(ev)
-                        return (
-                          <li
-                            key={`${ev.atMs}-${ev.kind}-${role}-${i}`}
-                            className={`midi-spy-item midi-spy-item--${ev.kind} midi-spy-item--role-${role.toLowerCase()}`}
-                          >
-                            <span className="midi-spy-age">{spyAgeText(ev.atMs, Date.now())}</span>
-                            <span className={`midi-spy-role midi-spy-role--${role.toLowerCase()}`}>
-                              {role}
-                            </span>
-                            <span className="midi-spy-summary">{ev.summary}</span>
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  )}
-                </div>
+                    <div className="midi-spy-filters" role="toolbar" aria-label="MIDI spy filter">
+                      {SPY_FILTERS.map((f) => (
+                        <button
+                          key={f.id}
+                          type="button"
+                          className={`midi-spy-filter${spyFilter === f.id ? ' midi-spy-filter--active' : ''}`}
+                          aria-pressed={spyFilter === f.id}
+                          onClick={() => setSpyFilter(f.id)}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+                    {state.midi.cubaseSpy.length === 0 ? (
+                      <p className="midi-spy-empty">
+                        No messages yet. If Play adds nothing tagged TRANSPORT, route Clock/MMC/Generic
+                        Remote to this port.
+                      </p>
+                    ) : filteredSpy.length === 0 ? (
+                      <p className="midi-spy-empty">
+                        No {spyFilter === 'transport' ? 'TRANSPORT' : spyFilter} messages in the recent
+                        list — switch to All or press Play/Stop.
+                      </p>
+                    ) : (
+                      <ul className="midi-spy-list">
+                        {[...filteredSpy].reverse().map((ev, i) => {
+                          const role = spyEventRole(ev)
+                          return (
+                            <li
+                              key={`${ev.atMs}-${ev.kind}-${role}-${i}`}
+                              className={`midi-spy-item midi-spy-item--${ev.kind} midi-spy-item--role-${role.toLowerCase()}`}
+                            >
+                              <span className="midi-spy-age">{spyAgeText(ev.atMs, Date.now())}</span>
+                              <span className={`midi-spy-role midi-spy-role--${role.toLowerCase()}`}>
+                                {role}
+                              </span>
+                              <span className="midi-spy-summary">{ev.summary}</span>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                ) : null}
               </div>
               <div className="midi-feedback-slot">
                 {midiFeedback ? (

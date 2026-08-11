@@ -3,6 +3,7 @@
  *
  * PC @ 115200 — display (transport / song change only — not every second):
  *   {"t":"Title","c":"1999","d":"04:32","n":"01/24","x":"Next Title","r":272,"p":true,"l":true,"m":false,"a":false,"s":false,"i":false}
+ *   Rapid song lines coalesce (~50ms, latest wins) before LVGL apply — avoids WDT cyan reboot.
  *   m=FX, a=ALL, s=Synth (Cubase ch1), i=Piano (Cubase ch2) mute flags.
  *   n = setlist position (`01/24`, `IN/24`, `SC/24`, `OU/24`) — updates with song UI only.
  *   x = next setlist row title — hard-clipped (no ellipsis); label updates only when x changes.
@@ -19,8 +20,8 @@
  *   (bottom pads are Cubase channel mutes: Synth / Piano).
  *
  * ESP→PC touch:
- *   {"evt":"mute_toggle","group":"fx"}     FX pad / main text stage (Group6)
- *   {"evt":"mute_toggle","group":"all"}    Group1 / ALL pad
+ *   {"evt":"mute_toggle","group":"fx","muted":true|false}     FX pad / main text stage (Group6)
+ *   {"evt":"mute_toggle","group":"all","muted":true|false}  Group1 / ALL — absolute after local flip
  *   {"evt":"mute_toggle","group":"synth","muted":true|false}  Cubase ch1 — absolute after local flip
  *   {"evt":"mute_toggle","group":"piano","muted":true|false}  Cubase ch2 — absolute after local flip
  * Boot/identity: {"evt":"boot","device":"crowpanel7","model":"Elecrow CrowPanel Advanced 7","w":1024,"h":600,...}
@@ -55,7 +56,7 @@ static CRGB s_leds[NUM_LEDS];
 using namespace esp_panel::drivers;
 using namespace esp_panel::board;
 
-static constexpr const char *VIEWERONE_FW_VERSION = "5.12.24";
+static constexpr const char *VIEWERONE_FW_VERSION = "5.12.38";
 static constexpr uint32_t WDT_TIMEOUT_S = 8;
 
 static constexpr int SCREEN_W = H_size;
@@ -65,6 +66,12 @@ static constexpr int MAIN_W = SCREEN_W - PAD_COL_W;
 static constexpr int PAD_COUNT = 4;
 /** Anti-chatter — long enough to avoid double mute_toggle from GT911 bounce. */
 static constexpr uint32_t PAD_COOLDOWN_MS = 180;
+/** Min gap between full song UI applies — latest pending wins (rapid PC/arranger flicks). */
+static constexpr uint32_t SONG_UI_COALESCE_MS = 50;
+/** Never block forever on LVGL during song UI (180° rotate flush can be slow). */
+static constexpr int LVGL_SONG_LOCK_MS = 40;
+/** Drain at most this many serial lines per loop so WDT stays fed under flood. */
+static constexpr int SERIAL_LINES_PER_LOOP = 4;
 
 static constexpr int kMainPad = 18;
 static constexpr int kBrandH = 34;
@@ -78,10 +85,23 @@ static constexpr uint16_t kTitleZoom = 400;  // ~75px visual
 static constexpr uint16_t kYearZoom = 330;   // ~62px visual; fits "YYYY     MM:SS     01/24"
 static constexpr uint16_t kNextZoom = 250;   // smaller than meta (~47px visual)
 static constexpr uint16_t kIdleZoom = 400;   // ~75px visual
+/** Hard cap for now-playing title (host also truncates); no ellipsis — CLIP only. */
+static constexpr size_t kTitleMaxChars = 96;
 /** Hard cap for next-song title (host also truncates); no ellipsis — CLIP only. */
 static constexpr size_t kNextTitleMaxChars = 36;
 /** Bottom-align next-song label this many px above the meta band (logical, pre-zoom). */
 static constexpr int kNextAboveMeta = 72;
+
+/** Bound-safe copy into dst (always NUL-terminated); at most maxChars of src. */
+static void copyBounded(char *dst, size_t dstSize, const char *src, size_t maxChars) {
+  if (!dst || dstSize == 0) return;
+  dst[0] = '\0';
+  if (!src || !src[0]) return;
+  size_t n = maxChars;
+  if (n > dstSize - 1) n = dstSize - 1;
+  strncpy(dst, src, n);
+  dst[n] = '\0';
+}
 
 /** Grow down/right from top-left so left-justified layout stays inside the text box. */
 static void applyTextZoom(lv_obj_t *obj, uint16_t zoom) {
@@ -134,6 +154,26 @@ static int32_t s_cd_anchor_sec = 0;
 static int32_t s_cd_last_shown = -1;
 /** Defer LVGL duration label work off the LED critical path (set from tick, cleared under lock). */
 static volatile bool s_duration_dirty = false;
+
+/** Latest host display line — applied once from loop (coalesce under rapid song flips). */
+struct PendingDisplay {
+  char title[160];
+  char year[16];
+  char duration[16];
+  char position[16];
+  char next[160];
+  bool muted;
+  bool has_all;
+  bool all_muted;
+  bool has_synth;
+  bool synth_muted;
+  bool has_piano;
+  bool piano_muted;
+};
+static PendingDisplay s_pending_disp{};
+static volatile bool s_disp_pending = false;
+static bool s_draw_song_busy = false;
+static uint32_t s_last_song_ui_ms = 0;
 
 static lv_obj_t *s_scr = nullptr;
 static lv_obj_t *s_main = nullptr;
@@ -385,27 +425,21 @@ static void tickLocalCountdown() {
 
 static void drawSongUi(const char *title, const char *year, const char *duration,
                        const char *position, const char *next, bool muted) {
-  strncpy(s_title, title && title[0] ? title : "-", sizeof(s_title) - 1);
-  s_title[sizeof(s_title) - 1] = '\0';
-  strncpy(s_year_only, year ? year : "", sizeof(s_year_only) - 1);
-  s_year_only[sizeof(s_year_only) - 1] = '\0';
-  strncpy(s_duration, duration ? duration : "", sizeof(s_duration) - 1);
-  s_duration[sizeof(s_duration) - 1] = '\0';
-  strncpy(s_position, position ? position : "", sizeof(s_position) - 1);
-  s_position[sizeof(s_position) - 1] = '\0';
+  // Caller must hold LVGL lock. Guard re-entrancy (pad / duration flush must not nest).
+  if (s_draw_song_busy) return;
+  s_draw_song_busy = true;
+
+  copyBounded(s_title, sizeof(s_title), (title && title[0]) ? title : "-", kTitleMaxChars);
+  copyBounded(s_year_only, sizeof(s_year_only), year ? year : "", sizeof(s_year_only) - 1);
+  copyBounded(s_duration, sizeof(s_duration), duration ? duration : "", sizeof(s_duration) - 1);
+  copyBounded(s_position, sizeof(s_position), position ? position : "", sizeof(s_position) - 1);
   // Next title — update label only when the string actually changes (mute / PC chase / re-arm
   // must not invalidate this band; LONG_DOT redraws were overlapping title/duration).
   char nextIn[sizeof(s_next)];
-  nextIn[0] = '\0';
-  if (next && next[0]) {
-    strncpy(nextIn, next, kNextTitleMaxChars);
-    nextIn[kNextTitleMaxChars] = '\0';
-    nextIn[sizeof(nextIn) - 1] = '\0';
-  }
+  copyBounded(nextIn, sizeof(nextIn), next ? next : "", kNextTitleMaxChars);
   const bool nextChanged = strcmp(s_next, nextIn) != 0;
   if (nextChanged) {
-    strncpy(s_next, nextIn, sizeof(s_next) - 1);
-    s_next[sizeof(s_next) - 1] = '\0';
+    copyBounded(s_next, sizeof(s_next), nextIn, kNextTitleMaxChars);
   }
   s_duration_dirty = false;
   s_fx_muted = muted;
@@ -417,9 +451,10 @@ static void drawSongUi(const char *title, const char *year, const char *duration
   if (s_duration_lbl) lv_label_set_text(s_duration_lbl, s_duration[0] ? s_duration : "");
   if (s_position_lbl) lv_label_set_text(s_position_lbl, s_position[0] ? s_position : "");
   // Next song — change-only; empty at last song (label stays reserved above meta).
+  // nextBuf sized for "Next : " + kNextTitleMaxChars + NUL.
   if (s_next_lbl && nextChanged) {
     if (s_next[0]) {
-      char nextBuf[176];
+      char nextBuf[8 + kNextTitleMaxChars];
       snprintf(nextBuf, sizeof(nextBuf), "Next : %s", s_next);
       lv_label_set_text(s_next_lbl, nextBuf);
     } else {
@@ -429,6 +464,8 @@ static void drawSongUi(const char *title, const char *year, const char *duration
   applyMainTheme(muted);
   refreshPadVisual(PAD_FX);
   refreshFooter();
+  // Do NOT call lv_refr_now(): 180° software rotation would force full-frame rotate + vsync.
+  s_draw_song_busy = false;
 }
 
 static void drawWaitingUi() {
@@ -448,19 +485,15 @@ static void drawWaitingUi() {
 }
 
 static void sendMuteEvent(const char *group, bool muted) {
-  // One JSON line only. Synth/Piano include absolute muted so the host SETs once
+  // One JSON line only. FX / ALL / Synth / Piano include absolute muted so the host SETs once
   // (local pad already flipped — host must not toggle again).
-  // Bare mute_toggle remains CYD firmware; CrowPanel always includes group.
+  // Bare mute_toggle remains CYD firmware; CrowPanel always includes group + muted.
   if (!group || !group[0]) {
     Serial.println("{\"evt\":\"mute_toggle\"}");
     return;
   }
-  if (strcmp(group, "synth") == 0 || strcmp(group, "piano") == 0) {
-    Serial.printf(
-        "{\"evt\":\"mute_toggle\",\"group\":\"%s\",\"muted\":%s}\n", group, muted ? "true" : "false");
-    return;
-  }
-  Serial.printf("{\"evt\":\"mute_toggle\",\"group\":\"%s\"}\n", group);
+  Serial.printf(
+      "{\"evt\":\"mute_toggle\",\"group\":\"%s\",\"muted\":%s}\n", group, muted ? "true" : "false");
 }
 
 static void sendDeviceIdentity(const char *evt) {
@@ -874,22 +907,53 @@ static void handleSerialLine(const String &line) {
     stopLocalCountdown();
   }
 
-  if (lvgl_port_lock(-1)) {
-    drawSongUi(t, c, duration_for_ui, n, x, m);
-    if (has_all) {
-      s_pad_muted[PAD_ALL] = all_muted;
-      refreshPadVisual(PAD_ALL);
-    }
-    if (has_synth) {
-      s_pad_muted[PAD_SYNTH] = synth_muted;
-      refreshPadVisual(PAD_SYNTH);
-    }
-    if (has_piano) {
-      s_pad_muted[PAD_PIANO] = piano_muted;
-      refreshPadVisual(PAD_PIANO);
-    }
-    lvgl_port_unlock();
+  // Queue only — never take the LVGL lock here. Rapid song JSON would otherwise
+  // stack full-frame invalidates under 180° rotate and trip the task WDT (cyan reboot).
+  copyBounded(s_pending_disp.title, sizeof(s_pending_disp.title), t, kTitleMaxChars);
+  if (!s_pending_disp.title[0]) {
+    copyBounded(s_pending_disp.title, sizeof(s_pending_disp.title), "-", 1);
   }
+  copyBounded(s_pending_disp.year, sizeof(s_pending_disp.year), c, sizeof(s_pending_disp.year) - 1);
+  copyBounded(s_pending_disp.duration, sizeof(s_pending_disp.duration), duration_for_ui,
+              sizeof(s_pending_disp.duration) - 1);
+  copyBounded(s_pending_disp.position, sizeof(s_pending_disp.position), n,
+              sizeof(s_pending_disp.position) - 1);
+  copyBounded(s_pending_disp.next, sizeof(s_pending_disp.next), x, kNextTitleMaxChars);
+  s_pending_disp.muted = m;
+  s_pending_disp.has_all = has_all;
+  s_pending_disp.all_muted = all_muted;
+  s_pending_disp.has_synth = has_synth;
+  s_pending_disp.synth_muted = synth_muted;
+  s_pending_disp.has_piano = has_piano;
+  s_pending_disp.piano_muted = piano_muted;
+  s_disp_pending = true;
+}
+
+/** Apply latest queued song UI (latest wins). Short lock; leave pending if LVGL is busy. */
+static void applyPendingDisplayIfAny() {
+  if (!s_disp_pending) return;
+  const uint32_t now = millis();
+  if (s_last_song_ui_ms != 0 && (now - s_last_song_ui_ms) < SONG_UI_COALESCE_MS) return;
+  if (!lvgl_port_lock(LVGL_SONG_LOCK_MS)) return;
+
+  PendingDisplay snap = s_pending_disp;
+  s_disp_pending = false;
+  s_last_song_ui_ms = now;
+
+  drawSongUi(snap.title, snap.year, snap.duration, snap.position, snap.next, snap.muted);
+  if (snap.has_all) {
+    s_pad_muted[PAD_ALL] = snap.all_muted;
+    refreshPadVisual(PAD_ALL);
+  }
+  if (snap.has_synth) {
+    s_pad_muted[PAD_SYNTH] = snap.synth_muted;
+    refreshPadVisual(PAD_SYNTH);
+  }
+  if (snap.has_piano) {
+    s_pad_muted[PAD_PIANO] = snap.piano_muted;
+    refreshPadVisual(PAD_PIANO);
+  }
+  lvgl_port_unlock();
 }
 
 static bool initPanelPower() {
@@ -998,17 +1062,26 @@ void setup() {
 void loop() {
   esp_task_wdt_reset();
 
-  while (Serial.available()) {
+  int lines = 0;
+  while (Serial.available() && lines < SERIAL_LINES_PER_LOOP) {
     char ch = static_cast<char>(Serial.read());
     if (ch == '\r') continue;
     if (ch == '\n') {
       if (lineBuf.length() == 0) continue;
       handleSerialLine(lineBuf);
       lineBuf = "";
+      lines++;
+      esp_task_wdt_reset();
     } else if (lineBuf.length() < 480) {
       lineBuf += ch;
+    } else {
+      // Drop oversized line — never grow unbounded.
+      lineBuf = "";
     }
   }
+
+  // Coalesced song UI (latest pending) — never drawn from the serial parse path.
+  applyPendingDisplayIfAny();
 
   // Math only — LVGL label set is deferred so a 1Hz tick never races FastLED.show.
   tickLocalCountdown();

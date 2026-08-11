@@ -637,6 +637,18 @@ void tickRollerDerby(uint32_t now) {
   FastLED.show();
 }
 
+// --- 21: Static low blue — all LEDs solid blue at 10% (no animation) --------
+void tickStaticLowBlue(uint32_t now) {
+  // Refresh occasionally so a mid-run brightness change still sticks after show()
+  if (g_lastMs != 0 && now - g_lastMs < 500) return;
+  g_lastMs = now;
+  if (!g_leds || g_count == 0) return;
+  // Full blue channel, then 10% overall (does not touch FastLED global brightness)
+  static constexpr uint8_t kBlue10Pct = (uint8_t)((255 * 10) / 100);  // 25
+  fill_solid(g_leds, g_count, CRGB(0, 0, kBlue10Pct));
+  FastLED.show();
+}
+
 }  // namespace
 
 static SemaphoreHandle_t g_patMu = nullptr;
@@ -670,6 +682,7 @@ const char *patternName(PatternId id) {
     case PATTERN_COLOR_BOMB: return "color_bomb";
     case PATTERN_ROLLER_DERBY: return "roller_derby";
     case PATTERN_RANDOM: return "random";
+    case PATTERN_STATIC_LOW_BLUE: return "static_low_blue";
     case PATTERN_BLACKOUT: return "blackout";
     case PATTERN_OFF: return "off";
     default: return "unknown";
@@ -699,6 +712,7 @@ static const char *patternTitle(PatternId id) {
     case PATTERN_COLOR_BOMB: return "Color Bomb";
     case PATTERN_ROLLER_DERBY: return "Roller Derby";
     case PATTERN_RANDOM: return "Random";
+    case PATTERN_STATIC_LOW_BLUE: return "Static low blue";
     case PATTERN_BLACKOUT: return "Blackout";
     case PATTERN_OFF: return "Off";
     default: return "Unknown";
@@ -880,6 +894,7 @@ void patternsTick() {
     case PATTERN_SPARK_SHOWER: tickSparkShower(now); break;
     case PATTERN_COLOR_BOMB: tickColorBomb(now); break;
     case PATTERN_ROLLER_DERBY: tickRollerDerby(now); break;
+    case PATTERN_STATIC_LOW_BLUE: tickStaticLowBlue(now); break;
     case PATTERN_BLACKOUT: break;
     default: break;
   }

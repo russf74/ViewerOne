@@ -37,7 +37,7 @@
 #include "patterns.h"
 
 /** Keep in sync with repository root `package.json` version when releasing the app. */
-static constexpr const char *VIEWERONE_FW_VERSION = "5.12.14";
+static constexpr const char *VIEWERONE_FW_VERSION = "5.12.29";
 
 /** Seconds the main loop may go without feeding the watchdog before it force-reboots the board. */
 static constexpr uint32_t WDT_TIMEOUT_S = 5;

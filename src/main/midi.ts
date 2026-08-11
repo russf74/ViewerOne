@@ -2,10 +2,11 @@ import easymidi from 'easymidi'
 import {
   CUBASE_MUTE_CC,
   CUBASE_MUTE_CHANNEL,
+  CUBASE_ALL_MUTE_CC,
   CUBASE_SYNTH_MUTE_CC,
   CUBASE_PIANO_MUTE_CC,
-  MIXER_MUTE_CC,
-  MIXER_MUTE_CHANNEL
+  MIXER_MUTE_CHANNEL,
+  isMixerMuteCc
 } from '../shared/midiConfig.js'
 import type { MidiSpyEvent, MidiSpyRole, TransportMidiMapping } from '../shared/types.js'
 
@@ -86,13 +87,14 @@ function isKnownMuteCc(channel0: number | undefined, controller: number | undefi
   if (channel0 === CUBASE_MUTE_CHANNEL - 1) {
     if (
       controller === CUBASE_MUTE_CC ||
+      controller === CUBASE_ALL_MUTE_CC ||
       controller === CUBASE_SYNTH_MUTE_CC ||
       controller === CUBASE_PIANO_MUTE_CC
     ) {
       return true
     }
   }
-  if (channel0 === MIXER_MUTE_CHANNEL - 1 && controller === MIXER_MUTE_CC) return true
+  if (channel0 === MIXER_MUTE_CHANNEL - 1 && isMixerMuteCc(controller)) return true
   return false
 }
 
@@ -208,6 +210,7 @@ export function formatMidiSpyEvent(
       let which = 'mixer mute'
       if (msg.channel === CUBASE_MUTE_CHANNEL - 1) {
         if (msg.controller === CUBASE_MUTE_CC) which = 'FX mute'
+        else if (msg.controller === CUBASE_ALL_MUTE_CC) which = 'ALL mute'
         else if (msg.controller === CUBASE_SYNTH_MUTE_CC) which = 'Synth mute'
         else if (msg.controller === CUBASE_PIANO_MUTE_CC) which = 'Piano mute'
       }
@@ -443,7 +446,7 @@ export class MidiService {
         })
       })
       console.log(`[ViewerOne] MIDI: listening directly on mixer input "${name}" (isPortOpen=${this.mixerInput.isPortOpen()})`)
-      return true
+      return this.mixerInput.isPortOpen()
     } catch (err) {
       this.mixerInput = null
       console.warn('[ViewerOne] MIDI: failed to open mixer input port —', name, err)
@@ -484,7 +487,7 @@ export class MidiService {
       console.log(
         `[ViewerOne] MIDI: opened direct mixer output "${name}" (isPortOpen=${this.mixerOutput.isPortOpen()})`
       )
-      return true
+      return this.mixerOutput.isPortOpen()
     } catch (err) {
       this.mixerOutput = null
       console.warn('[ViewerOne] MIDI: failed to open mixer output port (in use elsewhere, e.g. by Cubase?) —', name, err)

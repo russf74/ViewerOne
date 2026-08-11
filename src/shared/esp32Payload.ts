@@ -10,17 +10,27 @@ export const ESP32_WAITING_TITLE = 'Waiting for signal'
  */
 export const ESP32_NEXT_SONG_MAX_CHARS = 36
 
+/** Hard char cap for now-playing title — keep in sync with firmware `kTitleMaxChars`. */
+export const ESP32_TITLE_MAX_CHARS = 96
+
 export type Esp32CountdownArm = {
   remainingSeconds: number | null
   running: boolean
 }
 
 /** Truncate to N chars with a hard cut (no `…` / ellipsis). */
-export function truncateEsp32NextSongTitle(title: string, maxChars = ESP32_NEXT_SONG_MAX_CHARS): string {
+export function truncateEsp32Text(title: string, maxChars: number): string {
   const t = (title ?? '').trim()
   if (!t) return ''
   if (t.length <= maxChars) return t
   return t.slice(0, maxChars)
+}
+
+export function truncateEsp32NextSongTitle(
+  title: string,
+  maxChars = ESP32_NEXT_SONG_MAX_CHARS
+): string {
+  return truncateEsp32Text(title, maxChars)
 }
 
 export function buildEsp32DisplayPayload(
@@ -36,7 +46,7 @@ export function buildEsp32DisplayPayload(
   if (!row || st.setlist.length === 0) {
     return { t: ESP32_WAITING_TITLE, c: '', d: '', l: true, m, a, s, i }
   }
-  const t = (row.title ?? '').trim()
+  const t = truncateEsp32Text(row.title ?? '', ESP32_TITLE_MAX_CHARS)
   const c = (row.year ?? '').trim()
   const d = (displayDuration ?? row.length ?? '').trim()
   if (!t && !c && !d) {
@@ -44,7 +54,10 @@ export function buildEsp32DisplayPayload(
   }
   // Same `n` / `x` for serial JSON and PC CrowPanel preview.
   const n = formatSetlistSongPosition(st.setlist, st.currentSongId)
-  const x = truncateEsp32NextSongTitle(nextSetlistSongTitle(st.setlist, st.currentSongId))
+  const x = truncateEsp32Text(
+    nextSetlistSongTitle(st.setlist, st.currentSongId),
+    ESP32_NEXT_SONG_MAX_CHARS
+  )
   const payload: Esp32DisplayPayload = { t: t || '—', c, d, l: true, m, a, s, i }
   if (n) payload.n = n
   if (x) payload.x = x
