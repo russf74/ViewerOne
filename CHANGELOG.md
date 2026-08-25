@@ -1,5 +1,223 @@
 # Changelog
 
+## v5.12.86
+
+- Arranger scan now visits **Soundcheck** and reads its Cubase Info Line length (it was
+  skipped so the song countdown stayed blank). Name matching treats `Sound Check` /
+  `Soundcheck (Reflex)` / OCR `5oundcheck` as the same event. Gig duration and numbered
+  song totals still exclude Soundcheck; a failed Soundcheck length does not block gig-ready.
+
+## v5.12.85
+
+- Info Line OCR: scale the Name/Start/End/Length strip 4–5× (native WinOCR only
+  saw labels). When Windows still blanks times, Tesseract reads the times strip
+  (e.g. Sit down `0:03:55.000`) instead of thickened-length garbage.
+- After chain locate, click the colour-matched Arranger block (not the playhead)
+  so Info Line Name/Length stay on the walked song. Wrong chip hits are retried
+  with that X excluded. Grab PowerShell timeout raised to 75s for retries.
+- Prefer Tesseract of the times strip over Windows OCR lengths (WinOCR was
+  writing keepable-but-wrong times). Title OCR maps `1m`→`I'm` and `END SONGS`→OUTRO.
+- Unglue Tesseract Start/End/Length strings so glued OCR no longer invents
+  false lengths like `02:05`.
+- When End OCR drops out, treat absolute Start + short Length as Start+Length
+  (fixes Reach for the stars reading as `02:12` instead of `~4:12`).
+- Scan prepare: grow Cubase height a bit and thicken the Arranger Track lane
+  (no Zoom Full / no maximize) so event blocks are clickable for OCR.
+- Gig-ready follows the setlist lengths, not rewind-home success — a solid walk
+  no longer shows “not gig-ready: last Arranger scan was incomplete”.
+
+## v5.12.84
+
+- Length OCR uses PrintWindow of Cubase (and minimizes ViewerOne during the
+  grab) so Electron no longer covers the Info Line. Play-arrow locate stays
+  single-click only.
+
+## v5.12.83
+
+- MIDI Next/Prev still walks the chain. Length OCR uses a **single click** on
+  the named Arranger block, or the Current Chain play arrow if that block is
+  off-screen. Double-click / space / transport are never sent (those start Play).
+  Info Line Name must match before a time is stored.
+
+## v5.12.82
+
+- Arranger scan length is **MIDI Next/Prev + Info Line OCR only**. ViewerOne does
+  not click Cubase or send keyboard (those were starting playback — not the
+  chain play arrows). Name must still match before a length is written.
+
+## v5.12.81
+
+- Length clicks only the **named Arranger Track block**. Play-triangle /
+  Arranger Events play-arrow clicks are gone — those start Cubase playback.
+
+## v5.12.80
+
+- Scan walk now reaches **OUTRO** (16 events). Length clicks target the Arranger
+  Track lane (not MIDI clips below it). If a song is off-screen, Ctrl+wheel zooms
+  **time** until the named block is visible — not Zoom Full.
+- Gig-ready stays blocked when any visited song could not be read from Cubase
+  this scan (old times are not treated as a fresh pass).
+
+## v5.12.79
+
+- Length locate clicks the **play triangle** (not the title) on the Current Chain
+  row when the named Arranger block is off-screen.
+- Arranger-lane detect stays in the **top of the project zone**. MIDI/audio lanes
+  (more colour changes, lower on screen) were winning, so the named Arranger
+  block was never clicked and Info Line stayed on the previous song.
+- MIDI restore after a stray click prefers Next/Prev toward the walk song
+  (max 8 steps each way) instead of 20 blind pulses that skipped the rest of the chain.
+
+## v5.12.78
+
+- Clicks only an Arranger block whose **name is visible**, or the current
+  chain-row play triangle. Random colour-matched clicks were jumping Cubase
+  and stopping the walk after a few songs. After each grab, MIDI is restored
+  to the walk song before Next.
+- Songs with no Cubase length are not skipped: 5 grab attempts, then a repair
+  pass. Scan stays incomplete / not gig-ready until every visited song (except
+  Soundcheck) has a keepable time.
+
+## v5.12.77
+
+- Length grab locates the **named Current Chain row** (scrolls the list if needed), stops
+  transport, then clicks the Arranger block **at the playhead** — that is what updates the
+  Cubase Info Line. Missing lengths are no longer skipped: each song retries up to 3 times,
+  and the scan is marked incomplete until every visited song (except Soundcheck) has a time.
+- Duration line flags blank scanned lengths in red so a gig total cannot silently drop a song.
+
+## v5.12.76
+
+- Arranger scan rewind uses real MIDI note lengths again (40ms, 55ms apart). The 8ms
+  rewind pulses were too short for Cubase Generic Remote, so Previous never reached the
+  first chain event and the walk started on a leftover song, then died after 1–2 titles.
+- Length click only happens when the **named Arranger block is visible** on the timeline.
+  Inspector list / playhead / leftmost clicks do not update Cubase's Info Line and were
+  jumping the chain (INTRO) so MIDI Next stopped. Unmatched Info Line names are not
+  written; Tesseract is skipped when the name does not match.
+- MIDI Next always steps from the **walk** Program Change, after delayed click PCs go quiet.
+- If rewind sends no Program Change (first Arranger event has no ViewerOne PC), the scan
+  probes Next instead of treating the leftover song as the start — that was stopping after
+  INTRO when the leftover PC reappeared.
+- `0:03:39.390` OCR'd as `010339.390` (colon read as 1) parses as 3:39, not 10:39.
+
+## v5.12.75
+
+- Arranger length click uses the **playhead on the Arranger track**, not the leftmost event.
+  Clicking INTRO/Soundcheck while Cubase was on a later song jumped the chain and the scan
+  stopped after 1–2 titles. Delayed click Program Changes are settled before MIDI Next.
+
+## v5.12.74
+
+- Length scan no longer treats an empty Info Line Name as a match. That was writing leftover
+  INTRO time (`0:10:51` → `10:39`) onto songs such as Let me entertain you (actual Arranger
+  length 3:39). Normal songs longer than 8 minutes are rejected; INTRO/OUTRO may still be long.
+
+## v5.12.73
+
+- Arranger length click targets the **Arranger track event** again (not a MIDI/audio song clip):
+  locate “Arranger Track”, prefer the topmost timeline lane, and wait for Cubase to handle the
+  click before restoring the cursor.
+- Quit waits for PowerShell OCR, Tesseract, serialport, and MIDI to close before Electron exits,
+  instead of `app.exit(0)` after 750ms (that was the “electron has stopped working” crash).
+
+## v5.12.72
+
+- Faster Arranger scan: skip Tesseract when Windows OCR already got a keepable length; drop
+  per-song foreground padding and shrink click/Next settle waits that were not required for
+  Cubase (Info Line still gets ~90ms after the timeline click). End-of-chain Next timeout
+  1.8s → 1.0s.
+
+## v5.12.71
+
+- Arranger scan duration now sums **only songs the scan actually visited**. Leftover rows from a
+  previous (longer) setlist kept as “not in arranger” no longer inflate Main/Total (this was the
+  114-minute total on an 18-event set). Status, Duration line, and `last-arranger-scan.txt` report
+  leftover time excluded, missing lengths, suspiciously long songs, and stale OCR.
+
+## v5.12.50
+
+- Cubase helpers always run via absolute `powershell.exe -NoProfile -ExecutionPolicy Bypass -File`
+  (`shell: false`). Never shell-open / Start-Process a `.ps1` (Windows → Notepad). Launch uses
+  `node_modules/electron/dist/electron.exe .` only — never `npx` (can resolve to `npx.ps1` → Notepad).
+
+## v5.12.49
+
+- **Safer Cubase length pass** (different stack than the crashy path): no `SetWindowPos` thrash,
+  no system `mouse_event`/`SendInput`. Prepare once per pass (soft restore; optional one
+  `SW_MAXIMIZE` only if the window is tiny). Arranger selection via OCR-locate + **one
+  `PostMessage` LBUTTON** to Cubase HWND with long settle delays. Capture is BitBlt/OCR only
+  (no ShowWindow/SetForeground per song). Health check between songs aborts the length pass if
+  Cubase is gone; prior lengths are never blanked on fail. Order pass unchanged.
+
+## v5.12.47
+
+- **Scan Arranger** restored as two automatic passes under one button: (1) order/PC walk,
+  (2) rewind and walk again for Cubase Length OCR (`00:00` → `mm:ss`). Logs
+  `length pass START` / `length pass END` — never silently skips. Removed the
+  `skipLengthCapture` early-return that aborted all later songs after one Cubase prepare
+  failure during the old inline-OCR walk.
+
+## v5.12.46
+
+- **Scan Arranger** can be run repeatedly: clear stuck `active` / in-flight promise, serialize
+  Tesseract OCR (concurrent `recognize` hung subsequent scans), timeout PowerShell / WinRT OCR,
+  flush stacked MIDI note-ons before rewind. Busy/error state always cleared in `finally`.
+- Live length UX while scanning: each found song shows `00:00` immediately, then the Cubase
+  `mm:ss` (or empty on OCR fail). Status confirms e.g. `Song K “Title”: length 3:39 from Cubase`
+  or `… length not read (OCR failed)`. Setlist length column updates as the scan progresses.
+
+## v5.12.45
+
+- **Scan Arranger** is one operation: walks the Arranger chain for order (same duplicate-PC rules)
+  and OCR-grabs Cubase Info Line Length after each song PC is established. Status shows
+  `Scanning song K… grabbing length…`. Length failure on one song leaves that length empty and
+  continues; completion reports how many lengths were filled. Removed the separate **Import
+  lengths** toolbar button. **Grab Length** remains as a Detail-only helper for a single row.
+
+## v5.12.44
+
+- Cubase Length OCR: auto-position / resize the Cubase window before capture so Info Line +
+  Arranger track stay on-screen.
+
+## v5.12.43
+
+- **Import lengths from Cubase** (setlist toolbar): walks Arranger like a scan and fills each
+  song’s `length` from the Project Info Line via hybrid capture — Windows screenshot + label
+  locate, then Tesseract digit OCR on Start/End/Length (UIA is blocked by Cubase’s custom UI).
+  MIDI Next alone often leaves “No Object Selected”; import OCR-clicks the Arranger track event
+  matching the setlist title when needed. Round to nearest second (`mm:ss`).
+- **Grab Length**: one-shot read for the selected setlist row (same OCR path). Does not change
+  Arranger scan/order. Cubase must be visible on screen; DPI/zoom can affect OCR accuracy.
+
+## v5.12.42
+
+- Arranger scan: completion message now reports numbered-song total before→after (CrowPanel
+  `n`/`g` denominator) and flags new `Song PC …` placeholder rows that need title/length.
+- Control UI: setlist heading shows `rows · numbered`; duration line relabeled so “Total” is
+  clearly length-sum, not song count. Scan still persists full setlist + forces CrowPanel refresh.
+
+## v5.12.41
+
+- Arranger scan: ignore same-song Program Change re-chases when stepping Next/Prev. Cubase often
+  re-fires the current PC on Arranger navigate; that was treated as a new step and could stop the
+  scan with a false "already seen earlier" (e.g. "Dont look back") and leave later songs unvisited.
+
+## v5.12.40
+
+- CrowPanel / Esp32Preview: restore pad height after set-progress (spacing tightened instead of
+  shrinking pads). Header contrast: brand/STOP `#9CA3AF`, version `#E5E7EB` full opacity, PLAY
+  yellow-green `#B8FF26` (no `#6B7280` @ 70%).
+
+## v5.12.39
+
+- CrowPanel brand bar + desktop preview: compact **PLAY/STOP** transport (`tr` 0/1 in display
+  JSON, change-only) with countdown **ARM/CD** hint; works even when MIDI clock is missing.
+- Set progress under the pad-column clock (`g`, e.g. `12/30 · 41m`): song index/total (same
+  rules as `n`) plus remaining set minutes from current onward (SOUNDCHECK excluded).
+- Detail mode: **Diagnostics** section — MIDI port open/closed + names, last Cubase/mixer
+  activity, ESP identity/fw, mute bridge map, transport playing + last source.
+
 ## v5.12.38
 
 - Cubase ALL mute CC moved **84 → 88**: CC84 is X32 native Mute Group 5, so any CC84 that

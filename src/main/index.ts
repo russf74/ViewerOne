@@ -1,7 +1,7 @@
 import { installProcessGuards } from './processGuards.js'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { setupAppMenu } from './menu.js'
-import { existsSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -22,9 +22,18 @@ import {
   setEsp32ConnectionHandler,
   setEsp32LineHandler,
   setEsp32SerialPort,
-  shutdownEsp32Serial,
+  shutdownEsp32SerialAsync,
   type Esp32FromDeviceMsg
 } from './esp32Bridge.js'
+import {
+  dmxBlackout,
+  dmxSetChannels,
+  getDmxStatus,
+  setDmxConnectionHandler,
+  setDmxEnabled,
+  shutdownDmxSerialAsync
+} from './dmxBridge.js'
+import { dmxUniverseForLedPattern, dmxUniverseForLook, DMX_RANDOM_ROTATE_MS, DMX_STICK_FRAME_MS, type DmxLook } from '../shared/dmx.js'
 import { buildEsp32DisplayPayload } from '../shared/esp32Payload.js'
 import {
   clampLedBrightness,
@@ -77,10 +86,25 @@ import type {
   TransportMidiMapping
 } from '../shared/types.js'
 import {
+  auditSetlistLengths,
+  countNumberedArrangerSongs,
+  calculateSetlistTiming,
   formatSetlistSeconds,
   normalizeSongLength,
-  songLengthSeconds
+  scanIsGigReady,
+  songLengthSeconds,
+  isSoundcheckTitle
 } from '../shared/setlistTiming.js'
+import {
+  CUBASE_AUTO_LENGTH_PASS,
+  checkCubaseAlive,
+  isDuplicateLengthGarbage,
+  isKeepableLengthForTitle,
+  prepareCubaseWindowForCapture,
+  expandCubaseArrangerLayout,
+  readCubaseLengthForEvent,
+  shutdownCubaseLengthCapture
+} from './cubaseLengthCapture.js'
 
 // Must run before any MIDI/serial traffic — EPIPE on stdout used to kill the main process mid-gig.
 installProcessGuards()
@@ -100,6 +124,9 @@ const midi = new MidiService()
 
 /** Set once we intentionally shut down — blocks MIDI auto-reconnect from resurrecting a headless process. */
 let isQuitting = false
+/** True after native MIDI/serial/OCR handles have been closed — allows app.quit() to proceed. */
+let shutdownFinished = false
+let shutdownPromise: Promise<void> | null = null
 
 /** Debounced auto-reconnect when a MIDI send fails / port drops mid-gig. */
 let midiReconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -146,16 +173,38 @@ midi.setDisconnectHandler((which) => {
 
 /** Close control window → fully exit on Windows (no tray). Native MIDI/serial can otherwise keep Electron alive. */
 function quitViewerOne(): void {
-  if (isQuitting) {
+  if (shutdownFinished) {
     app.quit()
     return
   }
+  if (shutdownPromise) return
   isQuitting = true
+  arrangerScanCancelled = true
+  shutdownPromise = shutdownViewerOneResources().finally(() => {
+    shutdownFinished = true
+    app.quit()
+    // Only if a native addon kept the event loop alive after a clean close.
+    setTimeout(() => app.exit(0), 4000).unref()
+  })
+}
+
+async function shutdownViewerOneResources(): Promise<void> {
+  isQuitting = true
+  arrangerScanCancelled = true
   clearMidiReconnectTimer()
   stopCountdownTicker()
   clearEsp32DisplayCoalesceTimer()
   stopEsp32ClockSync()
-  shutdownEsp32Serial()
+  stopDmxRandomRotator()
+  stopDmxStickAnimator()
+  try {
+    midi.flushPendingNoteOffs()
+  } catch {
+    /* ignore */
+  }
+  await shutdownCubaseLengthCapture()
+  await shutdownEsp32SerialAsync()
+  await shutdownDmxSerialAsync()
   try {
     midi.closeInput()
     midi.closeMixerInput()
@@ -164,11 +213,6 @@ function quitViewerOne(): void {
   } catch {
     /* ignore — quitting anyway */
   }
-  app.quit()
-  // Force-exit if easymidi/serialport keep the Node event loop alive after quit.
-  setTimeout(() => {
-    app.exit(0)
-  }, 750).unref()
 }
 
 /**
@@ -277,8 +321,18 @@ let esp32Display: Esp32DisplayStatus = {
   device: 'unknown',
   model: null,
   width: null,
-  height: null
+  height: null,
+  fw: null
 }
+
+/** DMX look follows LED events: PC 125 off, PC 126 idle, PC 127 per-pattern (random rotates with ESP). */
+let dmxLook: DmxLook = 'off'
+let dmxLedPatternId = 0
+let dmxRandomTimer: ReturnType<typeof setInterval> | null = null
+let dmxRandomChild = 1
+let dmxStickTimer: ReturnType<typeof setInterval> | null = null
+let dmxStickT0 = 0
+let dmxStickLastPattern = -1
 
 /** True while PC 126 idle dim is active — brightness slider is held until PC 127 / apply. */
 let ledIdleDimActive = false
@@ -293,16 +347,22 @@ let prompt2On = false
 let promptMidiPulse: 120 | 121 | 122 | 123 | null = null
 let promptMidiPulseAt = 0
 
-const ARRANGER_CHANGE_TIMEOUT_MS = 1800
-const ARRANGER_NO_CHANGE_ATTEMPTS = 3
-const ARRANGER_SETTLE_MS = 150
-const ARRANGER_REWIND_PULSES = 100
-const ARRANGER_REWIND_PULSE_INTERVAL_MS = 20
-const ARRANGER_REWIND_NOTE_DURATION_MS = 8
-const ARRANGER_REWIND_SETTLE_MS = 400
+/** Max wait for Cubase to send a *different* song PC after Next/Prev (returns sooner). */
+const ARRANGER_CHANGE_TIMEOUT_MS = 2200
+const ARRANGER_NO_CHANGE_ATTEMPTS = 5
+/** Extra wait after a PC change so the Arranger event (not a MIDI clip) is painted before we screenshot. */
+const ARRANGER_SETTLE_MS = 220
+const ARRANGER_REWIND_PULSES = 80
+const ARRANGER_REWIND_PULSE_INTERVAL_MS = 55
+const ARRANGER_REWIND_NOTE_DURATION_MS = 40
+const ARRANGER_REWIND_SETTLE_MS = 800
+const ARRANGER_IDENTITY_POLL_MS = 20
+const ARRANGER_LENGTH_RETRY_GAP_MS = 180
+const ARRANGER_LENGTH_ATTEMPTS = 3
 let latestSongProgram: number | null = null
 let songIdentityRevision = 0
 let arrangerScanCancelled = false
+let arrangerScanPromise: Promise<void> | null = null
 let arrangerScan: ArrangerScanState = {
   active: false,
   phase: 'idle',
@@ -696,6 +756,7 @@ function buildPublicState(): PublicState {
     appVersion: app.getVersion(),
     ledPattern,
     esp32Display,
+    dmx: getDmxStatus(),
     queuedLedPattern: queuedRow ? clampLedPatternId(queuedRow.ledPattern) : null,
     ledMidiPulse,
     ledMidiPulseAt,
@@ -770,10 +831,15 @@ function pushEsp32DisplayNow(): void {
   const st = getState(store)
   if (!st.esp32Enabled) return
   const snap = countdownSnapshot()
-  const payload = buildEsp32DisplayPayload(st, snap.display, {
-    remainingSeconds: snap.remainingSeconds,
-    running: snap.running
-  })
+  const payload = buildEsp32DisplayPayload(
+    st,
+    snap.display,
+    {
+      remainingSeconds: snap.remainingSeconds,
+      running: snap.running
+    },
+    { transportPlaying }
+  )
   const json = JSON.stringify(payload)
   if (json === lastEsp32DisplayJson) return
   lastEsp32DisplayJson = json
@@ -857,6 +923,94 @@ function pushEsp32BrightnessFromSettings(): void {
   pushEsp32LedBrightness(st.ledBrightness)
 }
 
+function stopDmxRandomRotator(): void {
+  if (!dmxRandomTimer) return
+  clearInterval(dmxRandomTimer)
+  dmxRandomTimer = null
+}
+
+function stopDmxStickAnimator(): void {
+  if (!dmxStickTimer) return
+  clearInterval(dmxStickTimer)
+  dmxStickTimer = null
+  dmxStickLastPattern = -1
+}
+
+function pushDmxFrame(): void {
+  if (dmxLook === 'off' || ledPattern === 'blackout') {
+    dmxBlackout()
+    return
+  }
+  const idle = dmxLook === 'idle'
+  const patternId = idle ? 0 : dmxLedPatternId
+  if (patternId !== dmxStickLastPattern) {
+    dmxStickLastPattern = patternId
+    dmxStickT0 = Date.now()
+  }
+  const tMs = Date.now() - dmxStickT0
+  if (idle) {
+    dmxSetChannels(dmxUniverseForLook('idle', tMs * 0.55))
+    return
+  }
+  dmxSetChannels(dmxUniverseForLedPattern(patternId, tMs, 1))
+}
+
+function startDmxStickAnimator(): void {
+  if (!dmxStickTimer) {
+    dmxStickT0 = Date.now()
+    dmxStickTimer = setInterval(() => pushDmxFrame(), DMX_STICK_FRAME_MS)
+    dmxStickTimer.unref()
+  }
+  pushDmxFrame()
+}
+
+function startDmxRandomRotator(): void {
+  stopDmxRandomRotator()
+  dmxRandomChild = 1
+  dmxLedPatternId = 1
+  dmxRandomTimer = setInterval(() => {
+    if (dmxLook !== 'live') return
+    dmxRandomChild = dmxRandomChild >= 19 ? 1 : dmxRandomChild + 1
+    dmxLedPatternId = dmxRandomChild
+    refreshDmxOutput()
+  }, DMX_RANDOM_ROTATE_MS)
+  dmxRandomTimer.unref()
+}
+
+function armDmxForLedPattern(id: number): void {
+  if (id === 99) {
+    stopDmxRandomRotator()
+    dmxLook = 'off'
+    return
+  }
+  if (id === 0) {
+    stopDmxRandomRotator()
+    dmxLook = 'idle'
+    return
+  }
+  dmxLook = 'live'
+  if (id === 20) {
+    startDmxRandomRotator()
+    return
+  }
+  stopDmxRandomRotator()
+  dmxLedPatternId = id
+}
+
+function refreshDmxOutput(): void {
+  if (dmxLook === 'off' || ledPattern === 'blackout') {
+    stopDmxStickAnimator()
+    dmxBlackout()
+    return
+  }
+  startDmxStickAnimator()
+}
+
+function syncDmxFromStore(): void {
+  setDmxEnabled(true)
+  refreshDmxOutput()
+}
+
 /**
  * Full LED blackout (pattern id 99). Same path as MIDI PC 125 / UI simulate / preview.
  * Clears idle dim and restores settings brightness (strip stays off via blackout pattern).
@@ -865,27 +1019,33 @@ function applyLedBlackout(): void {
   noteLedMidiPulse(MIDI_PC_LED_BLACKOUT)
   const st = getState(store)
   ledIdleDimActive = false
+  dmxLook = 'off'
+  stopDmxRandomRotator()
   ledPattern = ledPatternName(99)
   if (st.esp32Enabled) {
     pushEsp32LedPattern(99)
     pushEsp32LedBrightness(st.ledBrightness)
   }
+  refreshDmxOutput()
   broadcastUiState()
 }
 
 /**
- * Dim slow knight rider (idle lights). Same path as MIDI PC 126 / UI simulate.
+ * Dim slow royal-blue knight rider (idle lights). Same path as MIDI PC 126 / UI simulate.
  * Display text is left as-is.
  */
 function applyLedIdle(): void {
   noteLedMidiPulse(MIDI_PC_LED_IDLE)
   ledIdleDimActive = true
+  dmxLook = 'idle'
+  stopDmxRandomRotator()
   ledPattern = 'knight_rider'
   const st = getState(store)
   if (st.esp32Enabled) {
     pushEsp32LedPattern(0)
     pushEsp32LedBrightness(LED_IDLE_DIM_BRIGHTNESS)
   }
+  refreshDmxOutput()
   broadcastUiState()
 }
 
@@ -899,11 +1059,19 @@ function applyLedForCurrentSong(): void {
   ledIdleDimActive = false
   const row = st.currentSongId ? st.setlist.find((r) => r.id === st.currentSongId) : null
   const id = row ? clampLedPatternId(row.ledPattern) : 0
+  const title = (row?.title ?? '').toUpperCase()
+  if (!row || id === 0 || title.includes('SOUNDCHECK')) {
+    stopDmxRandomRotator()
+    dmxLook = id === 99 ? 'off' : 'idle'
+  } else {
+    armDmxForLedPattern(id)
+  }
   ledPattern = ledPatternName(id)
   if (st.esp32Enabled) {
     pushEsp32LedPattern(id)
     pushEsp32LedBrightness(st.ledBrightness)
   }
+  refreshDmxOutput()
   broadcastUiState()
 }
 
@@ -916,10 +1084,12 @@ function previewLedPattern(rawId: unknown): void {
   const st = getState(store)
   ledIdleDimActive = false
   ledPattern = ledPatternName(id)
+  armDmxForLedPattern(id)
   if (st.esp32Enabled) {
     pushEsp32LedPattern(id)
     pushEsp32LedBrightness(st.ledBrightness)
   }
+  refreshDmxOutput()
   broadcastUiState()
 }
 
@@ -1197,7 +1367,8 @@ function syncEsp32SerialFromStore(): void {
     device: 'unknown',
     model: null,
     width: null,
-    height: null
+    height: null,
+    fw: null
   }
   if (st.esp32Enabled) {
     setEsp32SerialPort(ESP32_SERIAL_PORT_AUTO, () => onEsp32SerialOpened())
@@ -1513,6 +1684,27 @@ function sendArrangerCommand(
   else midi.sendControlChange(mapping.channel, number, 127)
 }
 
+/** Best-effort Cubase Stop via configured transport mapping (never Start / never Arranger notes). */
+function sendCubaseTransportStop(reason: string): void {
+  if (!cubaseOutputOpen) return
+  const mapping = getState(store).transportMidi
+  console.warn(
+    `[ViewerOne] MIDI: sending transport Stop (${mapping.mode} ${mapping.stopNumber} ch ${mapping.channel || 'any'}) — ${reason}`
+  )
+  const ch = mapping.channel >= 1 && mapping.channel <= 16 ? mapping.channel : 16
+  if (mapping.mode === 'note') midi.sendNotePulse(ch, mapping.stopNumber, 127, 60)
+  else midi.sendControlChange(ch, mapping.stopNumber, 127)
+}
+
+/** After an Arranger inspector click: if Cubase looks like it started playing, Stop and abort further clicks. */
+async function stopIfTransportStartedAfterClick(label: string): Promise<boolean> {
+  await sleep(350)
+  if (!transportPlaying) return false
+  sendCubaseTransportStop(`transport started after click (${label})`)
+  await sleep(200)
+  return true
+}
+
 /**
  * Cubase does not expose an absolute "first Arranger event" command. A bounded burst of very
  * fast Previous commands is deterministic for normal set sizes and avoids relying on PCs being
@@ -1538,11 +1730,41 @@ async function rewindArrangerToBeginning(respectCancel: boolean): Promise<boolea
     if (respectCancel && arrangerScanCancelled) return false
     await sleep(Math.min(50, deadline - Date.now()))
   }
-  return true
+  midi.flushPendingNoteOffs()
+  // Cubase may still be draining queued Previous notes — wait until song PCs go quiet.
+  await waitForSongIdentityQuiet(500, 6000, respectCancel)
+  return !(respectCancel && arrangerScanCancelled)
 }
 
+/** Wait until Cubase stops sending song Program Changes (delayed click/chase PCs). */
+async function waitForSongIdentityQuiet(
+  quietMs: number,
+  maxMs: number,
+  respectCancel: boolean
+): Promise<void> {
+  const started = Date.now()
+  let lastRev = songIdentityRevision
+  let quietSince = Date.now()
+  while (Date.now() - started < maxMs) {
+    if (respectCancel && arrangerScanCancelled) return
+    await sleep(40)
+    if (songIdentityRevision !== lastRev) {
+      lastRev = songIdentityRevision
+      quietSince = Date.now()
+    } else if (Date.now() - quietSince >= quietMs) {
+      return
+    }
+  }
+}
+
+/**
+ * Wait until Cubase reports a *different* song PC than `fromProgram`.
+ * Cubase often re-chases the current song PC when Arranger Next/Prev is pressed; that bumps
+ * `songIdentityRevision` without leaving the song. Treating that as a step caused false
+ * "already seen earlier" stops (and left later songs unvisited).
+ */
 async function waitForSongIdentityChange(
-  _fromProgram: number,
+  fromProgram: number,
   revisionAtSend: number,
   respectCancel: boolean
 ): Promise<number | null> {
@@ -1551,11 +1773,12 @@ async function waitForSongIdentityChange(
     if (respectCancel && arrangerScanCancelled) return null
     if (
       songIdentityRevision > revisionAtSend &&
-      latestSongProgram !== null
+      latestSongProgram !== null &&
+      latestSongProgram !== fromProgram
     ) {
       return latestSongProgram
     }
-    await sleep(50)
+    await sleep(ARRANGER_IDENTITY_POLL_MS)
   }
   return null
 }
@@ -1581,8 +1804,12 @@ async function stepArrangerUntilChanged(
     const changed = await waitForSongIdentityChange(fromProgram, revisionAtSend, respectCancel)
     if (changed !== null) {
       // Give Cubase's Arranger selection, title, and related automation time to settle
-      // before issuing another Next/Prev command.
+      // before issuing another Next/Prev command. Prefer the post-settle identity in case a
+      // chase + real change landed in the same window.
       if (!(await waitForArrangerSettle(respectCancel))) return null
+      if (latestSongProgram !== null && latestSongProgram !== fromProgram) {
+        return latestSongProgram
+      }
       return changed
     }
     if (respectCancel && arrangerScanCancelled) return null
@@ -1593,7 +1820,35 @@ async function stepArrangerUntilChanged(
   return null
 }
 
-function buildScannedSetlist(programs: number[], previous: SetlistItem[]): SetlistItem[] {
+async function restoreArrangerToProgram(
+  want: number,
+  respectCancel: boolean,
+  walkOrder: number[] = []
+): Promise<boolean> {
+  if (latestSongProgram === want) return true
+  const wanti = walkOrder.indexOf(want)
+  const curi = latestSongProgram != null ? walkOrder.indexOf(latestSongProgram) : -1
+  // Clicks usually jump earlier in the chain (INTRO / leftover). Prefer Next toward the walk song.
+  let dirs: Array<'prev' | 'next'> =
+    curi >= 0 && wanti >= 0 && curi > wanti ? ['prev', 'next'] : ['next', 'prev']
+  for (const dir of dirs) {
+    for (let i = 0; i < 8; i++) {
+      if (respectCancel && arrangerScanCancelled) return false
+      if (latestSongProgram === want) return true
+      const from = latestSongProgram ?? want
+      const stepped = await stepArrangerUntilChanged(dir, from, respectCancel)
+      if (stepped === want) return true
+      if (stepped === null) break
+    }
+  }
+  return latestSongProgram === want
+}
+
+function buildScannedSetlist(
+  programs: number[],
+  previous: SetlistItem[],
+  lengthOverrides?: Map<number, string>
+): SetlistItem[] {
   const byProgram = new Map<number, SetlistItem>()
   for (const row of previous) {
     if (!byProgram.has(row.program)) byProgram.set(row.program, row)
@@ -1605,12 +1860,18 @@ function buildScannedSetlist(programs: number[], previous: SetlistItem[]): Setli
     const canReuseId = old && !usedIds.has(old.id)
     const id = canReuseId ? old.id : crypto.randomUUID()
     usedIds.add(id)
+    // Only apply OCR lengths that actually parsed — never blank prior lengths with '' / 00:00.
+    const ocrLength = lengthOverrides?.has(program)
+      ? normalizeSongLength(lengthOverrides.get(program))
+      : ''
+    const priorRaw = old?.length || ''
+    const prior = isKeepableLengthForTitle(priorRaw, old?.title || '') ? priorRaw : ''
     return {
       id,
       program,
       arrangerIndex: index + 1,
       title: old?.title || `Song PC ${program}`,
-      length: old?.length ?? '',
+      length: ocrLength || prior || '',
       year: old?.year ?? '',
       // Preserve editable metadata and every custom pick keyed by Cubase's stable song program.
       ledPattern: clampLedPatternId(old?.ledPattern ?? songLedPatternForIndex())
@@ -1634,8 +1895,37 @@ function scannedSongTitle(program: number, setlist: SetlistItem[]): string | nul
   return title || null
 }
 
+/** Status-bar length like `3:39` (strip leading zero minutes). */
+function statusLengthLabel(mmss: string): string {
+  const n = normalizeSongLength(mmss)
+  if (!n) return mmss
+  const [m, s] = n.split(':')
+  return `${Number(m)}:${s}`
+}
+
+/**
+ * Arranger scan — one MIDI walk with inline length grab.
+ * After each song PC, locate the named Arranger event (chain-row play triangle
+ * if the block is off-screen) and read Info Line Length. Never skip a visited
+ * song that has no keepable length — retry, then a repair pass, then mark the
+ * scan incomplete.
+ */
 async function runArrangerScan(): Promise<void> {
-  if (arrangerScan.active) return
+  // Recover a stuck flag if a prior run died without clearing the in-flight promise.
+  if (arrangerScan.active && !arrangerScanPromise) {
+    console.warn('[ViewerOne] Arranger scan: clearing stuck active flag before new scan')
+    arrangerScan = {
+      active: false,
+      phase: 'idle',
+      collected: 0,
+      message: 'Ready'
+    }
+  }
+  if (arrangerScanPromise || arrangerScan.active) {
+    console.log('[ViewerOne] Arranger scan: ignored — already in progress')
+    return
+  }
+
   const before = getState(store)
   if (!cubaseInputOpen || !cubaseOutputOpen) {
     setArrangerScan({
@@ -1647,155 +1937,569 @@ async function runArrangerScan(): Promise<void> {
     return
   }
 
-  arrangerScanCancelled = false
-  setArrangerScan({
-    active: true,
-    phase: 'scanning',
-    collected: 0,
-    message: `Rewinding to the first Arranger event (${ARRANGER_REWIND_PULSES} fast Previous pulses)…`
-  })
-
-  const initialRewindCompleted = await rewindArrangerToBeginning(true)
-  if (!initialRewindCompleted || arrangerScanCancelled) {
-    const stopReason = 'Scan stopped: cancelled by user'
-    console.log(`[ViewerOne] Arranger scan: ${stopReason}`)
-    // Cancellation remains bounded: finish one deterministic rewind so the user still lands at
-    // the beginning rather than wherever the interrupted burst happened to stop.
+  arrangerScanPromise = (async () => {
+    arrangerScanCancelled = false
+    midi.flushPendingNoteOffs()
     setArrangerScan({
       active: true,
-      phase: 'returning',
+      phase: 'scanning',
       collected: 0,
-      message: 'Scan cancelled; returning to the beginning…'
+      message: `Rewinding to the first Arranger event (${ARRANGER_REWIND_PULSES} fast Previous pulses)…`
     })
-    await rewindArrangerToBeginning(false)
-    setArrangerScan({
-      active: false,
-      phase: 'cancelled',
-      collected: 0,
-      message: `${stopReason} — Arranger returned to the beginning.`
-    })
-    return
-  }
 
-  const currentRow = before.currentSongId
-    ? before.setlist.find((row) => row.id === before.currentSongId)
-    : null
-  const startProgram = latestSongProgram ?? currentRow?.program ?? null
-  if (startProgram === null || startProgram < 1 || startProgram > MIDI_PC_SONG_MAX) {
-    setArrangerScan({
-      active: false,
-      phase: 'error',
-      collected: 0,
-      message: 'Reached the beginning, but received no song Program Change from Cubase. Previous setlist kept.'
-    })
-    return
-  }
+    try {
+      const pcBeforeRewind = latestSongProgram
+      const revBeforeRewind = songIdentityRevision
+      const initialRewindCompleted = await rewindArrangerToBeginning(true)
+      if (!initialRewindCompleted || arrangerScanCancelled) {
+        const stopReason = 'Scan stopped: cancelled by user'
+        console.log(`[ViewerOne] Arranger scan: ${stopReason}`)
+        // Cancellation remains bounded: finish one deterministic rewind so the user still lands at
+        // the beginning rather than wherever the interrupted burst happened to stop.
+        setArrangerScan({
+          active: true,
+          phase: 'returning',
+          collected: 0,
+          message: 'Scan cancelled; returning to the beginning…'
+        })
+        await rewindArrangerToBeginning(false)
+        setArrangerScan({
+          active: false,
+          phase: 'cancelled',
+          collected: 0,
+          message: `${stopReason} — Arranger returned to the beginning.`
+        })
+        return
+      }
 
-  const programs = [startProgram]
-  const seenPrograms = new Set(programs)
-  let currentProgram = startProgram
-  let stopReason: string | null = null
-  setArrangerScan({
-    active: true,
-    phase: 'scanning',
-    collected: 1,
-    message: `Scanning from PC ${startProgram}…`
-  })
+      const currentRow = before.currentSongId
+        ? before.setlist.find((row) => row.id === before.currentSongId)
+        : null
+      let startProgram = latestSongProgram ?? currentRow?.program ?? null
+      const rewindSentPc = songIdentityRevision > revBeforeRewind
+      if (
+        !rewindSentPc &&
+        pcBeforeRewind != null &&
+        startProgram === pcBeforeRewind &&
+        !arrangerScanCancelled
+      ) {
+        console.warn(
+          `[ViewerOne] Arranger scan: rewind sent no Program Change (still PC ${startProgram}) — probing Next for the real first event`
+        )
+        setArrangerScan({
+          collected: 0,
+          message: `Rewind sent no song PC (still PC ${startProgram}) — stepping Next to find the first event…`
+        })
+        const probed = await stepArrangerUntilChanged('next', startProgram, true)
+        if (probed != null) {
+          startProgram = probed
+        }
+      }
+      if (startProgram === null || startProgram < 1 || startProgram > MIDI_PC_SONG_MAX) {
+        setArrangerScan({
+          active: false,
+          phase: 'error',
+          collected: 0,
+          message:
+            'Reached the beginning, but received no song Program Change from Cubase. Previous setlist kept.'
+        })
+        return
+      }
 
-  while (!arrangerScanCancelled && programs.length < MIDI_PC_SONG_MAX) {
-    const nextProgram = await stepArrangerUntilChanged('next', currentProgram, true)
-    if (arrangerScanCancelled) break
-    if (nextProgram === null) {
-      const title = scannedSongTitle(currentProgram, before.setlist) ?? `Song PC ${currentProgram}`
-      stopReason =
-        `Scan stopped: ${ARRANGER_NO_CHANGE_ATTEMPTS}× Next with no song change after ` +
-        `'${title}' (PC ${currentProgram}) — Cubase may be at end, or next event sends no ViewerOne MIDI`
-      console.log(`[ViewerOne] Arranger scan: ${stopReason}`)
-      break
+      setArrangerScan({
+        message: 'Expanding Cubase Arranger Track for length OCR…'
+      })
+      try {
+        await expandCubaseArrangerLayout()
+      } catch (expandErr) {
+        console.warn(
+          `[ViewerOne] Arranger scan: expand skipped — ${
+            expandErr instanceof Error ? expandErr.message : String(expandErr)
+          }`
+        )
+      }
+
+      const programs = [startProgram]
+      const seenPrograms = new Set(programs)
+      let currentProgram = startProgram
+      let stopReason: string | null = null
+      const lengthByProgram = new Map<number, string>()
+      let lengthsOk = 0
+      let lengthsFailed = 0
+      let lengthPassRan = false
+      let lengthPassSkippedReason: string | null = null
+
+      const titleForProgram = (program: number): string => {
+        const st = getState(store)
+        const row =
+          st.setlist.find((r) => r.program === program && r.arrangerIndex != null) ??
+          st.setlist.find((r) => r.program === program) ??
+          before.setlist.find((r) => r.program === program && r.arrangerIndex != null) ??
+          before.setlist.find((r) => r.program === program)
+        return (row?.title || '').trim() || `Song PC ${program}`
+      }
+
+      const publishProgressSetlist = (): void => {
+        const scanned = buildScannedSetlist(programs, before.setlist, lengthByProgram)
+        setState(store, { setlist: scanned })
+        lastEsp32DisplayJson = null
+        broadcastState()
+      }
+
+      const captureLengthForProgram = async (program: number, songIndex: number): Promise<void> => {
+        if (!CUBASE_AUTO_LENGTH_PASS || arrangerScanCancelled) return
+        const title = titleForProgram(program)
+        const previousLength = isKeepableLengthForTitle(
+          before.setlist.find((r) => r.program === program)?.length || lengthByProgram.get(program) || '',
+          title
+        )
+          ? before.setlist.find((r) => r.program === program)?.length || lengthByProgram.get(program) || ''
+          : ''
+        if (latestSongProgram !== null && latestSongProgram !== program) {
+          console.warn(
+            `[ViewerOne] Arranger scan: length grab for “${title}” is on PC ${latestSongProgram}, restoring walk PC ${program} first`
+          )
+          await restoreArrangerToProgram(program, true, programs)
+        }
+        setArrangerScan({
+          collected: programs.length,
+          message: `Song ${songIndex} “${title}”: reading length from Cubase…`
+        })
+        try {
+          const isUsableRead = (r: { ok: boolean; nameMatched: boolean; mmss: string }) =>
+            Boolean(r.ok && r.nameMatched && r.mmss && isKeepableLengthForTitle(r.mmss, title))
+          const wasMin =
+            Boolean(controlWindow) &&
+            !controlWindow!.isDestroyed() &&
+            controlWindow!.isMinimized()
+          if (controlWindow && !controlWindow.isDestroyed() && !wasMin) {
+            controlWindow.minimize()
+            await sleep(120)
+          }
+          let read: Awaited<ReturnType<typeof readCubaseLengthForEvent>>
+          try {
+            read = await readCubaseLengthForEvent(title, { allowClick: true })
+            for (
+              let attempt = 2;
+              attempt <= ARRANGER_LENGTH_ATTEMPTS && !isUsableRead(read) && !arrangerScanCancelled;
+              attempt++
+            ) {
+              await sleep(ARRANGER_LENGTH_RETRY_GAP_MS)
+              const retry = await readCubaseLengthForEvent(title, { allowClick: true })
+              if (isUsableRead(retry)) {
+                console.log(
+                  `[ViewerOne] Arranger scan: length retry ${attempt} succeeded PC ${program} “${title}” → ${retry.mmss}`
+                )
+                read = retry
+                break
+              }
+              read = retry
+            }
+          } finally {
+            if (controlWindow && !controlWindow.isDestroyed() && !wasMin) {
+              controlWindow.restore()
+            }
+          }
+          if (transportPlaying) {
+            sendCubaseTransportStop(`Cubase was already playing during length OCR (${title})`)
+            await sleep(120)
+          }
+          if (arrangerScanCancelled) return
+          if (isUsableRead(read) && read.mmss) {
+            lengthByProgram.set(program, normalizeSongLength(read.mmss))
+            lengthsOk++
+            lengthPassRan = true
+            publishProgressSetlist()
+            setArrangerScan({
+              collected: programs.length,
+              message: `Song ${songIndex} “${title}”: ${statusLengthLabel(read.mmss)} from Cubase`
+            })
+            console.log(
+              `[ViewerOne] Arranger scan: length PC ${program} “${title}” → ${read.mmss} (${read.source})`
+            )
+          } else {
+            const tooLong =
+              Boolean(read.mmss) && !isKeepableLengthForTitle(read.mmss, title)
+                ? `rejected ${statusLengthLabel(read.mmss)} (too long for this song — likely missed Arranger event)`
+                : ''
+            lengthsFailed += isSoundcheckTitle(title) ? 0 : 1
+            lengthPassRan = true
+            setArrangerScan({
+              collected: programs.length,
+              message:
+                `Song ${songIndex} “${title}”: length not read` +
+                (previousLength ? ` (kept ${statusLengthLabel(previousLength)})` : '') +
+                (tooLong ? ` — ${tooLong}` : read.error ? ` — ${read.error}` : '')
+            })
+            console.warn(
+              `[ViewerOne] Arranger scan: length PC ${program} “${title}” failed — ${
+                tooLong || read.error || 'unreadable'
+              }`
+            )
+          }
+        } catch (err) {
+          if (!isSoundcheckTitle(title)) lengthsFailed++
+          console.warn(
+            `[ViewerOne] Arranger scan: length PC ${program} error — ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          )
+        }
+        if (latestSongProgram !== null && latestSongProgram !== program) {
+          console.warn(
+            `[ViewerOne] Arranger scan: length click left PC ${latestSongProgram}, restoring walk PC ${program}`
+          )
+          await restoreArrangerToProgram(program, true, programs)
+        }
+        await waitForSongIdentityQuiet(450, 1200, true)
+      }
+
+      // Single walk: order + length together (no second MIDI rewind/walk).
+      console.log(
+        `[ViewerOne] Arranger scan: starting at PC ${startProgram} (inline length grab)`
+      )
+      setArrangerScan({
+        active: true,
+        phase: 'scanning',
+        collected: 1,
+        message: `Song 1 “${titleForProgram(startProgram)}”… PC ${startProgram}`
+      })
+      publishProgressSetlist()
+      await captureLengthForProgram(startProgram, 1)
+
+      while (!arrangerScanCancelled && programs.length < MIDI_PC_SONG_MAX) {
+        const nextProgram = await stepArrangerUntilChanged('next', currentProgram, true)
+        if (arrangerScanCancelled) break
+        if (nextProgram === null) {
+          const title = scannedSongTitle(currentProgram, before.setlist) ?? `Song PC ${currentProgram}`
+          stopReason =
+            `Scan stopped: ${ARRANGER_NO_CHANGE_ATTEMPTS}× Next with no song change after ` +
+            `'${title}' (PC ${currentProgram}) — Cubase may be at end, or next event sends no ViewerOne MIDI`
+          console.log(`[ViewerOne] Arranger scan: ${stopReason}`)
+          break
+        }
+        currentProgram = nextProgram
+        if (seenPrograms.has(currentProgram)) {
+          const title = scannedSongTitle(currentProgram, before.setlist)
+          const titleBit = title ? ` (${title})` : ''
+          // Stale start: rewind landed on an event that sends no PC, so we seeded
+          // the walk with the leftover song. Next then wraps to that leftover after INTRO.
+          // Drop the stale first PC and keep walking.
+          if (currentProgram === startProgram && programs.length <= 3) {
+            console.warn(
+              `[ViewerOne] Arranger scan: wrap to start PC ${currentProgram} after only ${programs.length} song(s) — treating start as stale, continuing`
+            )
+            seenPrograms.delete(startProgram)
+            if (programs[0] === startProgram) programs.shift()
+            startProgram = programs[0] ?? currentProgram
+            if (!seenPrograms.has(currentProgram)) {
+              programs.push(currentProgram)
+              seenPrograms.add(currentProgram)
+              setArrangerScan({
+                collected: programs.length,
+                message: `Song ${programs.length} “${titleForProgram(currentProgram)}”… PC ${currentProgram}`
+              })
+              publishProgressSetlist()
+              await captureLengthForProgram(currentProgram, programs.length)
+            }
+            continue
+          }
+          if (currentProgram === startProgram) {
+            stopReason =
+              `Scan stopped: Arranger returned to starting song PC ${currentProgram}${titleBit} — ` +
+              'end of chain (or circular Arranger)'
+          } else {
+            stopReason =
+              `Scan stopped: song PC ${currentProgram}${titleBit} already seen earlier — ` +
+              'possible duplicate Program Change in Cubase arranger'
+          }
+          console.log(`[ViewerOne] Arranger scan: ${stopReason}`)
+          break
+        }
+        programs.push(currentProgram)
+        seenPrograms.add(currentProgram)
+        setArrangerScan({
+          collected: programs.length,
+          message: `Song ${programs.length} “${titleForProgram(currentProgram)}”… PC ${currentProgram}`
+        })
+        publishProgressSetlist()
+        await captureLengthForProgram(currentProgram, programs.length)
+      }
+      if (!arrangerScanCancelled && programs.length >= MIDI_PC_SONG_MAX && !stopReason) {
+        stopReason = `Scan stopped: safety limit of ${MIDI_PC_SONG_MAX} unique song PCs reached`
+        console.warn(`[ViewerOne] Arranger scan: ${stopReason}`)
+      }
+
+      console.log(
+        `[ViewerOne] Arranger scan: walk ended — ${programs.length} song(s), lengths ${lengthsOk} ok / ${lengthsFailed} missed` +
+          (stopReason ? ` (${stopReason})` : '')
+      )
+
+      const missingAfterWalk = programs.filter((program) => {
+        const title = titleForProgram(program)
+        const have =
+          lengthByProgram.get(program) ||
+          before.setlist.find((r) => r.program === program)?.length ||
+          ''
+        return !isKeepableLengthForTitle(have, title)
+      })
+      if (!arrangerScanCancelled && missingAfterWalk.length > 0) {
+        console.warn(
+          `[ViewerOne] Arranger scan: ${missingAfterWalk.length} song(s) still missing a Cubase length — repair pass (will not skip)`
+        )
+        for (const program of missingAfterWalk) {
+          if (arrangerScanCancelled) break
+          const title = titleForProgram(program)
+          const songIndex = programs.indexOf(program) + 1
+          setArrangerScan({
+            collected: programs.length,
+            message: `Retrying “${title}” — will not skip a song with no length`
+          })
+          const hadLength = isKeepableLengthForTitle(lengthByProgram.get(program) || '', title)
+          await captureLengthForProgram(program, songIndex)
+          if (
+            !hadLength &&
+            isKeepableLengthForTitle(lengthByProgram.get(program) || '', title)
+          ) {
+            lengthsFailed = Math.max(0, lengthsFailed - 1)
+          }
+        }
+      }
+
+      let wasCancelled = arrangerScanCancelled
+      if (wasCancelled) {
+        stopReason = 'Scan stopped: cancelled by user'
+        console.log(`[ViewerOne] Arranger scan: ${stopReason}`)
+        await sleep(250)
+        if (latestSongProgram !== null) currentProgram = latestSongProgram
+      }
+
+      const written = [...lengthByProgram.values()]
+      if (isDuplicateLengthGarbage(written, programs.length)) {
+        console.warn(
+          `[ViewerOne] Arranger scan: REJECTED — ${written.length} songs share the same length (garbage OCR); keeping prior lengths`
+        )
+        lengthByProgram.clear()
+        lengthsFailed += lengthsOk
+        lengthsOk = 0
+        lengthPassSkippedReason =
+          'identical lengths rejected (likely wrong Info Line / timer OCR) — prior lengths kept'
+        publishProgressSetlist()
+      }
+
+      if (wasCancelled) {
+        setArrangerScan({
+          active: true,
+          phase: 'returning',
+          collected: programs.length,
+          message: 'Scan cancelled; returning to the beginning…'
+        })
+        midi.flushPendingNoteOffs()
+        await rewindArrangerToBeginning(false)
+        currentProgram = latestSongProgram ?? currentProgram
+        const restoredCancel = currentProgram === startProgram
+        setArrangerScan({
+          active: false,
+          phase: 'cancelled',
+          collected: programs.length,
+          message: restoredCancel
+            ? `${stopReason} — Arranger returned to the starting song · lengths ${lengthsOk} updated.`
+            : `${stopReason} — could not confirm return to the starting song · lengths ${lengthsOk} updated.`
+        })
+        return
+      }
+
+      if (programs.length < 2) {
+        setState(store, {
+          setlist: before.setlist,
+          currentSongId: before.currentSongId
+        })
+        lastEsp32DisplayJson = null
+        broadcastState()
+        setArrangerScan({
+          active: false,
+          phase: 'error',
+          collected: programs.length,
+          message: `${stopReason ?? 'Scan stopped: no song changes received'} — previous setlist kept.`
+        })
+        return
+      }
+
+      publishProgressSetlist()
+
+      console.log(
+        `[ViewerOne] Arranger scan: walk END — ${lengthsOk} updated, ${lengthsFailed} missed` +
+          (lengthPassSkippedReason ? ` · ${lengthPassSkippedReason}` : '')
+      )
+
+      setArrangerScan({
+        active: true,
+        phase: 'returning',
+        collected: programs.length,
+        message: `Scan done — returning to first Arranger event (PC ${startProgram})…`
+      })
+      midi.flushPendingNoteOffs()
+      await rewindArrangerToBeginning(false)
+      currentProgram = latestSongProgram ?? currentProgram
+      const restored = currentProgram === startProgram
+      console.log(
+        restored
+          ? `[ViewerOne] Arranger scan: rewind complete at first song PC ${startProgram}`
+          : `[ViewerOne] Arranger scan: rewind finished but identity is PC ${currentProgram}; expected first song PC ${startProgram}`
+      )
+
+
+      const lengthBit = lengthPassRan
+        ? ` · lengths ${lengthsOk} updated${lengthsFailed ? `, ${lengthsFailed} kept prior` : ''}${
+            lengthPassSkippedReason ? ` · aborted (${lengthPassSkippedReason})` : ''
+          }`
+        : lengthPassSkippedReason
+          ? ` · length pass skipped (${lengthPassSkippedReason})`
+          : ' · length pass skipped'
+
+      if (wasCancelled) {
+        setArrangerScan({
+          active: false,
+          phase: 'cancelled',
+          collected: programs.length,
+          message: restored
+            ? `${stopReason} — Arranger returned to the starting song${lengthBit}.`
+            : `${stopReason} — could not confirm return to the starting song${lengthBit}.`
+        })
+        return
+      }
+
+      const scanned = buildScannedSetlist(programs, before.setlist, lengthByProgram)
+      const numberedBefore = countNumberedArrangerSongs(before.setlist)
+      const numberedAfter = countNumberedArrangerSongs(scanned)
+      const previousTiming = calculateSetlistTiming(before.setlist)
+      const newPlaceholders = scanned.filter(
+        (row) => row.arrangerIndex != null && /^Song PC \d+$/i.test((row.title ?? '').trim())
+      ).length
+      const startRow = scanned.find((row) => row.program === startProgram)
+      setState(store, {
+        setlist: scanned,
+        currentSongId: startRow?.id ?? null
+      })
+      resetCountdownForSong(startRow?.id ?? null)
+      // Force CrowPanel/preview refresh even if start song identity is unchanged — n/g totals may have grown.
+      lastEsp32DisplayJson = null
+      broadcastState()
+      const countBit =
+        numberedAfter === numberedBefore
+          ? `numbered total still ${numberedAfter}`
+          : `numbered ${numberedBefore} → ${numberedAfter}`
+      const placeholderBit =
+        newPlaceholders > 0
+          ? ` · ${newPlaceholders} new Song PC row(s) — set title/PC metadata in ViewerOne`
+          : ''
+      console.log(
+        '[ViewerOne] Arranger scan lengths:\n' +
+          scanned
+            .filter((row) => row.arrangerIndex != null)
+            .map((row) => `  ${row.arrangerIndex}. ${row.title} ${row.length || '(none)'}`)
+            .join('\n')
+      )
+      const timing = calculateSetlistTiming(scanned)
+      const audit = auditSetlistLengths(scanned, {
+        freshLengthCount: lengthsOk,
+        previousMainSeconds: previousTiming.main,
+        previousNumbered: numberedBefore
+      })
+      for (const warning of audit.warnings) {
+        console.warn(`[ViewerOne] Arranger scan length check: ${warning}`)
+      }
+      const gig = scanIsGigReady(scanned, {
+        freshLengthCount: lengthsOk,
+        lengthFailures: lengthsFailed,
+        previousVisited: before.setlist.filter((row) => row.arrangerIndex != null).length,
+        previousNumbered: numberedBefore,
+        previousMainSeconds: previousTiming.main
+      })
+      if (!gig.ready) {
+        console.warn(`[ViewerOne] Arranger scan NOT gig-ready: ${gig.blockers.join('; ')}`)
+      }
+      try {
+        const leftoverLines = scanned
+          .filter((row) => row.arrangerIndex == null && songLengthSeconds(row.length) > 0)
+          .map((row) => `LEFTOVER\t${row.program}\t${row.length || ''}\t${row.title}`)
+        writeFileSync(
+          join(app.getPath('userData'), 'last-arranger-scan.txt'),
+          [
+            ...scanned
+              .filter((row) => row.arrangerIndex != null)
+              .map(
+                (row) => `${row.arrangerIndex}\t${row.program}\t${row.length || ''}\t${row.title}`
+              ),
+            `INTRO\t${formatSetlistSeconds(timing.intro)}\t${timing.intro}`,
+            `MAIN\t${formatSetlistSeconds(timing.main)}\t${timing.main}`,
+            `OUTRO\t${formatSetlistSeconds(timing.outro)}\t${timing.outro}`,
+            `TOTAL\t${formatSetlistSeconds(timing.total)}\t${timing.total}`,
+            `UNVISITED\t${audit.unvisited.rows}\t${formatSetlistSeconds(audit.unvisited.seconds)}\t${audit.unvisited.seconds}`,
+            `LENGTHS\tok=${lengthsOk}\tfailed=${lengthsFailed}`,
+            `GIGREADY\t${gig.ready ? 'READY' : 'BLOCKED'}\t${gig.blockers.join('; ')}`,
+            ...leftoverLines,
+            ...audit.warnings.map((w) => `WARN\t${w}`)
+          ].join('\n') + '\n'
+        )
+      } catch {
+        /* ignore */
+      }
+      const mainBit = ` · numbered songs ${formatSetlistSeconds(timing.main)} · set ${formatSetlistSeconds(timing.total)}`
+      const leftoverBit =
+        audit.unvisited.withLength > 0
+          ? ` · ${audit.unvisited.rows} leftover not in arranger excluded (${formatSetlistSeconds(audit.unvisited.seconds)})`
+          : ''
+      const auditBit = audit.warnings
+        .filter((w) => !w.includes('leftover row'))
+        .map((w) => ` · ${w}`)
+        .join('')
+      const lengthLooksWrong =
+        !gig.ready ||
+        audit.warnings.some((w) =>
+          /stale|barely changed|average numbered|suspiciously long|have no length/i.test(w)
+        )
+      const missingBit = gig.blockers.length
+        ? ` — INCOMPLETE: ${gig.blockers.join('; ')}`
+        : ''
+      // Lengths/order decide complete vs error. A failed rewind-home must not
+      // mark the set "not gig-ready" when the walk itself is solid.
+      setArrangerScan({
+        active: false,
+        phase: lengthLooksWrong ? 'error' : 'complete',
+        collected: programs.length,
+        message: restored
+          ? `${stopReason ?? 'Scan stopped'} — saved ${programs.length} in arranger order (${countBit})${placeholderBit}${lengthBit}${mainBit}${leftoverBit}${auditBit}${missingBit}; returned to PC ${startProgram}.`
+          : `${stopReason ?? 'Scan stopped'} — saved ${programs.length} (${countBit})${placeholderBit}${lengthBit}${mainBit}${leftoverBit}${auditBit}${missingBit}, but could not confirm return to PC ${startProgram}.`
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.warn('[ViewerOne] Arranger scan crashed —', message)
+      setArrangerScan({
+        active: false,
+        phase: 'error',
+        collected: arrangerScan.collected,
+        message: `Arranger scan failed: ${message}`
+      })
+    } finally {
+      midi.flushPendingNoteOffs()
+      arrangerScanCancelled = false
+      if (arrangerScan.active) {
+        setArrangerScan({
+          active: false,
+          phase: arrangerScan.phase === 'cancelled' ? 'cancelled' : 'error',
+          collected: arrangerScan.collected,
+          message: arrangerScan.message || 'Arranger scan ended.'
+        })
+      }
     }
-    currentProgram = nextProgram
-    if (seenPrograms.has(currentProgram)) {
-      const title = scannedSongTitle(currentProgram, before.setlist)
-      stopReason =
-        `Scan stopped: song PC ${currentProgram}${title ? ` (${title})` : ''} already seen earlier — ` +
-        'possible duplicate Program Change in Cubase arranger'
-      console.log(`[ViewerOne] Arranger scan: ${stopReason}`)
-      break
-    }
-    programs.push(currentProgram)
-    seenPrograms.add(currentProgram)
-    setArrangerScan({
-      collected: programs.length,
-      message: `Collected ${programs.length} songs · latest PC ${currentProgram}`
-    })
-  }
-  if (!arrangerScanCancelled && programs.length >= MIDI_PC_SONG_MAX && !stopReason) {
-    stopReason = `Scan stopped: safety limit of ${MIDI_PC_SONG_MAX} unique song PCs reached`
-    console.warn(`[ViewerOne] Arranger scan: ${stopReason}`)
-  }
+  })()
 
-  const wasCancelled = arrangerScanCancelled
-  if (wasCancelled) {
-    stopReason = 'Scan stopped: cancelled by user'
-    console.log(`[ViewerOne] Arranger scan: ${stopReason}`)
-    // Allow an already-sent Next command to deliver its normal song PC before restoring.
-    await sleep(250)
-    if (latestSongProgram !== null) currentProgram = latestSongProgram
+  try {
+    await arrangerScanPromise
+  } finally {
+    arrangerScanPromise = null
   }
-
-  setArrangerScan({
-    active: true,
-    phase: 'returning',
-    collected: programs.length,
-    message: `Returning to the first Arranger event (PC ${startProgram})…`
-  })
-  await rewindArrangerToBeginning(false)
-  currentProgram = latestSongProgram ?? currentProgram
-  const restored = currentProgram === startProgram
-  console.log(
-    restored
-      ? `[ViewerOne] Arranger scan: rewind complete at first song PC ${startProgram}`
-      : `[ViewerOne] Arranger scan: rewind finished but identity is PC ${currentProgram}; expected first song PC ${startProgram}`
-  )
-
-  if (wasCancelled) {
-    setArrangerScan({
-      active: false,
-      phase: 'cancelled',
-      collected: programs.length,
-      message: restored
-        ? `${stopReason} — Arranger returned to the starting song.`
-        : `${stopReason} — could not confirm return to the starting song.`
-    })
-    return
-  }
-
-  if (programs.length < 2) {
-    setArrangerScan({
-      active: false,
-      phase: 'error',
-      collected: programs.length,
-      message: `${stopReason ?? 'Scan stopped: no song changes received'} — previous setlist kept.`
-    })
-    return
-  }
-
-  const scanned = buildScannedSetlist(programs, before.setlist)
-  const startRow = scanned.find((row) => row.program === startProgram)
-  setState(store, {
-    setlist: scanned,
-    currentSongId: startRow?.id ?? null
-  })
-  resetCountdownForSong(startRow?.id ?? null)
-  broadcastState()
-  setArrangerScan({
-    active: false,
-    phase: restored ? 'complete' : 'error',
-    collected: programs.length,
-    message: restored
-      ? `${stopReason ?? 'Scan stopped'} — saved ${programs.length} in arranger order; returned to PC ${startProgram}.`
-      : `${stopReason ?? 'Scan stopped'} — saved ${programs.length}, but could not confirm return to PC ${startProgram}.`
-  })
 }
 
 /**
@@ -2031,8 +2735,8 @@ function registerIpc(): void {
     return buildPublicState()
   })
 
-  ipcMain.handle('arranger:scan', () => {
-    if (!arrangerScan.active) void runArrangerScan()
+  ipcMain.handle('arranger:scan', async () => {
+    await runArrangerScan()
     return buildPublicState()
   })
 
@@ -2040,6 +2744,127 @@ function registerIpc(): void {
     if (arrangerScan.active) {
       arrangerScanCancelled = true
       setArrangerScan({ message: 'Cancelling; returning to the starting song…' })
+    }
+    return buildPublicState()
+  })
+
+  /** Grab Cubase Info Line Length for the current setlist song (select event in Cubase first). */
+  ipcMain.handle('arranger:grabLength', async () => {
+    if (arrangerScan.active) return buildPublicState()
+    const st = getState(store)
+    const row = st.currentSongId ? st.setlist.find((r) => r.id === st.currentSongId) : null
+    if (!row) {
+      setArrangerScan({
+        active: false,
+        phase: 'error',
+        collected: 0,
+        message: 'Select a setlist song first, then Grab Length.'
+      })
+      return buildPublicState()
+    }
+    const previousLength = row.length || ''
+    const title = (row.title || '').trim() || `Song PC ${row.program}`
+    setArrangerScan({
+      active: false,
+      phase: 'scanning',
+      collected: 0,
+      message: `Reading Cubase Length for “${title}” (Info Line Name must match)…`
+    })
+    broadcastUiState()
+    try {
+      const alive = await checkCubaseAlive()
+      if (!alive.alive) {
+        setArrangerScan({
+          active: false,
+          phase: 'error',
+          collected: 0,
+          message:
+            (alive.error || 'Cubase not running') +
+            (previousLength ? ` — kept ${previousLength}.` : ' — length unchanged.')
+        })
+        return buildPublicState()
+      }
+      let prep
+      try {
+        prep = await prepareCubaseWindowForCapture()
+      } catch (prepErr) {
+        setArrangerScan({
+          active: false,
+          phase: 'error',
+          collected: 0,
+          message:
+            (prepErr instanceof Error ? prepErr.message : String(prepErr)) ||
+            'Cubase prepare failed — length unchanged.'
+        })
+        return buildPublicState()
+      }
+      if (!prep.ok) {
+        setArrangerScan({
+          active: false,
+          phase: 'error',
+          collected: 0,
+          message:
+            (prep.error || 'Could not find Cubase for Length OCR') +
+            (previousLength ? ` — kept ${previousLength}.` : ' — length unchanged.')
+        })
+        return buildPublicState()
+      }
+      if (transportPlaying) {
+        sendCubaseTransportStop('before Grab Length')
+        await sleep(200)
+      }
+      const read = await readCubaseLengthForEvent(title, {
+        allowClick: false
+      })
+      if (/Transport started after Arranger click/i.test(read.error || '')) {
+        setArrangerScan({
+          active: false,
+          phase: 'error',
+          collected: 0,
+          message:
+            'Grab Length aborted — click started playback (MIDI Stop sent)' +
+            (previousLength ? ` — kept ${previousLength}.` : ' — length unchanged.')
+        })
+        return buildPublicState()
+      }
+      if (!read.ok || !read.mmss || !isKeepableLengthForTitle(read.mmss, title)) {
+        const tooLong =
+          read.mmss && !isKeepableLengthForTitle(read.mmss, title)
+            ? `Rejected ${read.mmss} for “${title}” — too long for one song (click the Arranger event, not a MIDI clip).`
+            : ''
+        setArrangerScan({
+          active: false,
+          phase: 'error',
+          collected: 0,
+          message:
+            (tooLong ||
+              read.error ||
+              'Could not read Cubase Length (select the Arranger event in Cubase so Info Line Name matches, then retry).') +
+            (previousLength ? ` — kept ${previousLength}.` : ' — length unchanged.')
+        })
+        return buildPublicState()
+      }
+      const mmss = normalizeSongLength(read.mmss)
+      const setlist = st.setlist.map((r) => (r.id === row.id ? { ...r, length: mmss } : r))
+      setState(store, { setlist })
+      if (st.currentSongId === row.id) resetCountdownForSong(row.id)
+      lastEsp32DisplayJson = null
+      broadcastState()
+      setArrangerScan({
+        active: false,
+        phase: 'complete',
+        collected: 1,
+        message: `“${title}”: ${statusLengthLabel(mmss)} from Cubase (name matched)`
+      })
+    } catch (err) {
+      setArrangerScan({
+        active: false,
+        phase: 'error',
+        collected: 0,
+        message:
+          (err instanceof Error ? err.message : String(err)) +
+          (previousLength ? ` — kept ${previousLength}.` : ' — length unchanged.')
+      })
     }
     return buildPublicState()
   })
@@ -2188,8 +3013,12 @@ if (!gotTheLock) {
         device: 'unknown',
         model: null,
         width: null,
-        height: null
+        height: null,
+        fw: null
       }
+      if (!isQuitting) broadcastUiState()
+    })
+    setDmxConnectionHandler(() => {
       if (!isQuitting) broadcastUiState()
     })
     registerIpc()
@@ -2198,8 +3027,19 @@ if (!gotTheLock) {
       scheduleMidiReconnect('startup Cubase ports not fully open')
     }
     syncEsp32SerialFromStore()
+    syncDmxFromStore()
     setupAppMenu()
     controlWindow = createControlWindow()
+
+    if (process.argv.includes('--scan-arranger')) {
+      setTimeout(() => {
+        void (async () => {
+          console.log('[ViewerOne] --scan-arranger: starting Scan Arranger')
+          await runArrangerScan()
+          console.log(`[ViewerOne] --scan-arranger done: ${arrangerScan.phase} — ${arrangerScan.message}`)
+        })()
+      }, 6000)
+    }
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
@@ -2214,15 +3054,9 @@ if (!gotTheLock) {
     }
   })
 
-  app.on('before-quit', () => {
-    isQuitting = true
-    clearMidiReconnectTimer()
-    stopCountdownTicker()
-    stopEsp32ClockSync()
-    shutdownEsp32Serial()
-    midi.closeInput()
-    midi.closeMixerInput()
-    midi.closeMixerOutput()
-    midi.closeOutput()
+  app.on('before-quit', (e) => {
+    if (shutdownFinished) return
+    e.preventDefault()
+    quitViewerOne()
   })
 }

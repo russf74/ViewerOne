@@ -100,6 +100,37 @@ function disposeCurrentPort(): void {
   openPath = null
 }
 
+function disposeCurrentPortAsync(): Promise<void> {
+  return new Promise((resolve) => {
+    if (!port) {
+      resolve()
+      return
+    }
+    const p = port
+    port = null
+    openPath = null
+    try {
+      p.removeAllListeners()
+    } catch {
+      /* ignore */
+    }
+    if (!p.isOpen) {
+      resolve()
+      return
+    }
+    const timer = setTimeout(resolve, 600)
+    try {
+      p.close(() => {
+        clearTimeout(timer)
+        resolve()
+      })
+    } catch {
+      clearTimeout(timer)
+      resolve()
+    }
+  })
+}
+
 function scheduleReconnect(prevGen: number): void {
   if (!desiredPath) return
   clearReconnectTimer()
@@ -129,7 +160,9 @@ async function openDesiredPath(): Promise<void> {
     const entries: Esp32UsbSerialListEntry[] = list.map((portInfo) => ({
       path: portInfo.path,
       friendly: portInfo.friendlyName ?? undefined,
-      manufacturer: portInfo.manufacturer ?? undefined
+      manufacturer: portInfo.manufacturer ?? undefined,
+      vendorId: portInfo.vendorId ?? undefined,
+      productId: portInfo.productId ?? undefined
     }))
     concretePath = pickEsp32UsbSerialPath(entries)
     if (!concretePath) {
@@ -273,4 +306,14 @@ export function shutdownEsp32Serial(): void {
   reconnectAttempt = 0
   disposeCurrentPort()
   notifyConnection(false, null)
+}
+
+/** Wait for the COM port close callback so native serialport is not torn down mid-close. */
+export function shutdownEsp32SerialAsync(): Promise<void> {
+  clearReconnectTimer()
+  openGeneration++
+  desiredPath = null
+  onOpenedCb = null
+  reconnectAttempt = 0
+  return disposeCurrentPortAsync().then(() => notifyConnection(false, null))
 }

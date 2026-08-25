@@ -55,11 +55,19 @@ export function parseEsp32DisplayIdentity(msg: Record<string, unknown>): Esp32Di
       ? msg['model'].trim()
       : known?.model ?? null
 
+  const fw =
+    typeof msg['fw'] === 'string' && msg['fw'].trim()
+      ? msg['fw'].trim()
+      : typeof msg['firmware'] === 'string' && msg['firmware'].trim()
+        ? msg['firmware'].trim()
+        : null
+
   return {
     connection: 'connected',
     device,
     model,
     width: width ?? known?.width ?? null,
-    height: height ?? known?.height ?? null
+    height: height ?? known?.height ?? null,
+    fw
   }
 }

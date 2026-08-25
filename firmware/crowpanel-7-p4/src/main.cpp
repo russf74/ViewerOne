@@ -2,13 +2,15 @@
  * ViewerOne — CrowPanel Advanced 7" ESP32-P4 (EK79007 MIPI-DSI 1024×600 + GT911)
  *
  * PC @ 115200 — display (transport / song change only — not every second):
- *   {"t":"Title","c":"1999","d":"04:32","n":"01/24","x":"Next Title","r":272,"p":true,"l":true,"m":false,"a":false,"s":false,"i":false}
+ *   {"t":"Title","c":"1999","d":"04:32","n":"01/24","x":"Next Title","r":272,"p":true,"tr":1,"g":"01/24 · 41m","l":true,"m":false,"a":false,"s":false,"i":false}
  *   Rapid song lines coalesce (~50ms, latest wins) before LVGL apply — avoids WDT cyan reboot.
  *   m=FX, a=ALL, s=Synth (Cubase ch1), i=Piano (Cubase ch2) mute flags.
  *   n = setlist position (`01/24`, `IN/24`, `SC/24`, `OU/24`) — updates with song UI only.
  *   x = next setlist row title — hard-clipped (no ellipsis); label updates only when x changes.
  *   r = remaining seconds, p = playing. Firmware ticks MM:SS locally while p=true
  *   so USB serial does not stall WS2812 refresh each second.
+ *   tr = Cubase transport 1=playing / 0=stopped (brand-bar PLAY/STOP; even without MIDI clock).
+ *   g = set progress under pad clock (`12/30 · 41m`) — song/setlist change only.
  *   Duration is a narrow LVGL label; 1Hz updates are deferred (dirty flag) and LED
  *   refresh runs on a high-priority task on the opposite core from LVGL.
  * PC @ 115200 — wall clock (host has RTC; ESP does not):
@@ -56,7 +58,7 @@ static CRGB s_leds[NUM_LEDS];
 using namespace esp_panel::drivers;
 using namespace esp_panel::board;
 
-static constexpr const char *VIEWERONE_FW_VERSION = "5.12.38";
+static constexpr const char *VIEWERONE_FW_VERSION = "5.12.41";
 static constexpr uint32_t WDT_TIMEOUT_S = 8;
 
 static constexpr int SCREEN_W = H_size;
@@ -89,6 +91,8 @@ static constexpr uint16_t kIdleZoom = 400;   // ~75px visual
 static constexpr size_t kTitleMaxChars = 96;
 /** Hard cap for next-song title (host also truncates); no ellipsis — CLIP only. */
 static constexpr size_t kNextTitleMaxChars = 36;
+/** Hard cap for set-progress under clock (host also truncates); CLIP only. */
+static constexpr size_t kSetProgressMaxChars = 24;
 /** Bottom-align next-song label this many px above the meta band (logical, pre-zoom). */
 static constexpr int kNextAboveMeta = 72;
 
@@ -138,8 +142,12 @@ static char s_duration[16] = "";
 static char s_position[16] = "";
 /** Next setlist title from PC `x` — song select only (not 1Hz). */
 static char s_next[160] = "";
+/** Set progress under pad clock from PC `g` — song/setlist change only. */
+static char s_set_progress[32] = "";
 /** Local wall clock HH:MM from PC `hm` / `clk` — update label only when string changes. */
 static char s_clock[8] = "";
+/** Cubase transport from PC `tr` (1=playing) — brand-bar PLAY/STOP. */
+static bool s_transport_playing = false;
 static bool s_fx_muted = false;
 static bool s_showing_waiting = true;
 /** ALL / FX / Synth / Piano: muted=true means channel/group muted (pad dark). */
@@ -162,7 +170,10 @@ struct PendingDisplay {
   char duration[16];
   char position[16];
   char next[160];
+  char set_progress[32];
   bool muted;
+  bool has_transport;
+  bool transport_playing;
   bool has_all;
   bool all_muted;
   bool has_synth;
@@ -179,7 +190,9 @@ static lv_obj_t *s_scr = nullptr;
 static lv_obj_t *s_main = nullptr;
 static lv_obj_t *s_brand = nullptr;
 static lv_obj_t *s_ver_lbl = nullptr;
+static lv_obj_t *s_transport_lbl = nullptr;
 static lv_obj_t *s_clock_lbl = nullptr;
+static lv_obj_t *s_set_progress_lbl = nullptr;
 static lv_obj_t *s_text_box = nullptr;
 static lv_obj_t *s_title_lbl = nullptr;
 static lv_obj_t *s_next_lbl = nullptr;
@@ -215,11 +228,13 @@ static void applyMainTheme(bool muted) {
   if (s_footer_lbl) lv_obj_set_style_text_color(s_footer_lbl, fg, 0);
   if (s_idle_lbl) lv_obj_set_style_text_color(s_idle_lbl, col_hex(0xFFE600), 0);
   if (s_brand) {
-    lv_obj_set_style_text_color(s_brand, muted ? col_hex(0xC9B44A) : col_hex(0x6B7280), 0);
+    // Readable light grey on black (not #6B7280@70%); gold flash when FX-muted.
+    lv_obj_set_style_text_color(s_brand, muted ? col_hex(0xC9B44A) : col_hex(0x9CA3AF), 0);
   }
-  // Version stays dim grey — not part of the mute theme flash.
+  // Version stays light grey — not part of the mute theme flash.
   if (s_ver_lbl) {
-    lv_obj_set_style_text_color(s_ver_lbl, col_hex(0x6B7280), 0);
+    lv_obj_set_style_text_color(s_ver_lbl, col_hex(0xE5E7EB), 0);
+    lv_obj_set_style_text_opa(s_ver_lbl, LV_OPA_COVER, 0);
   }
 }
 
@@ -391,6 +406,32 @@ static void applyHostClock(const char *hm) {
   }
 }
 
+/** Brand-bar PLAY/STOP (+ optional countdown ARM/CD). Caller holds LVGL lock when from draw path. */
+static void refreshTransportLbl() {
+  if (!s_transport_lbl) return;
+  char buf[20];
+  const char *base = s_transport_playing ? "PLAY" : "STOP";
+  if (s_cd_remain_sec >= 0) {
+    snprintf(buf, sizeof(buf), "%s · %s", base, s_cd_running ? "CD" : "ARM");
+  } else {
+    snprintf(buf, sizeof(buf), "%s", base);
+  }
+  lv_label_set_text(s_transport_lbl, buf);
+  // Yellow-green PLAY; muted-but-readable STOP — full opacity on black (matches Esp32Preview).
+  lv_obj_set_style_text_color(s_transport_lbl,
+                              s_transport_playing ? col_hex(0xB8FF26) : col_hex(0x9CA3AF), 0);
+  lv_obj_set_style_text_opa(s_transport_lbl, LV_OPA_COVER, 0);
+  if (s_ver_lbl) {
+    lv_obj_align_to(s_transport_lbl, s_ver_lbl, LV_ALIGN_OUT_LEFT_MID, -12, 0);
+  }
+}
+
+/** Pad-column set progress under clock — CLIP, no wrap. Caller holds LVGL lock. */
+static void refreshSetProgressLbl() {
+  if (!s_set_progress_lbl) return;
+  lv_label_set_text(s_set_progress_lbl, s_set_progress[0] ? s_set_progress : "");
+}
+
 static void stopLocalCountdown() {
   s_cd_running = false;
   s_cd_remain_sec = -1;
@@ -477,10 +518,13 @@ static void drawWaitingUi() {
   s_duration[0] = '\0';
   s_position[0] = '\0';
   s_next[0] = '\0';
+  s_set_progress[0] = '\0';
   if (s_next_lbl) lv_label_set_text(s_next_lbl, "");
+  refreshSetProgressLbl();
   showWaitingUi(true);
   applyMainTheme(false);
   refreshPadVisual(PAD_FX);
+  refreshTransportLbl();
   refreshFooter();
 }
 
@@ -593,10 +637,18 @@ static void buildUi() {
     lv_label_set_text(s_ver_lbl, vbuf);
   }
   lv_obj_set_style_text_font(s_ver_lbl, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(s_ver_lbl, col_hex(0x6B7280), 0);
-  lv_obj_set_style_text_opa(s_ver_lbl, LV_OPA_70, 0);
+  lv_obj_set_style_text_color(s_ver_lbl, col_hex(0xE5E7EB), 0);
+  lv_obj_set_style_text_opa(s_ver_lbl, LV_OPA_COVER, 0);
   lv_obj_align(s_ver_lbl, LV_ALIGN_TOP_RIGHT, 0, 4);
   lv_obj_clear_flag(s_ver_lbl, LV_OBJ_FLAG_CLICKABLE);
+
+  // Transport PLAY/STOP — left of version; yellow-green when playing, readable grey when stopped.
+  s_transport_lbl = lv_label_create(s_main);
+  lv_obj_set_style_text_font(s_transport_lbl, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_letter_space(s_transport_lbl, 1, 0);
+  lv_obj_clear_flag(s_transport_lbl, LV_OBJ_FLAG_CLICKABLE);
+  refreshTransportLbl();
+  lv_obj_align_to(s_transport_lbl, s_ver_lbl, LV_ALIGN_OUT_LEFT_MID, -12, 0);
 
   s_footer_lbl = lv_label_create(s_main);
   lv_obj_set_style_text_font(s_footer_lbl, &lv_font_montserrat_28, 0);
@@ -687,13 +739,26 @@ static void buildUi() {
   lv_obj_set_style_border_color(col, col_hex(0x222833), 0);
   lv_obj_set_style_radius(col, 18, 0);
   lv_obj_set_style_pad_all(col, 10, 0);
-  lv_obj_set_style_pad_row(col, 6, 0);
+  // Tighter row gap so set-progress fits without shrinking pad height (keep item_h = 93).
+  lv_obj_set_style_pad_row(col, 3, 0);
   lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(col, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
 
-  // Host-synced wall clock — yellow bold HH:MM, centered at top of pad column.
-  s_clock_lbl = lv_label_create(col);
+  // Host-synced wall clock + set progress — yellow HH:MM, compact `12/30 · 41m` under it.
+  lv_obj_t *clock_wrap = lv_obj_create(col);
+  lv_obj_set_width(clock_wrap, PAD_COL_W - 36);
+  lv_obj_set_height(clock_wrap, LV_SIZE_CONTENT);
+  lv_obj_set_style_bg_opa(clock_wrap, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(clock_wrap, 0, 0);
+  lv_obj_set_style_pad_all(clock_wrap, 0, 0);
+  lv_obj_set_style_pad_row(clock_wrap, 2, 0);
+  lv_obj_set_flex_flow(clock_wrap, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(clock_wrap, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_clear_flag(clock_wrap, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(clock_wrap, LV_OBJ_FLAG_CLICKABLE);
+
+  s_clock_lbl = lv_label_create(clock_wrap);
   lv_label_set_text(s_clock_lbl, s_clock[0] ? s_clock : "--:--");
   lv_obj_set_style_text_font(s_clock_lbl, &lv_font_montserrat_48, 0);
   lv_obj_set_style_text_color(s_clock_lbl, col_hex(0xFFE600), 0);
@@ -707,8 +772,18 @@ static void buildUi() {
   lv_obj_set_style_text_align(s_clock_lbl, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_clear_flag(s_clock_lbl, LV_OBJ_FLAG_CLICKABLE);
 
+  s_set_progress_lbl = lv_label_create(clock_wrap);
+  lv_label_set_long_mode(s_set_progress_lbl, LV_LABEL_LONG_CLIP);
+  lv_obj_set_width(s_set_progress_lbl, PAD_COL_W - 36);
+  lv_label_set_text(s_set_progress_lbl, "");
+  lv_obj_set_style_text_font(s_set_progress_lbl, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(s_set_progress_lbl, col_hex(0x9CA3AF), 0);
+  lv_obj_set_style_text_align(s_set_progress_lbl, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_letter_space(s_set_progress_lbl, 1, 0);
+  lv_obj_clear_flag(s_set_progress_lbl, LV_OBJ_FLAG_CLICKABLE);
+
   const int item_w = PAD_COL_W - 36;
-  const int item_h = 93;  // was 116 (~20% shorter) — room for clock without overflow
+  const int item_h = 93;  // prior pad height — set-progress fits via tighter pad_row, not smaller pads
   for (int i = 0; i < PAD_COUNT; i++) {
     // lv_btn (stable press/indev path). Animations killed via lv_conf GROW=0 /
     // TRANSITION_TIME=0 plus per-pad filter/outline/transform overrides below.
@@ -887,6 +962,7 @@ static void handleSerialLine(const String &line) {
   const char *d = doc["d"] | "";
   const char *n = doc["n"] | "";
   const char *x = doc["x"] | "";
+  const char *g = doc["g"] | "";
   bool m = doc["m"] | false;
   const bool has_all = !doc["a"].isNull();
   const bool all_muted = doc["a"] | false;
@@ -895,6 +971,8 @@ static void handleSerialLine(const String &line) {
   const bool has_piano = !doc["i"].isNull();
   const bool piano_muted = doc["i"] | false;
   const bool has_r = !doc["r"].isNull();
+  const bool has_tr = !doc["tr"].isNull();
+  const bool transport_playing = has_tr ? (doc["tr"].as<int>() != 0) : s_transport_playing;
 
   const char *duration_for_ui = d;
   if (has_r) {
@@ -919,7 +997,11 @@ static void handleSerialLine(const String &line) {
   copyBounded(s_pending_disp.position, sizeof(s_pending_disp.position), n,
               sizeof(s_pending_disp.position) - 1);
   copyBounded(s_pending_disp.next, sizeof(s_pending_disp.next), x, kNextTitleMaxChars);
+  copyBounded(s_pending_disp.set_progress, sizeof(s_pending_disp.set_progress), g,
+              kSetProgressMaxChars);
   s_pending_disp.muted = m;
+  s_pending_disp.has_transport = has_tr;
+  s_pending_disp.transport_playing = transport_playing;
   s_pending_disp.has_all = has_all;
   s_pending_disp.all_muted = all_muted;
   s_pending_disp.has_synth = has_synth;
@@ -941,6 +1023,12 @@ static void applyPendingDisplayIfAny() {
   s_last_song_ui_ms = now;
 
   drawSongUi(snap.title, snap.year, snap.duration, snap.position, snap.next, snap.muted);
+  copyBounded(s_set_progress, sizeof(s_set_progress), snap.set_progress, kSetProgressMaxChars);
+  refreshSetProgressLbl();
+  if (snap.has_transport) {
+    s_transport_playing = snap.transport_playing;
+  }
+  refreshTransportLbl();
   if (snap.has_all) {
     s_pad_muted[PAD_ALL] = snap.all_muted;
     refreshPadVisual(PAD_ALL);

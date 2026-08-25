@@ -275,6 +275,8 @@ export class MidiService {
   private pcChannel0: number = 0
   private handlers: MidiInputHandlers | null = null
   private onDisconnect: MidiDisconnectHandler | null = null
+  /** Pending Note Off timers keyed by `${channel0}:${note}` — prevents stacked note-ons. */
+  private pendingNoteOffTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   setDisconnectHandler(handler: MidiDisconnectHandler | null): void {
     this.onDisconnect = handler
@@ -578,6 +580,8 @@ export class MidiService {
   }
 
   closeOutput(): void {
+    for (const timer of this.pendingNoteOffTimers.values()) clearTimeout(timer)
+    this.pendingNoteOffTimers.clear()
     if (this.output) {
       try {
         this.output.close()
@@ -635,8 +639,22 @@ export class MidiService {
         return
       }
       const output = this.output
+      // Cancel any pending note-off for this key so rapid Prev/Next rewinds cannot leave a
+      // stacked note-on (Cubase Generic Remote then ignores later pulses until reconnect).
+      const key = `${ch}:${n}`
+      const prior = this.pendingNoteOffTimers.get(key)
+      if (prior) {
+        clearTimeout(prior)
+        this.pendingNoteOffTimers.delete(key)
+        try {
+          output.send('noteoff', { note: n, velocity: 0, channel: ch })
+        } catch {
+          /* ignore — we'll try again after this pulse */
+        }
+      }
       output.send('noteon', { note: n, velocity: v, channel: ch })
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        this.pendingNoteOffTimers.delete(key)
         try {
           if (output === this.output && output.isPortOpen()) {
             output.send('noteoff', { note: n, velocity: 0, channel: ch })
@@ -645,10 +663,34 @@ export class MidiService {
           if (output === this.output) this.dropCubaseOutput(err)
         }
       }, Math.max(1, durationMs))
+      this.pendingNoteOffTimers.set(key, timer)
     } catch (err) {
       console.warn('[ViewerOne] MIDI: Cubase note send failed —', err)
       this.dropCubaseOutput(err)
     }
+  }
+
+  /** Force Note Off for any in-flight pulses (call before a fresh Arranger scan). */
+  flushPendingNoteOffs(): void {
+    if (!this.output || !this.output.isPortOpen()) {
+      for (const timer of this.pendingNoteOffTimers.values()) clearTimeout(timer)
+      this.pendingNoteOffTimers.clear()
+      return
+    }
+    const output = this.output
+    for (const [key, timer] of this.pendingNoteOffTimers) {
+      clearTimeout(timer)
+      const [chStr, noteStr] = key.split(':')
+      const ch = Number(chStr)
+      const n = Number(noteStr)
+      try {
+        output.send('noteoff', { note: n, velocity: 0, channel: ch })
+      } catch (err) {
+        this.dropCubaseOutput(err)
+        break
+      }
+    }
+    this.pendingNoteOffTimers.clear()
   }
 }
 

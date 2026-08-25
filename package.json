@@ -1,6 +1,6 @@
 {
   "name": "viewer-one",
-  "version": "5.12.38",
+  "version": "5.12.86",
   "description": "Live setlist display + MIDI control for Cubase",
   "author": "ViewerOne",
   "main": "out/main/index.js",
@@ -8,16 +8,18 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "launch": "npm run build && electron .",
+    "launch": "npm run build && node_modules/electron/dist/electron.exe .",
     "preview": "electron-vite preview",
     "icons": "node scripts/make-ico.mjs",
     "dist": "npm run icons && npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --x64",
-    "dist:dir": "npm run icons && npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --x64 --dir"
+    "dist:dir": "npm run icons && npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --x64 --dir",
+    "gig-backup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/gig-backup/GigBackup.ps1 -Mode Copy"
   },
   "dependencies": {
     "easymidi": "^3.1.0",
     "electron-store": "^9.0.0",
-    "serialport": "^12.0.0"
+    "serialport": "^12.0.0",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@dnd-kit/core": "^6.1.0",
@@ -50,6 +52,7 @@
       "**/*",
       "!src/**",
       "!scripts/**",
+      "scripts/cubase-info-line.ps1",
       "!electron.vite.config.ts",
       "!tsconfig.json",
       "!tsconfig.node.json",
@@ -100,3 +103,4 @@
     "npmRebuild": false
   }
 }
+

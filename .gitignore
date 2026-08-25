@@ -8,3 +8,8 @@ _ref/
 .DS_Store
 *.tsbuildinfo
 
+
+scripts/_ocr_probe/
+.tmp-cubase-ocr/
+.tmp-scan-qa/
+eng.traineddata

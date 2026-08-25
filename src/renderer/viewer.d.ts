@@ -17,6 +17,7 @@ export type ViewerApi = {
   arrangerNext: () => Promise<PublicState>
   scanArranger: () => Promise<PublicState>
   cancelArrangerScan: () => Promise<PublicState>
+  grabCubaseLength: () => Promise<PublicState>
   promptMidi: (pc: 120 | 121 | 122 | 123) => Promise<PublicState>
   ledMidiBlackout: () => Promise<PublicState>
   ledMidiIdle: () => Promise<PublicState>

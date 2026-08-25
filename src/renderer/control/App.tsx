@@ -10,7 +10,24 @@ import {
 import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import type { AppState, MidiSpyEvent, MidiSpyRole, PublicState, SetlistItem } from '../../shared/types'
 import { LED_USB_BRIGHTNESS_CAP } from '../../shared/ledPatterns'
-import { calculateSetlistTiming, formatSetlistSeconds } from '../../shared/setlistTiming'
+import {
+  calculateSetlistTiming,
+  countNumberedArrangerSongs,
+  formatSetlistSeconds,
+  summarizeUnvisitedSetlist,
+  scanIsGigReady
+} from '../../shared/setlistTiming'
+import {
+  BRIDGED_MUTES,
+  CUBASE_ALL_MUTE_CC,
+  CUBASE_MUTE_CC,
+  CUBASE_MUTE_CHANNEL,
+  CUBASE_PIANO_MUTE_CC,
+  CUBASE_SYNTH_MUTE_CC,
+  MIXER_ALL_MUTE_CC,
+  MIXER_MUTE_CC,
+  MIXER_MUTE_CHANNEL
+} from '../../shared/midiConfig'
 import { SortableRow } from './SortableRow'
 import { Esp32Preview } from './Esp32Preview'
 
@@ -304,6 +321,29 @@ export function App() {
     () => calculateSetlistTiming(state?.setlist ?? []),
     [state?.setlist]
   )
+  const numberedArrangerSongs = useMemo(
+    () => countNumberedArrangerSongs(state?.setlist ?? []),
+    [state?.setlist]
+  )
+  const leftoverSetlist = useMemo(
+    () => summarizeUnvisitedSetlist(state?.setlist ?? []),
+    [state?.setlist]
+  )
+  const gigReady = useMemo(() => {
+    const setlist = state?.setlist ?? []
+    const gig = scanIsGigReady(setlist)
+    // Only surface scan-phase error when the setlist itself is not gig-ready.
+    // A completed walk with good lengths must stay gig-ready even if rewind-home failed.
+    if (state?.arrangerScan.phase === 'error' && !gig.ready) {
+      return {
+        ready: false as const,
+        blockers: gig.blockers.length
+          ? gig.blockers
+          : ['last Arranger scan was incomplete']
+      }
+    }
+    return gig
+  }, [state?.setlist, state?.arrangerScan.phase])
   const filteredSpy = useMemo(() => {
     const list = state?.midi.cubaseSpy ?? []
     return list.filter((ev) => spyRoleMatchesFilter(spyEventRole(ev), spyFilter, ev.kind))
@@ -377,9 +417,15 @@ export function App() {
             <div className="settings-card">
               <div className="settings-card-heading">
                 <h2 className="settings-card-title">Live status</h2>
-                <span className={`serial-pill serial-pill--${state.esp32Display.connection}`}>
-                  Display {state.esp32Display.connection}
-                </span>
+                <div className="serial-pill-group">
+                  <span className={`serial-pill serial-pill--${state.esp32Display.connection}`}>
+                    Display {state.esp32Display.connection}
+                  </span>
+                  <span className={`serial-pill serial-pill--${state.dmx.connection}`}>
+                    DMX {state.dmx.connection}
+                    {state.dmx.path ? ` ${state.dmx.path}` : ''}
+                  </span>
+                </div>
               </div>
               <div className="status-pills" aria-label="MIDI connection status">
                 <span className={`status-pill status-pill--${cubaseStatus?.tone ?? 'warn'}`}>
@@ -543,6 +589,148 @@ export function App() {
 
               {detailMode ? (
                 <>
+                <section className="detail-section diagnostics-section" aria-labelledby="diagnostics-heading">
+                  <h3 id="diagnostics-heading">Diagnostics</h3>
+                  <div className="diagnostics-grid">
+                    <div className="diagnostics-block">
+                      <h4>MIDI ports</h4>
+                      <ul className="diagnostics-list">
+                        <li>
+                          Cubase in:{' '}
+                          {state.midi.cubaseInputOpen ? 'open' : 'closed'}
+                          {state.midi.cubaseInputName ? ` · ${state.midi.cubaseInputName}` : ''}
+                        </li>
+                        <li>
+                          Cubase out:{' '}
+                          {state.midi.cubaseOutputOpen ? 'open' : 'closed'}
+                          {state.midi.cubaseOutputName ? ` · ${state.midi.cubaseOutputName}` : ''}
+                        </li>
+                        <li>
+                          Mixer in:{' '}
+                          {state.midi.mixerInputOpen ? 'open' : 'closed'}
+                          {state.midi.mixerInputName ? ` · ${state.midi.mixerInputName}` : ''}
+                        </li>
+                        <li>
+                          Mixer out:{' '}
+                          {state.midi.mixerOutputOpen ? 'open' : 'closed'}
+                          {state.midi.mixerOutputName ? ` · ${state.midi.mixerOutputName}` : ''}
+                        </li>
+                      </ul>
+                    </div>
+                    <div className="diagnostics-block">
+                      <h4>Last MIDI activity</h4>
+                      <ul className="diagnostics-list">
+                        <li>
+                          Cubase PC:{' '}
+                          {state.midi.cubaseLastPc != null
+                            ? `PC ${state.midi.cubaseLastPc} · ch ${state.midi.cubaseLastPcChannel ?? '?'} · ${transportAgoText(state.midi.cubaseLastPcAgoMs)}`
+                            : '—'}
+                        </li>
+                        <li>
+                          Cubase last sent:{' '}
+                          {state.midi.cubaseLastSentCc
+                            ? `ch ${state.midi.cubaseLastSentCc.channel + 1} CC${state.midi.cubaseLastSentCc.controller}=${state.midi.cubaseLastSentCc.value} · ${transportAgoText(state.midi.cubaseLastSentAgoMs)}`
+                            : '—'}
+                        </li>
+                        <li>
+                          Mixer last RX:{' '}
+                          {state.midi.mixerLastCc
+                            ? `ch ${state.midi.mixerLastCc.channel + 1} CC${state.midi.mixerLastCc.controller}=${state.midi.mixerLastCc.value} · ${transportAgoText(state.midi.mixerLastMessageAgoMs)}`
+                            : '—'}
+                        </li>
+                        <li>
+                          Mixer last TX:{' '}
+                          {state.midi.mixerLastSentCc
+                            ? `ch ${state.midi.mixerLastSentCc.channel + 1} CC${state.midi.mixerLastSentCc.controller}=${state.midi.mixerLastSentCc.value} · ${transportAgoText(state.midi.mixerLastSentAgoMs)}`
+                            : '—'}
+                        </li>
+                      </ul>
+                    </div>
+                    <div className="diagnostics-block">
+                      <h4>ESP / display</h4>
+                      <ul className="diagnostics-list">
+                        <li>
+                          Serial: {state.esp32Display.connection}
+                          {state.esp32Enabled ? '' : ' (disabled)'}
+                        </li>
+                        <li>
+                          Device:{' '}
+                          {state.esp32Display.device !== 'unknown'
+                            ? state.esp32Display.device
+                            : '—'}
+                          {state.esp32Display.model ? ` · ${state.esp32Display.model}` : ''}
+                        </li>
+                        <li>
+                          Size:{' '}
+                          {state.esp32Display.width && state.esp32Display.height
+                            ? `${state.esp32Display.width}×${state.esp32Display.height}`
+                            : '—'}
+                        </li>
+                        <li>Firmware: {state.esp32Display.fw ? `v${state.esp32Display.fw}` : '—'}</li>
+                      </ul>
+                    </div>
+                    <div className="diagnostics-block">
+                      <h4>Transport</h4>
+                      <ul className="diagnostics-list">
+                        <li>{state.transport.playing ? 'Playing' : 'Stopped'}</li>
+                        <li>
+                          Last source:{' '}
+                          {state.transport.lastSource
+                            ? `${state.transport.lastAction ?? 'event'} via ${state.transport.lastSource}${
+                                state.transport.lastAtMs
+                                  ? ` · ${transportAgoText(Date.now() - state.transport.lastAtMs)}`
+                                  : ''
+                              }`
+                            : '—'}
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
+                  <div className="diagnostics-block diagnostics-block--table">
+                    <h4>Mute bridge map</h4>
+                    <table className="diagnostics-table">
+                      <thead>
+                        <tr>
+                          <th>Pad / group</th>
+                          <th>Cubase</th>
+                          <th>Mixer</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {BRIDGED_MUTES.map((b) => (
+                          <tr key={b.id}>
+                            <td>{b.id === 'all' ? 'ALL / Group1' : 'FX / Group6'}</td>
+                            <td>
+                              ch{CUBASE_MUTE_CHANNEL} CC{b.cubaseCc}
+                            </td>
+                            <td>
+                              ch{MIXER_MUTE_CHANNEL} CC{b.mixerCc}
+                            </td>
+                          </tr>
+                        ))}
+                        <tr>
+                          <td>Synth</td>
+                          <td>
+                            ch{CUBASE_MUTE_CHANNEL} CC{CUBASE_SYNTH_MUTE_CC}
+                          </td>
+                          <td>—</td>
+                        </tr>
+                        <tr>
+                          <td>Piano</td>
+                          <td>
+                            ch{CUBASE_MUTE_CHANNEL} CC{CUBASE_PIANO_MUTE_CC}
+                          </td>
+                          <td>—</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    <p className="midi-reconnect-help">
+                      FX Cubase CC{CUBASE_MUTE_CC} ↔ mixer CC{MIXER_MUTE_CC}; ALL Cubase CC
+                      {CUBASE_ALL_MUTE_CC} ↔ mixer CC{MIXER_ALL_MUTE_CC}. Synth/Piano are
+                      Cubase-only (no mixer bridge).
+                    </p>
+                  </div>
+                </section>
                 <section className="detail-section" aria-labelledby="transport-mapping-heading">
                   <h3 id="transport-mapping-heading">Transport MIDI mapping</h3>
                   <p className="midi-reconnect-help">
@@ -731,7 +919,7 @@ export function App() {
             {detailMode ? (
               <section className="settings-card hardware-settings" aria-labelledby="hardware-settings-heading">
                 <h2 className="settings-card-title" id="hardware-settings-heading">
-                  Display + LED
+                  Display + LED + DMX
                 </h2>
                 <div className="settings-fields settings-fields--esp">
                   <label className="esp-enable">
@@ -772,6 +960,11 @@ export function App() {
                       </p>
                     ) : null}
                   </div>
+                  <p className="settings-hint">
+                    DMXIS is always on: Freedom Stick 48-CH pixels at 97–144, PowerDome 10-CH at 1.
+                    Set each stick to 48CH / d097 (not 8-CH). PC 125 blackout, PC 126 dim royal blue, PC 127
+                    follows ESP (random rotates every 10s).
+                  </p>
                 </div>
               </section>
             ) : null}
@@ -781,7 +974,12 @@ export function App() {
 
       <section className="setlist-shell" aria-label="Setlist">
         <div className="setlist-toolbar">
-          <h2 className="setlist-heading">Setlist ({state.setlist.length} songs)</h2>
+          <h2
+            className="setlist-heading"
+            title="Rows = every setlist entry. Numbered = CrowPanel total (scanned arranger songs, excluding INTRO/OUTRO/SOUNDCHECK and unvisited retained rows)."
+          >
+            Setlist ({state.setlist.length} rows · {numberedArrangerSongs} numbered)
+          </h2>
           <div className="setlist-preview-nav">
             <button
               type="button"
@@ -843,28 +1041,62 @@ export function App() {
                 Cancel Scan
               </button>
             ) : (
-              <button
-                type="button"
-                className="primary setlist-step-btn"
-                disabled={!state.midi.cubaseInputOpen || !state.midi.cubaseOutputOpen}
-                onClick={(e) => {
-                  flashButton(e.currentTarget)
-                  void window.viewer.scanArranger().then(apply)
-                }}
-              >
-                Scan Arranger
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="primary setlist-step-btn"
+                  title="Walk Arranger chain for song order, then click each timeline Arranger event and read Length from Cubase (Info Line Name must match)."
+                  disabled={!state.midi.cubaseInputOpen || !state.midi.cubaseOutputOpen}
+                  onClick={(e) => {
+                    flashButton(e.currentTarget)
+                    void window.viewer.scanArranger().then(apply)
+                  }}
+                >
+                  Scan Arranger
+                </button>
+                <button
+                  type="button"
+                  className="setlist-step-btn"
+                  title="Select the Arranger event in Cubase first (Info Line Name must match). Then grab Length. Keeps the previous length if Name does not match."
+                  disabled={!state.currentSongId || state.arrangerScan.active}
+                  onClick={(e) => {
+                    flashButton(e.currentTarget)
+                    void window.viewer.grabCubaseLength().then(apply)
+                  }}
+                >
+                  Grab Length
+                </button>
+              </>
             )}
             <span className={`arranger-progress arranger-progress--${state.arrangerScan.phase}`} role="status">
               {state.arrangerScan.message}
               {state.arrangerScan.active ? ` (${state.arrangerScan.collected} found)` : ''}
             </span>
           </div>
-          <p className="setlist-totals" role="status" aria-live="polite">
-            Setlist length : Intro {formatSetlistSeconds(setlistTiming.intro)} - Main Set{' '}
+          <p
+            className="setlist-totals"
+            role="status"
+            aria-live="polite"
+            title="Duration sums scanned Arranger rows only (same songs as the numbered count). Leftover rows from a previous setlist marked “not in arranger” are excluded."
+          >
+            Duration : Intro {formatSetlistSeconds(setlistTiming.intro)} - Main Set{' '}
             {formatSetlistSeconds(setlistTiming.main)} - Outro{' '}
             {formatSetlistSeconds(setlistTiming.outro)} - Total{' '}
             {formatSetlistSeconds(setlistTiming.total)}
+            {leftoverSetlist.withLength > 0 ? (
+              <span className="setlist-totals-leftover">
+                {' '}
+                · {leftoverSetlist.rows} leftover not in arranger excluded (
+                {formatSetlistSeconds(leftoverSetlist.seconds)})
+              </span>
+            ) : null}
+            {!gigReady.ready ? (
+              <span className="setlist-totals-missing">
+                {' '}
+                · not gig-ready
+                {gigReady.blockers.length ? `: ${gigReady.blockers.join('; ')}` : ''}
+              </span>
+            ) : null}
           </p>
         </div>
         <div className="setlist-header">

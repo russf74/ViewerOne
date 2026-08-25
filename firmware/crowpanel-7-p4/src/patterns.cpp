@@ -61,11 +61,11 @@ void tickKnightRider(uint32_t now) {
   const uint16_t h = halfLen();
   if (h == 0) return;
   fadeAll(200);
-  setMirrored(g_pos, CRGB(255, 0, 0));
-  if (g_pos > 0) setMirrored(g_pos - 1, CRGB(120, 0, 0));
-  if (g_pos > 1) setMirrored(g_pos - 2, CRGB(40, 0, 0));
-  if (g_pos + 1 < h) setMirrored(g_pos + 1, CRGB(120, 0, 0));
-  if (g_pos + 2 < h) setMirrored(g_pos + 2, CRGB(40, 0, 0));
+  setMirrored(g_pos, CRGB(48, 64, 255));
+  if (g_pos > 0) setMirrored(g_pos - 1, CRGB(20, 32, 180));
+  if (g_pos > 1) setMirrored(g_pos - 2, CRGB(8, 12, 70));
+  if (g_pos + 1 < h) setMirrored(g_pos + 1, CRGB(20, 32, 180));
+  if (g_pos + 2 < h) setMirrored(g_pos + 2, CRGB(8, 12, 70));
   g_pos = (uint16_t)((int)g_pos + g_dir);
   if (g_pos == 0 || g_pos >= h - 1) {
     g_pos = g_pos >= h - 1 ? (uint16_t)(h - 1) : 0;

@@ -23,12 +23,13 @@ const api = {
   arrangerNext: (): Promise<PublicState> => ipcRenderer.invoke('arranger:next'),
   scanArranger: (): Promise<PublicState> => ipcRenderer.invoke('arranger:scan'),
   cancelArrangerScan: (): Promise<PublicState> => ipcRenderer.invoke('arranger:cancelScan'),
+  grabCubaseLength: (): Promise<PublicState> => ipcRenderer.invoke('arranger:grabLength'),
   /** Simulate an absolute CrowPanel prompt PC (120–123). */
   promptMidi: (pc: 120 | 121 | 122 | 123): Promise<PublicState> =>
     ipcRenderer.invoke('prompt:midi', pc),
   /** Simulate Cubase PC 125 — LED blackout (pattern id 99). */
   ledMidiBlackout: (): Promise<PublicState> => ipcRenderer.invoke('led:midiBlackout'),
-  /** Simulate Cubase PC 126 — dim knight rider (idle lights). */
+  /** Simulate Cubase PC 126 — dim royal blue knight rider (idle lights). */
   ledMidiIdle: (): Promise<PublicState> => ipcRenderer.invoke('led:midiIdle'),
   /** Simulate Cubase PC 127 — apply current song pattern. */
   ledMidiApply: (): Promise<PublicState> => ipcRenderer.invoke('led:midiApply'),

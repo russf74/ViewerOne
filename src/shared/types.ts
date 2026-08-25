@@ -1,3 +1,7 @@
+import type { DmxFixtureMode, DmxStatus } from './dmx.js'
+
+export type { DmxConnection, DmxFixtureMode, DmxStatus } from './dmx.js'
+
 /** One JSON line per ESP32 update (short keys). */
 export type Esp32DisplayPayload = {
   /** title */
@@ -34,6 +38,17 @@ export type Esp32DisplayPayload = {
   r?: number
   /** Countdown playing — device ticks remaining down while true; freezes while false. */
   p?: boolean
+  /**
+   * Cubase transport playing (1) / stopped (0). Host sends on transport change only
+   * (same display JSON coalesce as song/mute — not per-second). Shown even when MIDI
+   * clock is missing; sourced from MMC / mapped notes / realtime Start-Stop.
+   */
+  tr?: 0 | 1
+  /**
+   * Set progress near the pad-column clock, e.g. `12/30 · 41m` (position + remaining
+   * set minutes from current onward). Song/setlist change only — not per-second.
+   */
+  g?: string
 }
 
 export type Esp32DeviceType = 'cyd' | 'crowpanel7' | 'unknown'
@@ -45,6 +60,8 @@ export type Esp32DisplayStatus = {
   model: string | null
   width: number | null
   height: number | null
+  /** Firmware version string from boot/hello (`fw`), when reported. */
+  fw: string | null
 }
 
 export type SetlistItem = {
@@ -145,6 +162,15 @@ export type AppState = {
   ledBrightness: number
   /** When false, strip is assumed powered from ESP32/USB — brightness hard-capped. */
   ledExternalPower: boolean
+  /** Open the DMXIS / Enttec USB Pro COM port and send a 512-channel universe. */
+  dmxEnabled: boolean
+  /** Freedom Stick 48-CH start address (uses this ID plus the next 47 pixel channels). */
+  dmxFixture1Channel: number
+  /** Off = always dark. On = auto programs. Sound = sound-to-light. Used on PC 127. */
+  dmxFixture1Mode: DmxFixtureMode
+  /** PowerDome 200 RGBW 10-CH start address (uses this ID plus the next 9). */
+  dmxFixture2Channel: number
+  dmxFixture2Mode: DmxFixtureMode
   /** Cubase Generic Remote mapping used for Arranger Prev / Next. */
   arrangerMidi: ArrangerMidiMapping
   /** Cubase → ViewerOne Start/Stop mapping (notes/CC); realtime + MMC always on. */
@@ -199,6 +225,8 @@ export type PublicState = AppState & {
   ledPattern: string
   /** Connected physical display identity; unknown/disconnected previews fall back to CYD. */
   esp32Display: Esp32DisplayStatus
+  /** DMXIS USB widget — not persisted. */
+  dmx: DmxStatus
   /**
    * LED pattern id queued for the currently displayed song (applied via MIDI PC 127
    * or the control UI simulate / pattern preview).

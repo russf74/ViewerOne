@@ -203,6 +203,13 @@ body {
   border-color: rgba(118, 212, 146, 0.3);
 }
 
+.serial-pill-group {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .status-pill--warn,
 .serial-pill--searching {
   color: #d8a657;
@@ -493,6 +500,66 @@ body {
   text-transform: uppercase;
 }
 
+.diagnostics-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 14px;
+  margin-bottom: 10px;
+}
+
+.diagnostics-block h4 {
+  margin: 0 0 5px;
+  color: var(--text);
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+.diagnostics-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.diagnostics-list li {
+  margin: 0 0 3px;
+}
+
+.diagnostics-block--table {
+  margin-top: 2px;
+}
+
+.diagnostics-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.72rem;
+  margin-bottom: 6px;
+}
+
+.diagnostics-table th,
+.diagnostics-table td {
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid #252c37;
+  color: var(--muted);
+}
+
+.diagnostics-table th {
+  color: var(--text);
+  font-weight: 650;
+  font-size: 0.64rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 900px) {
+  .diagnostics-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .settings-card-lead {
   margin: 0 0 10px;
   font-size: 0.72rem;
@@ -565,6 +632,23 @@ body {
 .esp-enable--inline {
   flex: 1 1 100%;
   margin-top: 2px;
+}
+
+.dmx-fixture-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  width: 100%;
+}
+
+.field-dmx-ch {
+  width: 132px;
+  flex: 0 0 auto;
+}
+
+.dmx-mode-select {
+  min-width: 96px;
 }
 
 .app-title {
@@ -883,6 +967,16 @@ button:disabled {
   letter-spacing: 0.01em;
 }
 
+.setlist-totals-leftover {
+  color: #ffb020 !important;
+  font-weight: 600;
+}
+
+.setlist-totals-missing {
+  color: #ff6b4a !important;
+  font-weight: 700;
+}
+
 .setlist-shell {
   flex: 1 1 0;
   min-height: 300px;
@@ -1178,14 +1272,37 @@ button:disabled {
   font-size: 0.6rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #6b7280;
+  color: #9ca3af;
+}
+
+.esp32-sim-brand-right {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.esp32-sim-transport {
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.esp32-sim-transport--playing {
+  color: #b8ff26;
+}
+
+.esp32-sim-transport--stopped {
+  color: #9ca3af;
 }
 
 .esp32-sim-version {
   font-size: 0.5rem;
   font-weight: 500;
-  color: #6b7280;
-  opacity: 0.75;
+  color: #e5e7eb;
   letter-spacing: 0.02em;
   font-variant-numeric: tabular-nums;
   line-height: 1;
@@ -1196,7 +1313,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   justify-content: space-evenly;
-  gap: 3px;
+  gap: 2px;
   padding: 5px;
   border-left: 1px solid #222833;
   background: #0c0e14;
@@ -1204,6 +1321,16 @@ button:disabled {
 }
 
 /* Host HH:MM — yellow on black, top of pad column (matches CrowPanel firmware). */
+.esp32-sim-pad-clock-wrap {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+}
+
 .esp32-sim-pad-clock {
   flex: 0 0 auto;
   display: block;
@@ -1219,6 +1346,23 @@ button:disabled {
   line-height: 1.15;
   padding: 5px 4px 4px;
   border-radius: 4px;
+}
+
+.esp32-sim-set-progress {
+  flex: 0 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: center;
+  font-size: 0.55rem;
+  font-weight: 600;
+  color: #9ca3af;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+  padding: 0 2px;
 }
 
 .esp32-sim-pad {
@@ -1649,4 +1793,8 @@ button:disabled {
   font-size: 0.68rem;
   color: var(--muted);
   line-height: 1.35;
+}
+
+.settings-fields--esp > .settings-hint {
+  flex: 1 1 100%;
 }

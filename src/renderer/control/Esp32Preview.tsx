@@ -41,9 +41,18 @@ const PREVIEW_PADS = [
 
 /** Mirrors the full CrowPanel 1024×600 HMI: broad stage plus four stacked right pads. */
 export function Esp32Preview({ state, detailMode }: Props) {
-  // Same builder as host serial broadcast — includes c/d/n for the three meta slots.
+  // Same builder as host serial broadcast — includes c/d/n/tr/g for CrowPanel + preview.
   const payload = useMemo(
-    () => buildEsp32DisplayPayload(state, state.countdown.display),
+    () =>
+      buildEsp32DisplayPayload(
+        state,
+        state.countdown.display,
+        {
+          remainingSeconds: state.countdown.remainingSeconds,
+          running: state.countdown.running
+        },
+        { transportPlaying: state.transport.playing }
+      ),
     [
       state.setlist,
       state.currentSongId,
@@ -51,7 +60,10 @@ export function Esp32Preview({ state, detailMode }: Props) {
       state.allMuted,
       state.synthMuted,
       state.pianoMuted,
-      state.countdown.display
+      state.countdown.display,
+      state.countdown.remainingSeconds,
+      state.countdown.running,
+      state.transport.playing
     ]
   )
 
@@ -68,6 +80,15 @@ export function Esp32Preview({ state, detailMode }: Props) {
   const nextSong = isWaiting ? '' : payload.x || ''
   const nextSongLabel = nextSong ? `Next : ${nextSong}` : ''
   const hasMeta = Boolean(metaYear || metaDuration || metaPosition)
+  const setProgress = isWaiting ? '' : payload.g || ''
+  const transportPlaying = Boolean(state.transport.playing)
+  const countdownArmed =
+    state.countdown.remainingSeconds != null && state.countdown.remainingSeconds >= 0
+  const transportHint = countdownArmed
+    ? state.countdown.running
+      ? ' · CD'
+      : ' · ARM'
+    : ''
   const patternLabel = formatLedPatternLabel(state.ledPattern)
   const selectedId = activePatternId(state.ledPattern)
   const previewDisplay = getEsp32PreviewDisplay(state.esp32Display)
@@ -156,9 +177,25 @@ export function Esp32Preview({ state, detailMode }: Props) {
             <div className="esp32-sim-stage">
               <div className="esp32-sim-brand-bar">
                 <div className="esp32-sim-brand">VIEWERONE</div>
-                <span className="esp32-sim-version" aria-label="App version">
-                  v{state.appVersion || '—'}
-                </span>
+                <div className="esp32-sim-brand-right">
+                  <span
+                    className={`esp32-sim-transport esp32-sim-transport--${
+                      transportPlaying ? 'playing' : 'stopped'
+                    }`}
+                    aria-label={transportPlaying ? 'Transport playing' : 'Transport stopped'}
+                    title={
+                      transportPlaying
+                        ? `Playing${countdownArmed ? (state.countdown.running ? ' · countdown running' : ' · countdown armed') : ''}`
+                        : `Stopped${countdownArmed ? ' · countdown armed/frozen' : ''}`
+                    }
+                  >
+                    {transportPlaying ? 'PLAY' : 'STOP'}
+                    {transportHint}
+                  </span>
+                  <span className="esp32-sim-version" aria-label="App version">
+                    v{state.appVersion || '—'}
+                  </span>
+                </div>
               </div>
               <div className="esp32-sim-inner">
                 <div className="esp32-sim-half esp32-sim-half--title">
@@ -192,9 +229,16 @@ export function Esp32Preview({ state, detailMode }: Props) {
               </div>
             </div>
             <div className="esp32-sim-pads" role="group" aria-label="CrowPanel mute controls">
-              <time className="esp32-sim-pad-clock" dateTime={padClock} aria-label="Local time">
-                {padClock}
-              </time>
+              <div className="esp32-sim-pad-clock-wrap">
+                <time className="esp32-sim-pad-clock" dateTime={padClock} aria-label="Local time">
+                  {padClock}
+                </time>
+                {setProgress ? (
+                  <div className="esp32-sim-set-progress" title="Set position · remaining set time">
+                    {setProgress}
+                  </div>
+                ) : null}
+              </div>
               {PREVIEW_PADS.map((pad) => {
                 const muted =
                   pad.id === 'fx'
@@ -329,7 +373,7 @@ export function Esp32Preview({ state, detailMode }: Props) {
           type="button"
           key={flashPc === MIDI_PC_LED_IDLE ? `idle-${state.ledMidiPulseAt}` : 'idle'}
           className={`esp32-sim-pc-btn${flashPc === MIDI_PC_LED_IDLE ? ' esp32-sim-pc-btn--flash' : ''}`}
-          title="Simulate PC 126 — dim knight rider (between songs / idle)"
+          title="Simulate PC 126 — dim royal blue knight rider (between songs / idle)"
           onClick={(e) => {
             e.currentTarget.classList.remove('btn-click-flash')
             void e.currentTarget.offsetWidth

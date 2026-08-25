@@ -1,5 +1,6 @@
 import Store from 'electron-store'
 import type { AppState, ArrangerMidiMapping, SetlistItem, TransportMidiMapping } from '../shared/types.js'
+import { clampDmxChannel, normalizeDmxFixtureMode } from '../shared/dmx.js'
 import {
   clampLedBrightness,
   clampLedPatternId,
@@ -26,6 +27,11 @@ const defaults: AppState = {
   esp32Enabled: false,
   ledBrightness: LED_DEFAULT_BRIGHTNESS,
   ledExternalPower: false,
+  dmxEnabled: false,
+  dmxFixture1Channel: 97,
+  dmxFixture1Mode: 'sound',
+  dmxFixture2Channel: 1,
+  dmxFixture2Mode: 'sound',
   arrangerMidi: {
     mode: 'note',
     channel: 16,
@@ -133,6 +139,11 @@ export function getState(store: AppStore): AppState {
     esp32Enabled: Boolean(store.get('esp32Enabled')),
     ledBrightness,
     ledExternalPower,
+    dmxEnabled: Boolean(store.get('dmxEnabled')),
+    dmxFixture1Channel: clampDmxChannel(store.get('dmxFixture1Channel'), 97),
+    dmxFixture1Mode: normalizeDmxFixtureMode(store.get('dmxFixture1Mode'), 'sound'),
+    dmxFixture2Channel: clampDmxChannel(store.get('dmxFixture2Channel'), 1),
+    dmxFixture2Mode: normalizeDmxFixtureMode(store.get('dmxFixture2Mode'), 'sound'),
     arrangerMidi: normalizeArrangerMidi(store.get('arrangerMidi')),
     transportMidi: normalizeTransportMidi(store.get('transportMidi')),
     countdownStartLeadMs: clampCountdownStartLeadMs(store.get('countdownStartLeadMs'), 2500)

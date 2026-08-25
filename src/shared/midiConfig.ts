@@ -41,7 +41,7 @@
  *  - CrowPanel SYNTH / PIANO pads: Cubase mixer mute via CC 86 / 87 on ch 1 (see below).
  *  - PC 124 (wire 123): reserved.
  *  - PC 125 (wire 124): LED blackout — all LEDs off (pattern id 99).
- *  - PC 126 (wire 125): LED idle — dim slow knight rider (pattern id 0) between songs.
+ *  - PC 126 (wire 125): LED idle — dim slow royal-blue knight rider (pattern id 0) between songs.
  *  - PC 127 (wire 126): LED go / apply — push the currently displayed song’s ledPattern
  *    (or knight_rider if no song) and restore normal brightness.
  *  - Wire 127 (would be “PC 128”) is unused; reserved PCs never match setlist rows.
@@ -94,7 +94,7 @@ export const MIDI_PC_PROMPT_2_OFF = 123
 export const MIDI_PC_LED_BLACKOUT = 125
 
 /**
- * LED idle (between songs): dim slow knight rider (pattern id 0).
+ * LED idle (between songs): dim slow royal-blue knight rider (pattern id 0).
  * Cubase/UI PC **126** = MIDI wire program **125**.
  */
 export const MIDI_PC_LED_IDLE = 126
@@ -109,7 +109,7 @@ export const MIDI_PC_LED_APPLY = 127
  * Temporary strip brightness while LED idle (PC 126) is active.
  * Restored to settings `ledBrightness` on PC 125 / 127 / apply / preview.
  */
-export const LED_IDLE_DIM_BRIGHTNESS = 32
+export const LED_IDLE_DIM_BRIGHTNESS = 24
 
 /** Cubase's own mute CC convention: muted = value 0, unmuted = value 127. */
 export const CUBASE_MUTE_CHANNEL = 1
