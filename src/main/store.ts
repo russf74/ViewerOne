@@ -1,5 +1,7 @@
 import Store from 'electron-store'
 import type { AppState, ArrangerMidiMapping, SetlistItem, TransportMidiMapping } from '../shared/types.js'
+import { normalizeSongAudioAnalysis } from '../shared/audioAnalysisNormalize.js'
+import { normalizeLightingProgram } from '../shared/lightingProgramNormalize.js'
 import { clampDmxChannel, normalizeDmxFixtureMode } from '../shared/dmx.js'
 import {
   clampLedBrightness,
@@ -45,7 +47,9 @@ const defaults: AppState = {
     stopNumber: CUBASE_TRANSPORT_STOP_NOTE
   },
   /** Cubase Start often arrives ~2s late vs arranger block — backdate full-length arms. */
-  countdownStartLeadMs: 2500
+  countdownStartLeadMs: 2500,
+  lightingDirectorEnabled: true,
+  liveAudioSyncEnabled: false
 }
 
 /** Clamp persisted / patched start-lead (ms). */
@@ -80,7 +84,13 @@ function normalizeSetlist(list: unknown): SetlistItem[] {
       year,
       ledPattern: clampLedPatternId(
         r.ledPattern !== undefined ? r.ledPattern : RANDOM_LED_PATTERN_ID
-      )
+      ),
+      backingTrackPath:
+        typeof r.backingTrackPath === 'string' && r.backingTrackPath.trim()
+          ? r.backingTrackPath.trim()
+          : undefined,
+      audioAnalysis: normalizeSongAudioAnalysis(r.audioAnalysis),
+      lightingProgram: normalizeLightingProgram(r.lightingProgram)
     }
   })
 }
@@ -146,7 +156,9 @@ export function getState(store: AppStore): AppState {
     dmxFixture2Mode: normalizeDmxFixtureMode(store.get('dmxFixture2Mode'), 'sound'),
     arrangerMidi: normalizeArrangerMidi(store.get('arrangerMidi')),
     transportMidi: normalizeTransportMidi(store.get('transportMidi')),
-    countdownStartLeadMs: clampCountdownStartLeadMs(store.get('countdownStartLeadMs'), 2500)
+    countdownStartLeadMs: clampCountdownStartLeadMs(store.get('countdownStartLeadMs'), 2500),
+    lightingDirectorEnabled: Boolean(store.get('lightingDirectorEnabled') ?? true),
+    liveAudioSyncEnabled: Boolean(store.get('liveAudioSyncEnabled') ?? false)
   }
 }
 
@@ -165,6 +177,9 @@ export function newSetlistItem(partial?: Partial<SetlistItem>): SetlistItem {
     title: partial?.title ?? '',
     length: normalizeSongLength(partial?.length),
     year: partial?.year ?? '',
-    ledPattern: clampLedPatternId(partial?.ledPattern ?? RANDOM_LED_PATTERN_ID)
+    ledPattern: clampLedPatternId(partial?.ledPattern ?? RANDOM_LED_PATTERN_ID),
+    backingTrackPath: partial?.backingTrackPath,
+    audioAnalysis: partial?.audioAnalysis,
+    lightingProgram: partial?.lightingProgram
   }
 }

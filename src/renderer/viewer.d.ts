@@ -23,6 +23,9 @@ export type ViewerApi = {
   ledMidiIdle: () => Promise<PublicState>
   ledMidiApply: () => Promise<PublicState>
   previewLedPattern: (id: number) => Promise<PublicState>
+  pickBackingTrack: (songId: string) => Promise<PublicState>
+  analyzeSongLighting: (songId: string) => Promise<PublicState>
+  analyzeAllLighting: () => Promise<PublicState>
 }
 
 declare global {

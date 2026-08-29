@@ -35,7 +35,12 @@ const api = {
   ledMidiApply: (): Promise<PublicState> => ipcRenderer.invoke('led:midiApply'),
   /** Live-test pattern id 0–20 or 99 on the ESP (does not change the song’s stored pattern). */
   previewLedPattern: (id: number): Promise<PublicState> =>
-    ipcRenderer.invoke('led:previewPattern', id)
+    ipcRenderer.invoke('led:previewPattern', id),
+  pickBackingTrack: (songId: string): Promise<PublicState> =>
+    ipcRenderer.invoke('lighting:pickBackingTrack', songId),
+  analyzeSongLighting: (songId: string): Promise<PublicState> =>
+    ipcRenderer.invoke('lighting:analyzeSong', songId),
+  analyzeAllLighting: (): Promise<PublicState> => ipcRenderer.invoke('lighting:analyzeAll')
 }
 
 contextBridge.exposeInMainWorld('viewer', api)

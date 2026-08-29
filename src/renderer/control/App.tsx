@@ -965,6 +965,49 @@ export function App() {
                     Set each stick to 48CH / d097 (not 8-CH). PC 125 blackout, PC 126 dim royal blue, PC 127
                     follows ESP (random rotates every 10s).
                   </p>
+                  <div className="lighting-director-panel">
+                    <h3 className="settings-subheading">Lighting Director</h3>
+                    <label className="esp-enable">
+                      <input
+                        type="checkbox"
+                        checked={state.lightingDirectorEnabled}
+                        onChange={(e) =>
+                          void patchSettings({ lightingDirectorEnabled: e.target.checked })
+                        }
+                      />
+                      <span>PC 127 runs per-song lighting programs (from backing-track analysis)</span>
+                    </label>
+                    <label className="esp-enable">
+                      <input
+                        type="checkbox"
+                        checked={state.liveAudioSyncEnabled}
+                        onChange={(e) =>
+                          void patchSettings({ liveAudioSyncEnabled: e.target.checked })
+                        }
+                      />
+                      <span>
+                        Live audio beat sync (Windows Stereo Mix / loopback via ffmpeg)
+                      </span>
+                    </label>
+                    {state.lightingDirector.active ? (
+                      <p className="settings-hint lighting-director-live">
+                        Live: {state.lightingDirector.activeCueLabel ?? '—'} · pattern{' '}
+                        {state.lightingDirector.activePatternId ?? '—'} ·{' '}
+                        {Math.round(state.lightingDirector.performanceMs / 1000)}s
+                        {state.lightingDirector.syncOffsetMs
+                          ? ` · sync ${state.lightingDirector.syncOffsetMs > 0 ? '+' : ''}${state.lightingDirector.syncOffsetMs}ms`
+                          : ''}
+                      </p>
+                    ) : null}
+                    {state.lightingDirector.analyzingSongId ? (
+                      <p className="settings-hint">Analyzing backing track…</p>
+                    ) : null}
+                    {state.lightingDirector.analyzeError ? (
+                      <p className="settings-hint settings-hint--warn">
+                        {state.lightingDirector.analyzeError}
+                      </p>
+                    ) : null}
+                  </div>
                 </div>
               </section>
             ) : null}
@@ -1107,6 +1150,7 @@ export function App() {
           <span>Song length</span>
           <span>Year</span>
           <span className="setlist-h-pattern">Pattern</span>
+          <span className="setlist-h-track">Track</span>
           <span />
         </div>
         <div className="setlist-scroll" ref={setlistScrollRef}>
@@ -1117,8 +1161,15 @@ export function App() {
                   key={item.id}
                   item={item}
                   isCurrent={item.id === state.currentSongId}
+                  isAnalyzing={state.lightingDirector.analyzingSongId === item.id}
                   onChange={(patch) => updateRow(item.id, patch)}
                   onRemove={() => void window.viewer.removeSong(item.id).then(apply)}
+                  onPickBackingTrack={() =>
+                    void window.viewer.pickBackingTrack(item.id).then(apply)
+                  }
+                  onAnalyzeLighting={() =>
+                    void window.viewer.analyzeSongLighting(item.id).then(apply)
+                  }
                   onActivateRow={() => void window.viewer.selectSong(item.id).then(apply)}
                 />
               ))}
@@ -1133,6 +1184,18 @@ export function App() {
           ) : (
             <p className="setlist-hint">Drag to reorder · click a row to preview.</p>
           )}
+          <button
+            type="button"
+            className="setlist-step-btn"
+            title="Analyze all songs that have a backing track path set"
+            disabled={Boolean(state.lightingDirector.analyzingSongId)}
+            onClick={(e) => {
+              flashButton(e.currentTarget)
+              void window.viewer.analyzeAllLighting().then(apply)
+            }}
+          >
+            Analyze all tracks
+          </button>
           <button
             type="button"
             className="primary setlist-add-btn"

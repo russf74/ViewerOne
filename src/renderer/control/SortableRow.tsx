@@ -9,13 +9,25 @@ import { isTimedSectionTitle, normalizeSongLength } from '../../shared/setlistTi
 type Props = {
   item: SetlistItem
   isCurrent: boolean
+  isAnalyzing: boolean
   onChange: (patch: Partial<Pick<SetlistItem, 'title' | 'length' | 'year' | 'ledPattern'>>) => void
   onRemove: () => void
+  onPickBackingTrack: () => void
+  onAnalyzeLighting: () => void
   /** Click row (not inputs/drag/select) to set as current for ESP preview — no MIDI. */
   onActivateRow?: () => void
 }
 
-export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow }: Props) {
+export function SortableRow({
+  item,
+  isCurrent,
+  isAnalyzing,
+  onChange,
+  onRemove,
+  onPickBackingTrack,
+  onAnalyzeLighting,
+  onActivateRow
+}: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.id
   })
@@ -71,7 +83,7 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
 
   const onRowClick = (e: MouseEvent) => {
     const t = e.target as HTMLElement
-    if (t.closest('input, button, textarea, select, .drag-handle, .setlist-pattern-cell')) return
+    if (t.closest('input, button, textarea, select, .drag-handle, .setlist-pattern-cell, .setlist-track-cell')) return
     onActivateRow?.()
   }
 
@@ -88,6 +100,15 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
       e.currentTarget.blur()
     }
   }
+
+  const trackTitle = item.backingTrackPath
+    ? item.backingTrackPath.split(/[/\\]/).pop() ?? item.backingTrackPath
+    : 'No backing track'
+  const trackStatus = item.lightingProgram
+    ? 'ready'
+    : item.backingTrackPath
+      ? 'path'
+      : 'none'
 
   return (
     <div
@@ -181,6 +202,33 @@ export function SortableRow({ item, isCurrent, onChange, onRemove, onActivateRow
           ))}
         </select>
       </label>
+      <div className="setlist-track-cell" title={trackTitle}>
+        <span
+          className={`track-dot track-dot--${trackStatus}`}
+          aria-hidden
+        />
+        <button
+          type="button"
+          className="track-btn"
+          onClick={onPickBackingTrack}
+          title="Pick MP3 / WAV backing track"
+        >
+          Track
+        </button>
+        <button
+          type="button"
+          className="track-btn"
+          disabled={!item.backingTrackPath || isAnalyzing}
+          onClick={onAnalyzeLighting}
+          title={
+            item.audioAnalysis
+              ? `Re-analyze (${item.audioAnalysis.bpm} BPM, ${item.lightingProgram?.cues.length ?? 0} cues)`
+              : 'Analyze backing track and build lighting program'
+          }
+        >
+          {isAnalyzing ? '…' : item.audioAnalysis ? 'Re' : 'Go'}
+        </button>
+      </div>
       <button type="button" className="danger" onClick={onRemove} title="Remove">
         ×
       </button>

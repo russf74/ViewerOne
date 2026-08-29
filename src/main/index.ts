@@ -1,5 +1,5 @@
 import { installProcessGuards } from './processGuards.js'
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { setupAppMenu } from './menu.js'
 import { existsSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -105,6 +105,9 @@ import {
   readCubaseLengthForEvent,
   shutdownCubaseLengthCapture
 } from './cubaseLengthCapture.js'
+import { LightingDirector } from './lightingDirector.js'
+import { normalizeSongAudioAnalysis } from '../shared/audioAnalysisNormalize.js'
+import { normalizeLightingProgram } from '../shared/lightingProgramNormalize.js'
 
 // Must run before any MIDI/serial traffic — EPIPE on stdout used to kill the main process mid-gig.
 installProcessGuards()
@@ -120,6 +123,80 @@ function preloadScriptPath(): string {
 
 let controlWindow: BrowserWindow | null = null
 const store = createAppStore()
+const lightingDirector = new LightingDirector()
+
+function applyDirectorPattern(patternId: number, brightness?: number): void {
+  const id = clampLedPatternId(patternId)
+  const st = getState(store)
+  ledIdleDimActive = false
+  ledPattern = ledPatternName(id)
+  armDmxForLedPattern(id)
+  const bright =
+    brightness !== undefined ? clampLedBrightness(brightness, st.ledExternalPower) : st.ledBrightness
+  if (st.esp32Enabled) {
+    pushEsp32LedPattern(id)
+    pushEsp32LedBrightness(bright)
+  }
+  refreshDmxOutput()
+  broadcastUiState()
+}
+
+lightingDirector.setApplyPattern(applyDirectorPattern)
+
+let lightingDirectorTimer: ReturnType<typeof setInterval> | null = null
+
+function songPerformanceMs(now = Date.now()): number | null {
+  const st = getState(store)
+  if (!st.currentSongId || countdownSongId !== st.currentSongId) return null
+  if (countdownTotalSeconds > 0) {
+    const remaining = countdownRunning ? countdownRemainingNowMs(now) : countdownRemainingMs
+    return Math.max(0, countdownTotalSeconds * 1000 - remaining)
+  }
+  const row = st.setlist.find((r) => r.id === st.currentSongId)
+  return row?.audioAnalysis?.durationMs ?? null
+}
+
+function tickLightingDirector(now = Date.now()): void {
+  const perf = songPerformanceMs(now)
+  if (perf == null) return
+  lightingDirector.tick(perf)
+}
+
+function startLightingDirectorTicker(): void {
+  if (lightingDirectorTimer) return
+  lightingDirectorTimer = setInterval(() => tickLightingDirector(), 50)
+  lightingDirectorTimer.unref()
+}
+
+function stopLightingDirectorTicker(): void {
+  if (!lightingDirectorTimer) return
+  clearInterval(lightingDirectorTimer)
+  lightingDirectorTimer = null
+}
+
+function armLightingDirectorForCurrentSong(): void {
+  const st = getState(store)
+  if (!st.lightingDirectorEnabled) {
+    lightingDirector.disarm()
+    stopLightingDirectorTicker()
+    return
+  }
+  const row = st.currentSongId ? st.setlist.find((r) => r.id === st.currentSongId) : null
+  if (!row?.lightingProgram?.cues?.length) {
+    lightingDirector.disarm()
+    stopLightingDirectorTicker()
+    return
+  }
+  lightingDirector.arm(row, st.liveAudioSyncEnabled)
+  startLightingDirectorTicker()
+  tickLightingDirector()
+}
+
+function updateSetlistRow(songId: string, patch: Partial<SetlistItem>): void {
+  const st = getState(store)
+  const next = st.setlist.map((row) => (row.id === songId ? { ...row, ...patch } : row))
+  setState(store, { setlist: next })
+}
 const midi = new MidiService()
 
 /** Set once we intentionally shut down — blocks MIDI auto-reconnect from resurrecting a headless process. */
@@ -193,6 +270,8 @@ async function shutdownViewerOneResources(): Promise<void> {
   arrangerScanCancelled = true
   clearMidiReconnectTimer()
   stopCountdownTicker()
+  stopLightingDirectorTicker()
+  lightingDirector.shutdown()
   clearEsp32DisplayCoalesceTimer()
   stopEsp32ClockSync()
   stopDmxRandomRotator()
@@ -772,6 +851,7 @@ function buildPublicState(): PublicState {
       lastAction: lastTransportEvent?.action ?? null,
       lastAtMs: lastTransportEvent?.at ?? null
     },
+    lightingDirector: lightingDirector.snapshot(),
     midi: {
       cubaseInputName,
       cubaseInputOpen,
@@ -1016,6 +1096,8 @@ function syncDmxFromStore(): void {
  * Clears idle dim and restores settings brightness (strip stays off via blackout pattern).
  */
 function applyLedBlackout(): void {
+  lightingDirector.disarm()
+  stopLightingDirectorTicker()
   noteLedMidiPulse(MIDI_PC_LED_BLACKOUT)
   const st = getState(store)
   ledIdleDimActive = false
@@ -1035,6 +1117,8 @@ function applyLedBlackout(): void {
  * Display text is left as-is.
  */
 function applyLedIdle(): void {
+  lightingDirector.disarm()
+  stopLightingDirectorTicker()
   noteLedMidiPulse(MIDI_PC_LED_IDLE)
   ledIdleDimActive = true
   dmxLook = 'idle'
@@ -1058,8 +1142,23 @@ function applyLedForCurrentSong(): void {
   const st = getState(store)
   ledIdleDimActive = false
   const row = st.currentSongId ? st.setlist.find((r) => r.id === st.currentSongId) : null
-  const id = row ? clampLedPatternId(row.ledPattern) : 0
   const title = (row?.title ?? '').toUpperCase()
+
+  if (
+    st.lightingDirectorEnabled &&
+    row &&
+    !title.includes('SOUNDCHECK') &&
+    row.lightingProgram?.cues?.length
+  ) {
+    armLightingDirectorForCurrentSong()
+    broadcastUiState()
+    return
+  }
+
+  lightingDirector.disarm()
+  stopLightingDirectorTicker()
+
+  const id = row ? clampLedPatternId(row.ledPattern) : 0
   if (!row || id === 0 || title.includes('SOUNDCHECK')) {
     stopDmxRandomRotator()
     dmxLook = id === 99 ? 'off' : 'idle'
@@ -2590,7 +2689,13 @@ function registerIpc(): void {
       year: String(
         row.year ?? (row as SetlistItem & { chords?: string }).chords ?? ''
       ),
-      ledPattern: clampLedPatternId(row.ledPattern)
+      ledPattern: clampLedPatternId(row.ledPattern),
+      backingTrackPath:
+        typeof row.backingTrackPath === 'string' && row.backingTrackPath.trim()
+          ? row.backingTrackPath.trim()
+          : undefined,
+      audioAnalysis: normalizeSongAudioAnalysis(row.audioAnalysis),
+      lightingProgram: normalizeLightingProgram(row.lightingProgram)
     }))
     const st = getState(store)
     const still =
@@ -2679,6 +2784,12 @@ function registerIpc(): void {
       )
       console.log(`[ViewerOne] countdown start lead set to ${allowed.countdownStartLeadMs}ms`)
     }
+    if (patch.lightingDirectorEnabled !== undefined) {
+      allowed.lightingDirectorEnabled = Boolean(patch.lightingDirectorEnabled)
+    }
+    if (patch.liveAudioSyncEnabled !== undefined) {
+      allowed.liveAudioSyncEnabled = Boolean(patch.liveAudioSyncEnabled)
+    }
 
     let nextExternal =
       patch.ledExternalPower !== undefined ? Boolean(patch.ledExternalPower) : st.ledExternalPower
@@ -2705,6 +2816,15 @@ function registerIpc(): void {
     }
     if (allowed.ledBrightness !== undefined || allowed.ledExternalPower !== undefined) {
       pushEsp32BrightnessFromSettings()
+    }
+    if (
+      allowed.lightingDirectorEnabled !== undefined ||
+      allowed.liveAudioSyncEnabled !== undefined
+    ) {
+      if (!getState(store).lightingDirectorEnabled) {
+        lightingDirector.disarm()
+        stopLightingDirectorTicker()
+      }
     }
     broadcastState()
     return buildPublicState()
@@ -2903,6 +3023,63 @@ function registerIpc(): void {
   /** Live-test any LED pattern on the ESP (does not change the song’s stored pattern). */
   ipcMain.handle('led:previewPattern', (_e, id: unknown) => {
     previewLedPattern(id)
+    return buildPublicState()
+  })
+
+  ipcMain.handle('lighting:pickBackingTrack', async (_e, songId: unknown) => {
+    if (typeof songId !== 'string') return buildPublicState()
+    const st = getState(store)
+    const row = st.setlist.find((r) => r.id === songId)
+    if (!row) return buildPublicState()
+    const win = BrowserWindow.getFocusedWindow() ?? controlWindow
+    const result = await dialog.showOpenDialog(win ?? undefined, {
+      title: `Backing track — ${row.title || `PC ${row.program}`}`,
+      properties: ['openFile'],
+      filters: [
+        { name: 'Audio', extensions: ['mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg'] }
+      ]
+    })
+    if (result.canceled || result.filePaths.length === 0) return buildPublicState()
+    updateSetlistRow(songId, { backingTrackPath: result.filePaths[0] })
+    broadcastState()
+    return buildPublicState()
+  })
+
+  ipcMain.handle('lighting:analyzeSong', async (_e, songId: unknown) => {
+    if (typeof songId !== 'string') return buildPublicState()
+    const st = getState(store)
+    const row = st.setlist.find((r) => r.id === songId)
+    if (!row?.backingTrackPath) return buildPublicState()
+    try {
+      const { audioAnalysis, lightingProgram } =
+        await lightingDirector.analyzeSongBackingTrack(row)
+      updateSetlistRow(songId, { audioAnalysis, lightingProgram })
+      console.log(
+        `[ViewerOne] Lighting: analyzed "${row.title}" — ${audioAnalysis.bpm} BPM, ${lightingProgram.cues.length} cues`
+      )
+    } catch (err) {
+      console.warn('[ViewerOne] Lighting analyze failed:', err)
+    }
+    broadcastState()
+    return buildPublicState()
+  })
+
+  ipcMain.handle('lighting:analyzeAll', async () => {
+    const st = getState(store)
+    for (const row of st.setlist) {
+      if (!row.backingTrackPath) continue
+      try {
+        const { audioAnalysis, lightingProgram } =
+          await lightingDirector.analyzeSongBackingTrack(row)
+        updateSetlistRow(row.id, { audioAnalysis, lightingProgram })
+        console.log(
+          `[ViewerOne] Lighting: analyzed "${row.title}" — ${audioAnalysis.bpm} BPM, ${lightingProgram.cues.length} cues`
+        )
+      } catch (err) {
+        console.warn(`[ViewerOne] Lighting analyze failed for "${row.title}":`, err)
+      }
+    }
+    broadcastState()
     return buildPublicState()
   })
 

@@ -1,6 +1,10 @@
 import type { DmxFixtureMode, DmxStatus } from './dmx.js'
+import type { LightingProgram } from './lightingProgram.js'
+import type { SongAudioAnalysis } from './audioAnalysis.js'
 
 export type { DmxConnection, DmxFixtureMode, DmxStatus } from './dmx.js'
+export type { LightingCue, LightingProgram } from './lightingProgram.js'
+export type { SongAudioAnalysis, SongSection, SongSectionLabel } from './audioAnalysis.js'
 
 /** One JSON line per ESP32 update (short keys). */
 export type Esp32DisplayPayload = {
@@ -85,6 +89,12 @@ export type SetlistItem = {
    * (or the control UI simulate / pattern preview).
    */
   ledPattern: number
+  /** Absolute path to backing track (mp3/wav/flac). Used for offline analysis + live sync. */
+  backingTrackPath?: string
+  /** Offline beat/section analysis of {@link backingTrackPath}. */
+  audioAnalysis?: SongAudioAnalysis
+  /** Timed lighting cues generated from {@link audioAnalysis}. */
+  lightingProgram?: LightingProgram
 }
 
 export type ArrangerMidiMapping = {
@@ -180,6 +190,13 @@ export type AppState = {
    * the wall-clock anchor is backdated by this amount so remaining hits 0 with the arranger block.
    */
   countdownStartLeadMs: number
+  /**
+   * When true, PC 127 arms the Lighting Director: timed cues from backing-track analysis
+   * with live audio beat sync (loopback). Falls back to static ledPattern when no program.
+   */
+  lightingDirectorEnabled: boolean
+  /** Capture system loopback for live beat sync (Windows: Stereo Mix / VB-Cable). */
+  liveAudioSyncEnabled: boolean
 }
 
 /** Live MIDI connection status, so the UI isn't "blind" even though ports are auto-detected/hardcoded. */
@@ -267,5 +284,18 @@ export type PublicState = AppState & {
     lastSource: string | null
     lastAction: 'start' | 'continue' | 'stop' | null
     lastAtMs: number | null
+  }
+  /** Ephemeral Lighting Director runtime (not persisted). */
+  lightingDirector: {
+    active: boolean
+    songId: string | null
+    performanceMs: number
+    syncOffsetMs: number
+    activeCueLabel: string | null
+    activePatternId: number | null
+    nextCueAtMs: number | null
+    liveAudioCapturing: boolean
+    analyzingSongId: string | null
+    analyzeError: string | null
   }
 }
