@@ -1,5 +1,16 @@
 # Changelog
 
+## Launcher (desktop / taskbar)
+
+- Shortcut launch no longer uses the broken VBScript `sh.Run cmd` form (that showed
+  **Expected end of statement**). Capturing the exit code uses `sh.Run(...)`.
+- Hidden launch rebuilds PATH from the registry so npm is found when a shortcut has
+  a stripped environment. Failures show a real reason plus `%TEMP%\viewerone-launch.log`.
+- `git reset` runs from a TEMP copy of the batch file so Windows cannot skip lines
+  when the launcher is overwritten mid-run (that was **ViewerOne did not start**).
+- One-click repair: double-click `ViewerOne-Fix.cmd` (or run `scripts/fix-viewerone.ps1`).
+- Windows logon (`start-gig-apps.vbs`) starts `electron.exe` directly again.
+
 ## v6.00.00 — Lighting Director
 
 Major release: sound-to-light sidecar, Cubase-render analysis, IEM click track, and Lighting Studio.

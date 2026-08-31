@@ -1,9 +1,9 @@
 ---
-description: Vibe coding - fully autonomous, no techy prompts for the user
+description: ViewerOne cloud-agent working style
 alwaysApply: true
 ---
 
-- Commit and push directly to `main`. Do not create feature branches or ask the user about branches.
-- Never ask the user to run PowerShell, git, npm, or terminal commands. Handle everything autonomously.
-- Do not show branch/checkout/commit dialogs or instructions to the user.
-- Keep ViewerOne launch fully automatic: shortcut click syncs, builds, and opens with no popups.
+- Do not ask the user to reconfigure MIDI, Cubase, loopMIDI, or hardware.
+- Desktop/taskbar launch errors must be visible (message box or console). Never swallow shortcut failures with On Error Resume Next.
+- Capturing VBScript `WScript.Shell.Run` requires parentheses: `exitCode = sh.Run(command, 0, True)`.
+- If a local shortcut is already broken, it cannot update itself from GitHub. Ship `ViewerOne-Fix.cmd` and say so plainly.

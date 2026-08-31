@@ -2,10 +2,11 @@ Option Explicit
 
 ' Start X32-Edit, Cubase 15, and ViewerOne at Windows logon.
 ' Invoked by Task Scheduler "ViewerOne Gig Startup" (and start-gig-apps.cmd).
+' Launches electron.exe directly (no rebuild, no ViewerOne-Launch.vbs).
 
 Dim sh, fso, wmi
 Dim userProfile, pf86
-Dim xedit, cubase, viewerOneDir, loopMidiA, loopMidiB
+Dim xedit, cubase, viewerOneDir, loopMidiA, loopMidiB, electronExe
 
 Set sh = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
@@ -18,6 +19,7 @@ If pf86 = "" Or pf86 = "%ProgramFiles(x86)%" Then pf86 = "C:\Program Files (x86)
 xedit = userProfile & "\Desktop\Apps\X32-Edit.exe"
 cubase = "C:\Program Files\Steinberg\Cubase 15\Cubase15.exe"
 viewerOneDir = userProfile & "\ViewerOne"
+electronExe = viewerOneDir & "\node_modules\electron\dist\electron.exe"
 loopMidiA = "C:\Program Files\Tobias Erichsen\loopMIDI\loopMIDI.exe"
 loopMidiB = pf86 & "\Tobias Erichsen\loopMIDI\loopMIDI.exe"
 
@@ -28,13 +30,13 @@ Function ProcessRunning(imageName)
 End Function
 
 Function ViewerOneRunning()
-  Dim col, p, cmd
+  Dim col, p, line
   ViewerOneRunning = False
   Set col = wmi.ExecQuery("Select CommandLine from Win32_Process Where Name='electron.exe'")
   For Each p In col
     If Not IsNull(p.CommandLine) Then
-      cmd = LCase(p.CommandLine)
-      If InStr(cmd, "\viewerone\") > 0 Then
+      line = LCase(p.CommandLine)
+      If InStr(line, "\viewerone\") > 0 Then
         ViewerOneRunning = True
         Exit Function
       End If
@@ -60,10 +62,8 @@ StartExe "Cubase15.exe", cubase
 WScript.Sleep 5000
 
 If Not ViewerOneRunning() Then
-  If fso.FileExists(viewerOneDir & "\ViewerOne-Launch.vbs") Then
-    sh.Run "wscript.exe """ & viewerOneDir & "\ViewerOne-Launch.vbs""", 0, False
-  ElseIf fso.FileExists(viewerOneDir & "\node_modules\electron\dist\electron.exe") Then
+  If fso.FileExists(electronExe) Then
     sh.CurrentDirectory = viewerOneDir
-    sh.Run """" & viewerOneDir & "\node_modules\electron\dist\electron.exe"" .", 1, False
+    sh.Run """" & electronExe & """ .", 1, False
   End If
 End If
