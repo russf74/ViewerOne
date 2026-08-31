@@ -10,7 +10,8 @@ $ErrorActionPreference = 'Stop'
 $log = Join-Path $env:APPDATA 'viewer-one\overnight-analyze.log'
 $statusPath = Join-Path $env:APPDATA 'viewer-one\overnight-analyze-status.json'
 $analyzeLog = Join-Path $env:APPDATA 'viewer-one\lighting-analyze.log'
-$electronLog = Join-Path $env:APPDATA 'viewer-one\lighting-analyze-electron.log'
+$electronOut = Join-Path $env:APPDATA 'viewer-one\lighting-analyze-electron.out.log'
+$electronErr = Join-Path $env:APPDATA 'viewer-one\lighting-analyze-electron.err.log'
 $electron = Join-Path $RepoRoot 'node_modules\electron\dist\electron.exe'
 
 function Write-NightLog([string]$msg) {
@@ -33,7 +34,9 @@ public static class SleepUtil {
 }
 "@
 # ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED — Cubase OCR needs the screen on.
-[void][SleepUtil]::SetThreadExecutionState([uint32]0x80000003)
+$KeepAwake = [Convert]::ToUInt32('80000003', 16)
+$ClearAwake = [Convert]::ToUInt32('80000000', 16)
+[void][SleepUtil]::SetThreadExecutionState($KeepAwake)
 
 function Get-Readiness {
   $js = @'
@@ -70,9 +73,8 @@ function Stop-ViewerOne {
 function Start-Analyze {
   if (-not (Test-Path -LiteralPath $electron)) { throw "electron.exe missing: $electron" }
   Stop-ViewerOne
-  if (Test-Path -LiteralPath $electronLog) { Remove-Item -LiteralPath $electronLog -Force }
   Start-Process -FilePath $electron -ArgumentList '.','--lighting-analyze' -WorkingDirectory $RepoRoot `
-    -RedirectStandardOutput $electronLog -RedirectStandardError $electronLog -WindowStyle Normal
+    -RedirectStandardOutput $electronOut -RedirectStandardError $electronErr -WindowStyle Normal
   Write-NightLog 'launched ViewerOne --lighting-analyze'
 }
 
@@ -96,7 +98,7 @@ $relaunch = 0
 Start-Analyze
 
 while ($true) {
-  [void][SleepUtil]::SetThreadExecutionState([uint32]0x80000003)
+  [void][SleepUtil]::SetThreadExecutionState($KeepAwake)
   Start-Sleep -Seconds 45
 
   $info = $null
@@ -118,7 +120,7 @@ while ($true) {
   if ([int]$info.total -gt 0 -and [int]$info.ready -ge [int]$info.total) {
     Write-NightLog 'ALL ARRANGER SONGS READY'
     Write-Status @{ phase = 'complete'; ready = [int]$info.ready; total = [int]$info.total; need = 0; missing = @() }
-    [void][SleepUtil]::SetThreadExecutionState([uint32]0x80000000)
+    [void][SleepUtil]::SetThreadExecutionState($ClearAwake)
     exit 0
   }
 
@@ -135,7 +137,7 @@ while ($true) {
     if ($relaunch -ge $MaxRelaunches) {
       Write-NightLog "giving up after $relaunch relaunches (alive=$alive stalled=$stalled)"
       Write-Status @{ phase = 'stopped'; reason = 'max relaunches'; ready = [int]$info.ready; total = [int]$info.total; need = [int]$info.need; missing = $missingTitles }
-      [void][SleepUtil]::SetThreadExecutionState([uint32]0x80000000)
+      [void][SleepUtil]::SetThreadExecutionState($ClearAwake)
       exit 2
     }
     $relaunch++
