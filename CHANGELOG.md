@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.03
+
+- Launcher now force-closes `electron.exe` (does not depend on extra scripts that old disks lack), then syncs GitHub. If the tree is still 6.00.00, it overlays a zip of `main` and rebuilds. Control shows **v6.00.03**.
+
 ## v6.00.02
 
 - Taskbar/desktop shortcuts are rewritten to the launcher so a click syncs GitHub `main` (not a stale `electron.exe` pin). Running ViewerOne is closed first so the update can apply. Control shows **v6.00.02**.
