@@ -26,6 +26,9 @@ export type ViewerApi = {
   pickBackingTrack: (songId: string) => Promise<PublicState>
   analyzeSongLighting: (songId: string) => Promise<PublicState>
   analyzeAllLighting: () => Promise<PublicState>
+  analyzeLightingFromCubase: () => Promise<PublicState>
+  cancelLightingAnalyze: () => Promise<PublicState>
+  setLightingProgram: (songId: string, program: unknown) => Promise<PublicState>
 }
 
 declare global {

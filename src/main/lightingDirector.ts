@@ -18,7 +18,7 @@ export type LightingDirectorSnapshot = {
   analyzeError: string | null
 }
 
-export type ApplyPatternFn = (patternId: number, brightness?: number) => void
+export type ApplyPatternFn = (patternId: number, brightness?: number, dmxLook?: 'off' | 'idle' | 'live') => void
 
 export class LightingDirector {
   private active = false
@@ -67,7 +67,7 @@ export class LightingDirector {
     if (!cue) return
     if (cue.ledPatternId === this.lastAppliedPatternId) return
     this.lastAppliedPatternId = cue.ledPatternId
-    this.applyPattern(cue.ledPatternId, cue.brightness)
+    this.applyPattern(cue.ledPatternId, cue.brightness, cue.dmxLook)
   }
 
   arm(song: SetlistItem | null, liveAudio: boolean): void {

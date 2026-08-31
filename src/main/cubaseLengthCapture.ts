@@ -297,7 +297,17 @@ function runOnPsHost(args: string[], timeoutMs: number): Promise<string> {
 
 function runPowershell(args: string[], timeoutMs = POWERSHELL_TIMEOUT_MS): Promise<string> {
   const action = args[0] ?? ''
-  if (action === 'grab' || action === 'health' || action === 'prepare' || action === 'click' || action === 'capture' || action === 'expand') {
+  if (
+    action === 'grab' ||
+    action === 'health' ||
+    action === 'prepare' ||
+    action === 'click' ||
+    action === 'capture' ||
+    action === 'expand' ||
+    action === 'renderprep' ||
+    action === 'stop' ||
+    action === 'zoom'
+  ) {
     return runOnPsHost(args, timeoutMs)
   }
   return new Promise((resolve, reject) => {
@@ -1134,5 +1144,40 @@ export async function readCubaseLengthForEvent(
     return await grabCubaseEventLength(eventName)
   } catch (err) {
     return emptyRead(err instanceof Error ? err.message : String(err))
+  }
+}
+
+/** Select arranger event + zoom locators — prep for render capture (no playback). */
+export async function cubaseRenderPrepare(eventName: string): Promise<CubaseLengthRead> {
+  const title = eventName.trim()
+  try {
+    const outDir = tempWorkDir()
+    const raw = await runPowershell(['renderprep', outDir, title], POWERSHELL_GRAB_TIMEOUT_MS)
+    const grab = parseJsonLine<PsGrabResult>(raw)
+    console.log(
+      `[ViewerOne] Cubase render prep “${title}”: name="${String(grab.infoName || '').trim()}" ` +
+        `len=${grab.rawLength || ''}`
+    )
+    return readFromRawTimes(
+      title,
+      String(grab.infoName || '').trim(),
+      '',
+      String(grab.rawLength || ''),
+      String(grab.rawStart || ''),
+      String(grab.rawEnd || ''),
+      false,
+      grab.error
+    )
+  } catch (err) {
+    return emptyRead(err instanceof Error ? err.message : String(err))
+  }
+}
+
+/** Send Cubase Stop via PowerShell helper (does not touch ViewerOne transport state). */
+export async function cubasePsStop(): Promise<void> {
+  try {
+    await runPowershell(['stop', tempWorkDir(), ''], POWERSHELL_TIMEOUT_MS)
+  } catch {
+    /* best effort */
   }
 }

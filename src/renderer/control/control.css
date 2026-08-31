@@ -1196,6 +1196,39 @@ button:disabled {
   background: #48bb78;
 }
 
+.track-dot--cubase {
+  background: #63b3ed;
+}
+
+.cue-table-wrap {
+  max-height: 180px;
+  overflow: auto;
+  margin-top: 6px;
+}
+
+.cue-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.68rem;
+}
+
+.cue-table th,
+.cue-table td {
+  padding: 2px 4px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.cue-table select {
+  width: 100%;
+  font-size: 0.65rem;
+  padding: 1px 2px;
+}
+
+.lighting-cue-editor {
+  margin-top: 6px;
+}
+
 .track-btn {
   font-size: 0.58rem;
   padding: 1px 4px;

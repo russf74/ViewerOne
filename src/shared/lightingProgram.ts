@@ -8,6 +8,8 @@ export type LightingCue = {
   label?: string
   /** Optional brightness override 0–255; null = use settings. */
   brightness?: number
+  /** Optional DMX look override — defaults to live when pattern > 0. */
+  dmxLook?: 'off' | 'idle' | 'live'
 }
 
 export type LightingProgram = {
@@ -66,7 +68,8 @@ export function buildLightingProgram(analysis: SongAudioAnalysis): LightingProgr
     cues.push({
       atMs: section.startMs,
       ledPatternId: patternId,
-      label: section.label
+      label: section.label,
+      dmxLook: section.label === 'breakdown' || section.label === 'outro' ? 'idle' : 'live'
     })
 
     // Accent flash one beat into high-energy sections.

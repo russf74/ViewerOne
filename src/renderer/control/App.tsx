@@ -29,6 +29,7 @@ import {
   MIXER_MUTE_CHANNEL
 } from '../../shared/midiConfig'
 import { SortableRow } from './SortableRow'
+import { LightingCueEditor } from './LightingCueEditor'
 import { Esp32Preview } from './Esp32Preview'
 
 type StatusLine = { text: string; tone: 'ok' | 'warn' | 'error' }
@@ -966,7 +967,12 @@ export function App() {
                     follows ESP (random rotates every 10s).
                   </p>
                   <div className="lighting-director-panel">
-                    <h3 className="settings-subheading">Lighting Director</h3>
+                    <h3 className="settings-subheading">Lighting Director (sidecar)</h3>
+                    <p className="settings-hint">
+                      Opt-in only — does not change Cubase playback or normal PC 127 behaviour until
+                      enabled. Analyze captures <strong>real Cubase output</strong> (your tempo/key
+                      edits, cuts, and repeats are baked in).
+                    </p>
                     <label className="esp-enable">
                       <input
                         type="checkbox"
@@ -975,7 +981,7 @@ export function App() {
                           void patchSettings({ lightingDirectorEnabled: e.target.checked })
                         }
                       />
-                      <span>PC 127 runs per-song lighting programs (from backing-track analysis)</span>
+                      <span>Enable PC 127 timed lighting programs at the gig</span>
                     </label>
                     <label className="esp-enable">
                       <input
@@ -985,10 +991,26 @@ export function App() {
                           void patchSettings({ liveAudioSyncEnabled: e.target.checked })
                         }
                       />
-                      <span>
-                        Live audio beat sync (Windows Stereo Mix / loopback via ffmpeg)
-                      </span>
+                      <span>Live beat sync during show (loopback nudge)</span>
                     </label>
+                    <div className="field">
+                      <label htmlFor="loopback-device">Loopback device (Stereo Mix name)</label>
+                      <input
+                        id="loopback-device"
+                        className="text-input"
+                        type="text"
+                        value={state.lightingLoopbackDevice}
+                        onChange={(e) =>
+                          void patchSettings({ lightingLoopbackDevice: e.target.value })
+                        }
+                        placeholder="Stereo Mix"
+                      />
+                    </div>
+                    {state.lightingAnalyze.active ? (
+                      <p className="settings-hint lighting-director-live">
+                        Cubase analyze: {state.lightingAnalyze.message}
+                      </p>
+                    ) : null}
                     {state.lightingDirector.active ? (
                       <p className="settings-hint lighting-director-live">
                         Live: {state.lightingDirector.activeCueLabel ?? '—'} · pattern{' '}
@@ -999,14 +1021,25 @@ export function App() {
                           : ''}
                       </p>
                     ) : null}
-                    {state.lightingDirector.analyzingSongId ? (
-                      <p className="settings-hint">Analyzing backing track…</p>
-                    ) : null}
                     {state.lightingDirector.analyzeError ? (
                       <p className="settings-hint settings-hint--warn">
                         {state.lightingDirector.analyzeError}
                       </p>
                     ) : null}
+                    <LightingCueEditor
+                      row={
+                        state.currentSongId
+                          ? state.setlist.find((r) => r.id === state.currentSongId) ?? null
+                          : null
+                      }
+                      onSave={(program) => {
+                        const row = state.currentSongId
+                          ? state.setlist.find((r) => r.id === state.currentSongId)
+                          : null
+                        if (!row) return
+                        void window.viewer.setLightingProgram(row.id, program).then(apply)
+                      }}
+                    />
                   </div>
                 </div>
               </section>
@@ -1186,15 +1219,44 @@ export function App() {
           )}
           <button
             type="button"
+            className="primary setlist-step-btn"
+            title="Play each arranger song in Cubase once and record what you actually hear (tempo/key edits included). Requires Stereo Mix enabled."
+            disabled={
+              state.lightingAnalyze.active ||
+              state.arrangerScan.active ||
+              !state.midi.cubaseInputOpen ||
+              !state.midi.cubaseOutputOpen
+            }
+            onClick={(e) => {
+              flashButton(e.currentTarget)
+              void window.viewer.analyzeLightingFromCubase().then(apply)
+            }}
+          >
+            Analyze from Cubase
+          </button>
+          {state.lightingAnalyze.active ? (
+            <button
+              type="button"
+              className="setlist-step-btn"
+              onClick={(e) => {
+                flashButton(e.currentTarget)
+                void window.viewer.cancelLightingAnalyze().then(apply)
+              }}
+            >
+              Cancel analyze
+            </button>
+          ) : null}
+          <button
+            type="button"
             className="setlist-step-btn"
-            title="Analyze all songs that have a backing track path set"
-            disabled={Boolean(state.lightingDirector.analyzingSongId)}
+            title="Legacy: analyze manually picked MP3 files (does not reflect Cubase tempo/key edits)"
+            disabled={Boolean(state.lightingDirector.analyzingSongId) || state.lightingAnalyze.active}
             onClick={(e) => {
               flashButton(e.currentTarget)
               void window.viewer.analyzeAllLighting().then(apply)
             }}
           >
-            Analyze all tracks
+            Analyze external files
           </button>
           <button
             type="button"

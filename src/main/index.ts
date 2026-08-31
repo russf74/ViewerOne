@@ -80,6 +80,7 @@ import type {
   AppState,
   ArrangerScanState,
   Esp32DisplayStatus,
+  LightingAnalyzeScanState,
   MidiSpyEvent,
   PublicState,
   SetlistItem,
@@ -106,6 +107,7 @@ import {
   shutdownCubaseLengthCapture
 } from './cubaseLengthCapture.js'
 import { LightingDirector } from './lightingDirector.js'
+import { runLightingAnalyzePass } from './lightingAnalyzePass.js'
 import { normalizeSongAudioAnalysis } from '../shared/audioAnalysisNormalize.js'
 import { normalizeLightingProgram } from '../shared/lightingProgramNormalize.js'
 
@@ -125,12 +127,23 @@ let controlWindow: BrowserWindow | null = null
 const store = createAppStore()
 const lightingDirector = new LightingDirector()
 
-function applyDirectorPattern(patternId: number, brightness?: number): void {
+function applyDirectorPattern(
+  patternId: number,
+  brightness?: number,
+  dmxLookOverride?: DmxLook
+): void {
   const id = clampLedPatternId(patternId)
   const st = getState(store)
   ledIdleDimActive = false
   ledPattern = ledPatternName(id)
-  armDmxForLedPattern(id)
+  if (dmxLookOverride) {
+    dmxLook = dmxLookOverride
+    if (dmxLookOverride === 'off') stopDmxRandomRotator()
+    else if (dmxLookOverride === 'idle') stopDmxRandomRotator()
+    else armDmxForLedPattern(id)
+  } else {
+    armDmxForLedPattern(id)
+  }
   const bright =
     brightness !== undefined ? clampLedBrightness(brightness, st.ledExternalPower) : st.ledBrightness
   if (st.esp32Enabled) {
@@ -449,6 +462,91 @@ let arrangerScan: ArrangerScanState = {
   message: 'Ready'
 }
 
+let lightingAnalyzeCancelled = false
+let lightingAnalyzePromise: Promise<void> | null = null
+let lightingAnalyze: LightingAnalyzeScanState = {
+  active: false,
+  phase: 'idle',
+  collected: 0,
+  total: 0,
+  message: 'Ready'
+}
+
+function setLightingAnalyze(patch: Partial<LightingAnalyzeScanState>): void {
+  lightingAnalyze = { ...lightingAnalyze, ...patch }
+  broadcastUiState()
+}
+
+/** Isolated Cubase play for render capture — does not arm gig countdown. */
+function sendAnalyzePlay(): void {
+  if (!cubaseOutputOpen) return
+  const mapping = getState(store).transportMidi
+  const ch = mapping.channel >= 1 && mapping.channel <= 16 ? mapping.channel : 16
+  console.log('[ViewerOne] Lighting analyze: Cubase Play (isolated)')
+  if (mapping.mode === 'note') midi.sendNotePulse(ch, mapping.startNumber, 127, 80)
+  else midi.sendControlChange(ch, mapping.startNumber, 127)
+}
+
+function sendAnalyzeStop(): void {
+  sendCubaseTransportStop('lighting analyze capture')
+}
+
+async function runLightingAnalyzeFromCubase(): Promise<void> {
+  if (lightingAnalyzePromise) return
+  if (arrangerScanPromise || arrangerScan.active) {
+    setLightingAnalyze({
+      active: false,
+      phase: 'error',
+      message: 'Arranger scan is running — wait for it to finish.'
+    })
+    return
+  }
+  lightingAnalyzeCancelled = false
+  const st = getState(store)
+  lightingAnalyzePromise = runLightingAnalyzePass({
+    getSetlist: () => getState(store).setlist,
+    updateRow: updateSetlistRow,
+    setScan: (patch) => setLightingAnalyze(patch),
+    isCancelled: () => lightingAnalyzeCancelled,
+    sleep,
+    sendArrangerCommand: (dir) => sendArrangerCommand(dir),
+    rewindArranger: async () => {
+      await rewindArrangerToBeginning(true)
+    },
+    waitForProgramChange: (from) =>
+      stepArrangerUntilChanged('next', from, !lightingAnalyzeCancelled),
+    getLatestProgram: () => latestSongProgram,
+    restoreProgram: (program) => restoreArrangerToProgram(program, !lightingAnalyzeCancelled, []),
+    sendAnalyzePlay,
+    sendAnalyzeStop,
+    minimizeUi: async () => {
+      if (controlWindow && !controlWindow.isDestroyed() && !controlWindow.isMinimized()) {
+        controlWindow.minimize()
+        await sleep(120)
+      }
+    },
+    restoreUi: async () => {
+      if (controlWindow && !controlWindow.isDestroyed() && controlWindow.isMinimized()) {
+        controlWindow.restore()
+      }
+    },
+    loopbackDevice: st.lightingLoopbackDevice || 'Stereo Mix'
+  })
+    .catch((err) => {
+      console.warn('[ViewerOne] Lighting analyze failed:', err)
+      setLightingAnalyze({
+        active: false,
+        phase: 'error',
+        message: err instanceof Error ? err.message : String(err)
+      })
+    })
+    .finally(() => {
+      lightingAnalyzePromise = null
+      broadcastState()
+    })
+  await lightingAnalyzePromise
+}
+
 /**
  * Wall-clock remaining while Playing. MIDI clock may apply a small downward
  * bias (~1/sec) but never drives the display directly (tick jitter on Windows
@@ -623,6 +721,7 @@ function publishCountdownIfSecondChanged(): void {
  * Song Position 0 after a partial countdown also means rewind → reset.
  */
 function handleTransportStart(source: string): void {
+  if (lightingAnalyze.active) return
   const now = Date.now()
   // Capture prior transport timing BEFORE debounce mutates lastTransportEvent.
   const priorPlaying = transportPlaying
@@ -670,6 +769,7 @@ function handleTransportStart(source: string): void {
 
 /** Continue (0xFB) / clock soft-start: always resume frozen remaining, never reset. */
 function handleTransportContinue(source: string): void {
+  if (lightingAnalyze.active) return
   const now = Date.now()
   if (isDuplicateTransportEvent('continue', source, now)) return
   noteTransportHint(source)
@@ -693,6 +793,7 @@ function handleTransportContinue(source: string): void {
 
 /** Stop (0xFC) / MMC pause: freeze remaining — never reset to full length. */
 function handleTransportStop(source: string): void {
+  if (lightingAnalyze.active) return
   const now = Date.now()
   if (isDuplicateTransportEvent('stop', source, now)) return
   noteTransportHint(source)
@@ -852,6 +953,7 @@ function buildPublicState(): PublicState {
       lastAtMs: lastTransportEvent?.at ?? null
     },
     lightingDirector: lightingDirector.snapshot(),
+    lightingAnalyze,
     midi: {
       cubaseInputName,
       cubaseInputOpen,
@@ -1557,6 +1659,11 @@ function connectMidi(): void {
       if (wireProgram === MIDI_PC_LED_APPLY - 1) {
         console.log(`[ViewerOne] MIDI: PC ${MIDI_PC_LED_APPLY} (LED apply) ch ${channel0 + 1}`)
         applyLedForCurrentSong()
+        return
+      }
+      if (lightingAnalyze.active) {
+        latestSongProgram = wireProgram + 1
+        songIdentityRevision++
         return
       }
       const pc = wireProgram + 1
@@ -2695,7 +2802,10 @@ function registerIpc(): void {
           ? row.backingTrackPath.trim()
           : undefined,
       audioAnalysis: normalizeSongAudioAnalysis(row.audioAnalysis),
-      lightingProgram: normalizeLightingProgram(row.lightingProgram)
+      lightingProgram: normalizeLightingProgram(row.lightingProgram),
+      audioSource: row.audioSource,
+      cubaseRenderPath: row.cubaseRenderPath,
+      cubaseRenderCapturedAt: row.cubaseRenderCapturedAt
     }))
     const st = getState(store)
     const still =
@@ -2789,6 +2899,10 @@ function registerIpc(): void {
     }
     if (patch.liveAudioSyncEnabled !== undefined) {
       allowed.liveAudioSyncEnabled = Boolean(patch.liveAudioSyncEnabled)
+    }
+    if (patch.lightingLoopbackDevice !== undefined) {
+      const dev = String(patch.lightingLoopbackDevice).trim()
+      if (dev) allowed.lightingLoopbackDevice = dev
     }
 
     let nextExternal =
@@ -3053,7 +3167,7 @@ function registerIpc(): void {
     try {
       const { audioAnalysis, lightingProgram } =
         await lightingDirector.analyzeSongBackingTrack(row)
-      updateSetlistRow(songId, { audioAnalysis, lightingProgram })
+      updateSetlistRow(songId, { audioAnalysis, lightingProgram, audioSource: 'external-file' })
       console.log(
         `[ViewerOne] Lighting: analyzed "${row.title}" — ${audioAnalysis.bpm} BPM, ${lightingProgram.cues.length} cues`
       )
@@ -3071,7 +3185,11 @@ function registerIpc(): void {
       try {
         const { audioAnalysis, lightingProgram } =
           await lightingDirector.analyzeSongBackingTrack(row)
-        updateSetlistRow(row.id, { audioAnalysis, lightingProgram })
+        updateSetlistRow(row.id, {
+          audioAnalysis,
+          lightingProgram,
+          audioSource: 'external-file'
+        })
         console.log(
           `[ViewerOne] Lighting: analyzed "${row.title}" — ${audioAnalysis.bpm} BPM, ${lightingProgram.cues.length} cues`
         )
@@ -3079,6 +3197,28 @@ function registerIpc(): void {
         console.warn(`[ViewerOne] Lighting analyze failed for "${row.title}":`, err)
       }
     }
+    broadcastState()
+    return buildPublicState()
+  })
+
+  ipcMain.handle('lighting:analyzeFromCubase', async () => {
+    await runLightingAnalyzeFromCubase()
+    return buildPublicState()
+  })
+
+  ipcMain.handle('lighting:cancelAnalyze', () => {
+    lightingAnalyzeCancelled = true
+    setLightingAnalyze({ phase: 'cancelled', message: 'Cancelling…' })
+    return buildPublicState()
+  })
+
+  ipcMain.handle('lighting:setProgram', (_e, songId: unknown, program: unknown) => {
+    if (typeof songId !== 'string' || !program || typeof program !== 'object') {
+      return buildPublicState()
+    }
+    const normalized = normalizeLightingProgram(program)
+    if (!normalized) return buildPublicState()
+    updateSetlistRow(songId, { lightingProgram: normalized })
     broadcastState()
     return buildPublicState()
   })

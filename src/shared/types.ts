@@ -95,6 +95,15 @@ export type SetlistItem = {
   audioAnalysis?: SongAudioAnalysis
   /** Timed lighting cues generated from {@link audioAnalysis}. */
   lightingProgram?: LightingProgram
+  /**
+   * Where {@link audioAnalysis} came from.
+   * `cubase-render` = loopback capture of Cubase playback (tempo/key edits baked in).
+   * `external-file` = legacy manual file pick (not recommended).
+   */
+  audioSource?: 'cubase-render' | 'external-file'
+  /** WAV captured from Cubase arrangement playback during Lighting Analyze. */
+  cubaseRenderPath?: string
+  cubaseRenderCapturedAt?: string
 }
 
 export type ArrangerMidiMapping = {
@@ -197,6 +206,24 @@ export type AppState = {
   lightingDirectorEnabled: boolean
   /** Capture system loopback for live beat sync (Windows: Stereo Mix / VB-Cable). */
   liveAudioSyncEnabled: boolean
+  /** Windows dshow loopback device for Cubase render capture + live sync. */
+  lightingLoopbackDevice: string
+}
+
+export type LightingAnalyzeScanState = {
+  active: boolean
+  phase:
+    | 'idle'
+    | 'preparing'
+    | 'walking'
+    | 'capturing'
+    | 'analyzing'
+    | 'complete'
+    | 'cancelled'
+    | 'error'
+  collected: number
+  total: number
+  message: string
 }
 
 /** Live MIDI connection status, so the UI isn't "blind" even though ports are auto-detected/hardcoded. */
@@ -298,4 +325,6 @@ export type PublicState = AppState & {
     analyzingSongId: string | null
     analyzeError: string | null
   }
+  /** Ephemeral Cubase render capture / analyze pass (sidecar — never auto-runs). */
+  lightingAnalyze: LightingAnalyzeScanState
 }

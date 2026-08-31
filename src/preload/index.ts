@@ -40,7 +40,12 @@ const api = {
     ipcRenderer.invoke('lighting:pickBackingTrack', songId),
   analyzeSongLighting: (songId: string): Promise<PublicState> =>
     ipcRenderer.invoke('lighting:analyzeSong', songId),
-  analyzeAllLighting: (): Promise<PublicState> => ipcRenderer.invoke('lighting:analyzeAll')
+  analyzeAllLighting: (): Promise<PublicState> => ipcRenderer.invoke('lighting:analyzeAll'),
+  analyzeLightingFromCubase: (): Promise<PublicState> =>
+    ipcRenderer.invoke('lighting:analyzeFromCubase'),
+  cancelLightingAnalyze: (): Promise<PublicState> => ipcRenderer.invoke('lighting:cancelAnalyze'),
+  setLightingProgram: (songId: string, program: unknown): Promise<PublicState> =>
+    ipcRenderer.invoke('lighting:setProgram', songId, program)
 }
 
 contextBridge.exposeInMainWorld('viewer', api)

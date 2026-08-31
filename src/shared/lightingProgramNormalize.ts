@@ -13,7 +13,9 @@ function normalizeCue(raw: unknown): LightingCue | null {
     brightness:
       r.brightness !== undefined && Number.isFinite(Number(r.brightness))
         ? Math.max(0, Math.min(255, Math.round(Number(r.brightness))))
-        : undefined
+        : undefined,
+    dmxLook:
+      r.dmxLook === 'off' || r.dmxLook === 'idle' || r.dmxLook === 'live' ? r.dmxLook : undefined
   }
 }
 

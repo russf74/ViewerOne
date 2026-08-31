@@ -105,7 +105,9 @@ export function SortableRow({
     ? item.backingTrackPath.split(/[/\\]/).pop() ?? item.backingTrackPath
     : 'No backing track'
   const trackStatus = item.lightingProgram
-    ? 'ready'
+    ? item.audioSource === 'cubase-render'
+      ? 'cubase'
+      : 'ready'
     : item.backingTrackPath
       ? 'path'
       : 'none'
@@ -211,9 +213,9 @@ export function SortableRow({
           type="button"
           className="track-btn"
           onClick={onPickBackingTrack}
-          title="Pick MP3 / WAV backing track"
+          title="Legacy: pick original MP3 (does not reflect Cubase edits — prefer Analyze from Cubase)"
         >
-          Track
+          File
         </button>
         <button
           type="button"

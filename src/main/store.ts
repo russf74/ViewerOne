@@ -48,8 +48,9 @@ const defaults: AppState = {
   },
   /** Cubase Start often arrives ~2s late vs arranger block — backdate full-length arms. */
   countdownStartLeadMs: 2500,
-  lightingDirectorEnabled: true,
-  liveAudioSyncEnabled: false
+  lightingDirectorEnabled: false,
+  liveAudioSyncEnabled: false,
+  lightingLoopbackDevice: 'Stereo Mix'
 }
 
 /** Clamp persisted / patched start-lead (ms). */
@@ -90,7 +91,21 @@ function normalizeSetlist(list: unknown): SetlistItem[] {
           ? r.backingTrackPath.trim()
           : undefined,
       audioAnalysis: normalizeSongAudioAnalysis(r.audioAnalysis),
-      lightingProgram: normalizeLightingProgram(r.lightingProgram)
+      lightingProgram: normalizeLightingProgram(r.lightingProgram),
+      audioSource:
+        r.audioSource === 'cubase-render' || r.audioSource === 'external-file'
+          ? r.audioSource
+          : r.cubaseRenderPath
+            ? 'cubase-render'
+            : r.backingTrackPath
+              ? 'external-file'
+              : undefined,
+      cubaseRenderPath:
+        typeof r.cubaseRenderPath === 'string' && r.cubaseRenderPath.trim()
+          ? r.cubaseRenderPath.trim()
+          : undefined,
+      cubaseRenderCapturedAt:
+        typeof r.cubaseRenderCapturedAt === 'string' ? r.cubaseRenderCapturedAt : undefined
     }
   })
 }
@@ -157,8 +172,13 @@ export function getState(store: AppStore): AppState {
     arrangerMidi: normalizeArrangerMidi(store.get('arrangerMidi')),
     transportMidi: normalizeTransportMidi(store.get('transportMidi')),
     countdownStartLeadMs: clampCountdownStartLeadMs(store.get('countdownStartLeadMs'), 2500),
-    lightingDirectorEnabled: Boolean(store.get('lightingDirectorEnabled') ?? true),
-    liveAudioSyncEnabled: Boolean(store.get('liveAudioSyncEnabled') ?? false)
+    lightingDirectorEnabled: Boolean(store.get('lightingDirectorEnabled') ?? false),
+    liveAudioSyncEnabled: Boolean(store.get('liveAudioSyncEnabled') ?? false),
+    lightingLoopbackDevice:
+      typeof store.get('lightingLoopbackDevice') === 'string' &&
+      String(store.get('lightingLoopbackDevice')).trim()
+        ? String(store.get('lightingLoopbackDevice')).trim()
+        : 'Stereo Mix'
   }
 }
 

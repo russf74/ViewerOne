@@ -2018,6 +2018,52 @@ if ($Action -eq 'serve') {
           Height = $prep.height
         }
         (Expand-ArrangerLayout $win) | ConvertTo-Json -Compress
+      } elseif ($act -eq 'stop') {
+        $prep = Prepare-CubaseWindow -Quick
+        $win = [pscustomobject]@{
+          Process = $prep.Proc
+          Handle = $prep.Handle
+          Left = $prep.left
+          Top = $prep.top
+          Width = $prep.width
+          Height = $prep.height
+        }
+        Invoke-CubaseStop $win
+        @{ ok = $true; stopped = $true } | ConvertTo-Json -Compress
+      } elseif ($act -eq 'zoom') {
+        $prep = Prepare-CubaseWindow -Quick
+        $win = [pscustomobject]@{
+          Process = $prep.Proc
+          Handle = $prep.Handle
+          Left = $prep.left
+          Top = $prep.top
+          Width = $prep.width
+          Height = $prep.height
+        }
+        Invoke-CubaseZoomToEvent $win
+        @{ ok = $true; zoomed = $true } | ConvertTo-Json -Compress
+      } elseif ($act -eq 'renderprep') {
+        $grab = Invoke-Grab $EventName -Quick
+        if ($grab.ok) {
+          $prep = Prepare-CubaseWindow -Quick
+          $win = [pscustomobject]@{
+            Process = $prep.Proc
+            Handle = $prep.Handle
+            Left = $prep.left
+            Top = $prep.top
+            Width = $prep.width
+            Height = $prep.height
+          }
+          Invoke-CubaseZoomToEvent $win
+        }
+        @{
+          ok = [bool]$grab.ok
+          infoName = [string]$grab.infoName
+          rawStart = [string]$grab.rawStart
+          rawEnd = [string]$grab.rawEnd
+          rawLength = [string]$grab.rawLength
+          error = $grab.error
+        } | ConvertTo-Json -Compress
       } else {
         @{ ok = $false; error = "unknown action '$act'" } | ConvertTo-Json -Compress
       }
