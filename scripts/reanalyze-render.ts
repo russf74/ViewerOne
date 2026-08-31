@@ -58,7 +58,7 @@ const raw = await runFfmpeg([
 const samples = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4)
 const analysis = analyzeMonoPcm(samples, 22050)
 const program = buildLightingProgram(analysis)
-const clickPath = wav.replace(/\.wav$/i, '-click.wav')
+const clickPath = wav.replace(/\.wav$/i, '-click-48khz.wav')
 if (fs.existsSync(clickPath)) fs.unlinkSync(clickPath)
 const written = writeClickTrackWav(clickPath, analysis, {
   countInBars: 0,

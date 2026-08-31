@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.20
+
+- Click WAV is named `…-click-48khz.wav` so Cubase does not reuse the old 44.1 kHz pool clip.
+
 ## v6.00.19
 
 - Click WAV is now 48 kHz (Cubase project rate). The old 44.1 kHz file played fast and finished early on the Cubase timeline. Length matches the setlist song (3:46) with no count-in.
