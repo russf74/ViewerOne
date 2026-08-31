@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# Visible repair + launch — run from PowerShell or ViewerOne-Fix.cmd
+# Visible repair + launch - run from PowerShell or ViewerOne-Fix.cmd
 param(
   [string]$RepoRoot = (Join-Path $env:USERPROFILE 'ViewerOne')
 )
@@ -51,11 +51,11 @@ function Sync-Repo([string]$Root, [string]$Git) {
   Push-Location $Root
   try {
     if (-not (Test-Path -LiteralPath (Join-Path $Root '.git'))) {
-      Log 'No .git folder — cloning fresh copy to temp, then copying over...'
+      Log 'No .git folder - cloning fresh copy to temp, then copying over...'
       $temp = Join-Path $env:TEMP 'ViewerOne-clone'
       if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force }
       & $Git clone $ExpectedOrigin $temp
-      if ($LASTEXITCODE -ne 0) { Fail 'git clone failed — is Git installed?' }
+      if ($LASTEXITCODE -ne 0) { Fail 'git clone failed - is Git installed?' }
       Get-ChildItem -LiteralPath $temp -Force | ForEach-Object {
         Copy-Item -LiteralPath $_.FullName -Destination $Root -Recurse -Force
       }
@@ -66,7 +66,7 @@ function Sync-Repo([string]$Root, [string]$Git) {
     Log 'Syncing from GitHub main...'
     & $Git remote set-url origin $ExpectedOrigin
     & $Git fetch origin main
-    if ($LASTEXITCODE -ne 0) { Fail 'git fetch failed — check internet' }
+    if ($LASTEXITCODE -ne 0) { Fail 'git fetch failed - check internet' }
     & $Git checkout main 2>$null
     & $Git reset --hard origin/main
     if ($LASTEXITCODE -ne 0) { Fail 'git reset failed' }
@@ -76,7 +76,7 @@ function Sync-Repo([string]$Root, [string]$Git) {
 }
 
 Clear-Content -LiteralPath $LogFile -ErrorAction SilentlyContinue
-Log "ViewerOne fix — folder: $RepoRoot"
+Log "ViewerOne fix - folder: $RepoRoot"
 
 $git = Find-Git
 if (-not $git) { Fail 'Git not found. Install Git for Windows from https://git-scm.com' }
@@ -96,7 +96,7 @@ Log "Version in package.json: $ver"
 Push-Location $RepoRoot
 try {
   if (-not (Test-Path -LiteralPath 'node_modules')) {
-    Log 'Running npm install (first time — may take a few minutes)...'
+    Log 'Running npm install (first time - may take a few minutes)...'
     & $npm install --no-fund --no-audit
     if ($LASTEXITCODE -ne 0) { Fail 'npm install failed' }
   }
@@ -110,7 +110,7 @@ try {
 
   Log 'Starting ViewerOne...'
   Start-Process -FilePath $electron -ArgumentList '.' -WorkingDirectory $RepoRoot
-  Log 'Done — ViewerOne should be opening now.'
+  Log 'Done - ViewerOne should be opening now.'
   Start-Sleep -Seconds 2
 } finally {
   Pop-Location
