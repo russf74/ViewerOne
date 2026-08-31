@@ -50,7 +50,7 @@ Sub StartExe(imageName, exePath)
 End Sub
 
 If fso.FolderExists(viewerOneDir) Then
-  pullCmd = "cmd /c cd /d """ & viewerOneDir & """ && git pull --ff-only origin cursor/sound-to-light-director-433b 2>nul || git pull --ff-only origin main 2>nul"
+  pullCmd = "cmd /c cd /d """ & viewerOneDir & """ && git pull --ff-only origin main 2>nul"
   sh.Run pullCmd, 0, True
   ps1 = viewerOneDir & "\scripts\install-viewerone-shortcut.ps1"
   If fso.FileExists(ps1) Then

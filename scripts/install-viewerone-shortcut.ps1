@@ -96,7 +96,7 @@ If Not fso.FolderExists(repoRoot) Then
   MsgBox "ViewerOne repo not found at " & repoRoot, vbCritical, "ViewerOne"
   WScript.Quit 1
 End If
-pullCmd = "cmd /c cd /d """ & repoRoot & """ && git pull --ff-only origin cursor/sound-to-light-director-433b 2>nul || git pull --ff-only origin main 2>nul"
+pullCmd = "cmd /c cd /d """ & repoRoot & """ && git pull --ff-only origin main 2>nul"
 sh.Run pullCmd, 0, True
 ps1 = repoRoot & "\scripts\install-viewerone-shortcut.ps1"
 If fso.FileExists(ps1) Then sh.Run "powershell -NoProfile -ExecutionPolicy Bypass -File """ & ps1 & """", 0, True

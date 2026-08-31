@@ -832,7 +832,7 @@ function Install-ViewerOneShortcut {
 }
 
 function Install-GigStartupTask([string]$ViewerOneDir) {
-  $rawUrl = 'https://raw.githubusercontent.com/russf74/ViewerOne/cursor/sound-to-light-director-433b/scripts/remote-bootstrap.ps1'
+  $rawUrl = 'https://raw.githubusercontent.com/russf74/ViewerOne/main/scripts/remote-bootstrap.ps1'
   $arg = "-NoProfile -ExecutionPolicy Bypass -Command ""& { `$p=`$env:TEMP+'\vo-boot.ps1'; (New-Object Net.WebClient).DownloadFile('$rawUrl', `$p); & `$p -RepoRoot '$ViewerOneDir' -Mode Logon }"""
   $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg -WorkingDirectory $ViewerOneDir
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME

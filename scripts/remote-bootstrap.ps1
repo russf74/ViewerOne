@@ -52,13 +52,10 @@ function Sync-Repo {
       throw "Not a git repo: $Root"
     }
     Write-Info "Syncing ViewerOne repo at $Root"
-    git fetch origin cursor/sound-to-light-director-433b 2>$null
-    git fetch origin main 2>$null
-    $branch = 'cursor/sound-to-light-director-433b'
-    git checkout $branch 2>$null
-    if ($LASTEXITCODE -ne 0) { $branch = 'main'; git checkout main 2>$null }
-    git reset --hard "origin/$branch" 2>$null
-    if ($LASTEXITCODE -ne 0) { git pull --ff-only origin $branch 2>$null }
+  git fetch origin main 2>$null
+  $branch = 'main'
+  git checkout $branch 2>$null
+  git reset --hard "origin/$branch" 2>$null
     Write-Ok "Repo on branch $branch"
   } finally {
     Pop-Location
@@ -93,7 +90,7 @@ function Install-BootstrapLauncher {
   }
   Set-Content -LiteralPath (Join-Path $bootstrapDir 'repo.txt') -Value $RepoRoot -Encoding ASCII -NoNewline
   $bootstrapVbs = Join-Path $bootstrapDir 'ViewerOne-Launch.vbs'
-  $rawUrl = 'https://raw.githubusercontent.com/russf74/ViewerOne/cursor/sound-to-light-director-433b/scripts/remote-bootstrap.ps1'
+  $rawUrl = 'https://raw.githubusercontent.com/russf74/ViewerOne/main/scripts/remote-bootstrap.ps1'
   @"
 Option Explicit
 Dim sh, repoRoot, repoFile, cmd
@@ -183,7 +180,7 @@ function Repair-AllShortcuts {
 
 function Register-MaintenanceTask {
   $taskName = 'ViewerOne Auto Sync'
-  $rawUrl = 'https://raw.githubusercontent.com/russf74/ViewerOne/cursor/sound-to-light-director-433b/scripts/remote-bootstrap.ps1'
+  $rawUrl = 'https://raw.githubusercontent.com/russf74/ViewerOne/main/scripts/remote-bootstrap.ps1'
   $arg = "-NoProfile -ExecutionPolicy Bypass -Command ""& { `$p=`$env:TEMP+'\vo-sync.ps1'; (New-Object Net.WebClient).DownloadFile('$rawUrl', `$p); & `$p -Mode SyncOnly }"""
   $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
   $boot = New-ScheduledTaskTrigger -AtStartup
