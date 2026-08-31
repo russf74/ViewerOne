@@ -819,6 +819,11 @@ function Install-CopyShortcut {
 }
 
 function Install-ViewerOneShortcut {
+  $ps1 = Join-Path $ViewerOneSrc 'scripts\install-viewerone-shortcut.ps1'
+  if (Test-Path -LiteralPath $ps1) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $ps1
+    return
+  }
   $vbs = Join-Path $env:USERPROFILE 'ViewerOne\ViewerOne-Launch.vbs'
   if (-not (Test-Path -LiteralPath $vbs)) { return }
   $dest = Join-Path $env:USERPROFILE 'Desktop\ViewerOne.lnk'

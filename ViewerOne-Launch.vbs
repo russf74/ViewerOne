@@ -1,7 +1,7 @@
 Option Explicit
 
 ' Silent launcher: build then open ViewerOne (no console window).
-' Desktop shortcut should point to this file.
+' Desktop shortcut (ViewerOne.lnk) is refreshed by: npm run install-shortcut
 
 Dim sh, fso, scriptDir, electronExe, code, buildCmd, launchCmd
 
