@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppState, PublicState, SetlistItem } from '../../shared/types'
 import type { LightingProgram } from '../../shared/lightingProgram'
-import { LED_PATTERNS } from '../../shared/ledPatterns'
-import { formatMsToTimecode, parseTimecodeToMs } from '../../shared/lightingProgram'
+import { LED_PATTERNS, formatLedPatternLabel } from '../../shared/ledPatterns'
+import { formatMsToTimecode, parseTimecodeToMs, resolveActiveCues } from '../../shared/lightingProgram'
 import { resolveLoopbackDevice, sortAudioDevices } from '../../shared/dshowAudioDevices'
 import {
   peakToMeterWidth,
@@ -17,10 +17,42 @@ type Props = {
   onPatchClickTrack: (patch: Partial<AppState['clickTrack']>) => void
 }
 
-export function LightingCueEditor({ row, onSaveProgram }: Pick<Props, 'row' | 'onSaveProgram'>) {
+function songPlayheadMs(state: PublicState, row: SetlistItem): number {
+  if (
+    state.lightingDirector.active &&
+    state.lightingDirector.songId === row.id &&
+    state.lightingDirector.performanceMs > 0
+  ) {
+    return state.lightingDirector.performanceMs
+  }
+  const total = state.countdown.totalSeconds
+  const rem = state.countdown.remainingSeconds
+  if (total && rem != null) return Math.max(0, Math.round((total - rem) * 1000))
+  return 0
+}
+
+export function LightingCueEditor({
+  row,
+  state,
+  onSaveProgram
+}: Pick<Props, 'row' | 'state' | 'onSaveProgram'>) {
   const [timeDrafts, setTimeDrafts] = useState<Record<string, string>>({})
+  const activeRowRef = useRef<HTMLTableRowElement | null>(null)
 
   const program = row?.lightingProgram
+  const playheadMs = row ? songPlayheadMs(state, row) : 0
+  const durationMs = Math.max(
+    1,
+    row?.audioAnalysis?.durationMs ??
+      (program?.cues?.length ? program.cues[program.cues.length - 1].atMs + 1000 : 1)
+  )
+  const activeState = program ? resolveActiveCues(program, playheadMs) : null
+  const nowCue = activeState ? (activeState.accent ?? activeState.base) : null
+  const nowKey = nowCue ? (nowCue.id ?? String(nowCue.atMs)) : null
+
+  useEffect(() => {
+    activeRowRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [nowKey])
 
   if (!row || !program?.cues?.length) {
     return (
@@ -64,19 +96,28 @@ export function LightingCueEditor({ row, onSaveProgram }: Pick<Props, 'row' | 'o
     })
   }
 
-  const durationMs = row.audioAnalysis?.durationMs ?? program.cues[program.cues.length - 1].atMs + 1000
+  const playPct = Math.min(100, (playheadMs / durationMs) * 100)
+  const nowPattern = nowCue ? formatLedPatternLabel(nowCue.ledPatternId) : null
 
   return (
     <div className="lighting-cue-editor">
+      {nowCue ? (
+        <p className="cue-now-banner" role="status">
+          Now {formatMsToTimecode(playheadMs)} · {nowCue.label ?? 'cue'} · {nowPattern}
+        </p>
+      ) : (
+        <p className="settings-hint">Play the song to follow the live DMX cue.</p>
+      )}
       <div className="cue-timeline" aria-hidden>
         {program.cues.map((cue) => (
           <span
             key={cue.id ?? cue.atMs}
-            className="cue-timeline-mark"
+            className={`cue-timeline-mark${(cue.id ?? String(cue.atMs)) === nowKey ? ' cue-timeline-mark--now' : ''}`}
             style={{ left: `${Math.min(100, (cue.atMs / durationMs) * 100)}%` }}
             title={`${cue.label ?? 'cue'} @ ${formatMsToTimecode(cue.atMs)}`}
           />
         ))}
+        <span className="cue-timeline-playhead" style={{ left: `${playPct}%` }} />
       </div>
       <div className="cue-table-wrap">
         <table className="cue-table">
@@ -93,8 +134,9 @@ export function LightingCueEditor({ row, onSaveProgram }: Pick<Props, 'row' | 'o
             {program.cues.map((cue, idx) => {
               const key = cue.id ?? String(cue.atMs)
               const timeVal = timeDrafts[key] ?? formatMsToTimecode(cue.atMs)
+              const isNow = key === nowKey
               return (
-                <tr key={key}>
+                <tr key={key} ref={isNow ? activeRowRef : undefined} className={isNow ? 'cue-row--now' : undefined}>
                   <td>
                     <input
                       className="text-input cue-time-input"
@@ -505,7 +547,7 @@ export function LightingStudio({ row, state, onSaveProgram, onPatchSettings, onP
       ) : null}
 
       <h4 className="settings-subheading">Cue program — {row?.title ?? 'no song selected'}</h4>
-      <LightingCueEditor row={row} onSaveProgram={onSaveProgram} />
+      <LightingCueEditor row={row} state={state} onSaveProgram={onSaveProgram} />
     </div>
   )
 }

@@ -227,33 +227,32 @@ function musicalSections(
     })
   }
   const sorted = chunks.map((c) => c.energy).sort((a, b) => a - b)
-  const p33 = sorted[Math.floor(sorted.length * 0.33)] ?? 0.4
-  const p66 = sorted[Math.floor(sorted.length * 0.66)] ?? 0.7
-  const rotate: SongSectionLabel[] = ['verse', 'chorus', 'prechorus', 'bridge', 'drop']
+  const p33 = sorted[Math.floor(sorted.length * 0.33)] ?? 0.35
+  const p50 = sorted[Math.floor(sorted.length * 0.5)] ?? 0.5
+  const p66 = sorted[Math.floor(sorted.length * 0.66)] ?? 0.65
   const out: SongSection[] = []
-  let rot = 0
+  let highFlip = 0
   for (let i = 0; i < chunks.length; i++) {
     const c = chunks[i]
+    const tail = c.startMs > durationMs * 0.88
+    const fading = tail && c.energy < p50
     let label: SongSectionLabel
-    if (i === 0) label = 'intro'
-    else if (c.startMs > durationMs * 0.88) label = 'outro'
-    else if (c.energy >= p66) label = i % 3 === 0 ? 'drop' : 'chorus'
-    else if (c.energy <= p33) label = 'verse'
-    else label = i % 2 === 0 ? 'prechorus' : 'bridge'
+    if (i === 0 && c.energy < p66) label = 'intro'
+    else if (fading) label = 'outro'
+    else if (c.energy >= p66) {
+      highFlip++
+      label = highFlip % 2 === 0 ? 'drop' : 'chorus'
+    } else if (c.energy <= p33) label = tail ? 'outro' : 'verse'
+    else label = c.energy >= p50 ? 'prechorus' : 'bridge'
     const prev = out[out.length - 1]
     if (prev && prev.label === 'outro' && label === 'outro') continue
-    if (prev && prev.label === label && label !== 'outro') {
-      rot++
-      label = rotate[rot % rotate.length]
-      if (label === prev.label) label = rotate[(rot + 1) % rotate.length]
-    }
     out.push({
       label,
       startMs: c.startMs,
       energy: Math.round(c.energy * 1000) / 1000
     })
   }
-  return out
+  return out.length ? out : [{ label: 'unknown', startMs: 0, energy: 0.5 }]
 }
 
 function buildBeatGrid(durationMs: number, bpm: number, offsetMs: number): number[] {

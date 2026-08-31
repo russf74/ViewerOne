@@ -1,5 +1,10 @@
 # Changelog
 
+## v6.00.18
+
+- Detail mode highlights the live DMX cue (yellow row + playhead) as the song plays.
+- Lighting follows loudness: a still-pumping ending stays on big looks, not Knight Rider outro. Click WAV is rewritten to the same length as the Cubase render with no count-in.
+
 ## v6.00.17
 
 - Click WAV is now the same length as the Cubase render (no prepended count-in, which had shifted every beat). Beat grid uses a constant-tempo tracker plus kick-phase so the click sits on the song, not a dummy 120/136 grid.

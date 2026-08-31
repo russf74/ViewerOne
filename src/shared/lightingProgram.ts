@@ -60,20 +60,6 @@ const SECTION_PATTERN: Record<string, number> = {
   build: 13
 }
 
-const HIGH_ENERGY_BOOST: Record<string, number | null> = {
-  intro: null,
-  verse: null,
-  prechorus: 13,
-  chorus: 11,
-  bridge: 15,
-  breakdown: null,
-  drop: 10,
-  outro: null,
-  unknown: null,
-  fill: 14,
-  build: 13
-}
-
 function snapToBeat(ms: number, analysis: SongAudioAnalysis): number {
   if (!analysis.beatTimesMs.length) return ms
   let best = analysis.beatTimesMs[0]
@@ -89,18 +75,23 @@ function snapToBeat(ms: number, analysis: SongAudioAnalysis): number {
   return bestDist < 180 ? best : ms
 }
 
+const HIGH_ENERGY_CYCLE = [16, 18, 11, 10, 14, 15, 13, 19, 7, 4] as const
+const MID_ENERGY_CYCLE = [8, 12, 6, 9, 3, 17, 1] as const
+const LOW_ENERGY_CYCLE = [5, 2, 21, 3, 9] as const
+
 function patternForSection(label: string, energy: number): number {
-  if (energy > 0.85 && (label === 'chorus' || label === 'drop')) {
-    return HIGH_ENERGY_BOOST[label] ?? SECTION_PATTERN[label] ?? 20
+  if (energy >= 0.62) {
+    if (label === 'drop') return 18
+    if (label === 'chorus') return 16
+    return 11
   }
-  if (energy < 0.3 && label !== 'outro' && label !== 'intro') {
-    return SECTION_PATTERN.breakdown ?? 21
-  }
-  return SECTION_PATTERN[label] ?? 20
+  if (energy < 0.28 && (label === 'outro' || label === 'breakdown')) return 0
+  if (energy < 0.35) return SECTION_PATTERN.breakdown ?? 21
+  return SECTION_PATTERN[label] === 0 ? 8 : (SECTION_PATTERN[label] ?? 8)
 }
 
-function dmxLookForSection(label: string): 'off' | 'idle' | 'live' {
-  if (label === 'breakdown' || label === 'outro') return 'idle'
+function dmxLookForSection(label: string, energy: number): 'off' | 'idle' | 'live' {
+  if ((label === 'breakdown' || label === 'outro') && energy < 0.4) return 'idle'
   return 'live'
 }
 
@@ -112,15 +103,16 @@ function dmxForSection(espPatternId: number, energy: number): DmxCueOverride {
   }
 }
 
-const SECTION_PATTERN_CYCLE = [2, 3, 8, 16, 12, 13, 18, 6, 9, 14, 4, 17, 1, 19] as const
-
 function uniqueEspPattern(label: string, energy: number, used: Set<number>, index: number): number {
+  const cycle =
+    energy >= 0.62 ? HIGH_ENERGY_CYCLE : energy >= 0.38 ? MID_ENERGY_CYCLE : LOW_ENERGY_CYCLE
   let p = patternForSection(label, energy)
+  if (energy >= 0.5 && (p === 0 || p === 21)) p = HIGH_ENERGY_CYCLE[index % HIGH_ENERGY_CYCLE.length]
   if (used.has(p)) {
-    p = SECTION_PATTERN_CYCLE[index % SECTION_PATTERN_CYCLE.length]
     let guard = 0
-    while (used.has(p) && guard < SECTION_PATTERN_CYCLE.length) {
-      p = SECTION_PATTERN_CYCLE[(index + guard + 1) % SECTION_PATTERN_CYCLE.length]
+    p = cycle[index % cycle.length]
+    while (used.has(p) && guard < cycle.length) {
+      p = cycle[(index + guard + 1) % cycle.length]
       guard++
     }
   }
@@ -166,7 +158,7 @@ export function buildLightingProgram(
       atMs,
       ledPatternId: patternId,
       label,
-      dmxLook: dmxLookForSection(label),
+      dmxLook: dmxLookForSection(label, section.energy),
       dmx: dmxForSection(patternId, section.energy)
     })
 

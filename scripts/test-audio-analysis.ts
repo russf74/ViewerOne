@@ -59,6 +59,18 @@ console.log(
   bases.map((c) => `${c.label}:esp${c.ledPatternId}/stick${c.dmx?.stickPatternId}/dome${c.dmx?.domePatternId}`).join(' | ')
 )
 
+const pumping = analyzeMonoPcm(clickTrackPcm(124, 32), 22050)
+const lastSec = pumping.sections[pumping.sections.length - 1]
+if (lastSec?.label === 'outro') {
+  throw new Error(`pumping tail must not be outro (energy ${lastSec.energy})`)
+}
+const pumpingProg = buildLightingProgram(pumping)
+const lastPumpCue = pumpingProg.cues.filter((c) => !c.accentDurationMs).at(-1)
+if (lastPumpCue?.ledPatternId === 0) {
+  throw new Error('knight rider on a still-pumping ending')
+}
+console.log('pumping tail', lastSec?.label, 'esp', lastPumpCue?.ledPatternId)
+
 function runFfmpeg(args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const p = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] })

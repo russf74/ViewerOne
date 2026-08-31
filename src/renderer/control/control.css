@@ -1201,7 +1201,7 @@ button:disabled {
 }
 
 .cue-table-wrap {
-  max-height: 180px;
+  max-height: 280px;
   overflow: auto;
   margin-top: 6px;
 }
@@ -1366,6 +1366,41 @@ button:disabled {
   background: #63b3ed;
   border-radius: 1px;
   transform: translateX(-1px);
+}
+
+.cue-timeline-mark--now {
+  background: #f6e05e;
+  height: 8px;
+  top: 0;
+}
+
+.cue-timeline-playhead {
+  position: absolute;
+  top: -2px;
+  width: 2px;
+  height: 12px;
+  background: #f6e05e;
+  box-shadow: 0 0 6px #f6e05e;
+  transform: translateX(-1px);
+  pointer-events: none;
+}
+
+.cue-now-banner {
+  margin: 0 0 6px;
+  padding: 4px 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #1a202c;
+  background: #f6e05e;
+  border-radius: 4px;
+}
+
+.cue-row--now td {
+  background: rgba(246, 224, 94, 0.22);
+}
+
+.cue-row--now td:first-child {
+  box-shadow: inset 3px 0 0 #f6e05e;
 }
 
 .cue-time-input {
