@@ -1,5 +1,5 @@
 @echo off
-REM Dev launcher with visible log. For a normal double-click (no console), use ViewerOne-Launch.vbs instead.
+REM Visible launcher. Desktop/taskbar shortcuts use ViewerOne-Launch.vbs.
 cd /d "%~dp0"
 where npm >nul 2>nul || (
   echo ViewerOne: Node.js/npm not found in PATH. Install Node.js LTS.

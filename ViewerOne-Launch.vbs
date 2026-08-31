@@ -1,31 +1,25 @@
 Option Explicit
 
-' Auto-updates from GitHub, then launches silently. No popups.
-Dim shell, fso, repo, cmdPath, url, http, stream
+' Desktop / taskbar: build and open, same as before v6 shortcut experiments.
+' Assignment to WScript.Shell.Run needs parentheses or VBScript errors
+' "Expected end of statement".
 
-Set shell = CreateObject("WScript.Shell")
+Dim sh, fso, scriptDir, silentCmd, exitCode, logFile
+
+Set sh = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
-repo = fso.GetParentFolderName(WScript.ScriptFullName)
-cmdPath = repo & "\ViewerOne-Launch-Silent.cmd"
-url = "https://raw.githubusercontent.com/russf74/ViewerOne/main/ViewerOne-Launch-Silent.cmd"
+scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
+silentCmd = scriptDir & "\ViewerOne-Launch-Silent.cmd"
+logFile = sh.ExpandEnvironmentStrings("%TEMP%") & "\viewerone-launch.log"
 
-On Error Resume Next
-Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
-If http Is Nothing Then Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
-If Not http Is Nothing Then
-  http.Open "GET", url, False
-  http.Send
-  If http.Status = 200 Then
-    Set stream = CreateObject("ADODB.Stream")
-    stream.Type = 1
-    stream.Open
-    stream.Write http.responseBody
-    stream.SaveToFile cmdPath, 2
-    stream.Close
-  End If
+If Not fso.FileExists(silentCmd) Then
+  MsgBox "ViewerOne launcher missing:" & vbCrLf & silentCmd, vbCritical, "ViewerOne"
+  WScript.Quit 1
 End If
-On Error GoTo 0
 
-If fso.FileExists(cmdPath) Then
-  shell.Run Chr(34) & cmdPath & Chr(34), 0, False
+exitCode = sh.Run(Chr(34) & silentCmd & Chr(34), 0, True)
+
+If exitCode <> 0 Then
+  MsgBox "ViewerOne could not start." & vbCrLf & vbCrLf & "Log: " & logFile, vbCritical, "ViewerOne"
+  WScript.Quit exitCode
 End If

@@ -1,5 +1,11 @@
 # Changelog
 
+## Launcher (desktop / taskbar)
+
+Daily shortcut is back to the old path: make sure npm is on PATH, `npm run build`,
+start `electron.exe`. No git pull, no GitHub download, no extra branches on click.
+VBScript uses `sh.Run(...)` so Windows no longer shows **Expected end of statement**.
+
 ## v6.00.00 — Lighting Director
 
 Major release: sound-to-light sidecar, Cubase-render analysis, IEM click track, and Lighting Studio.
