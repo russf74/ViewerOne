@@ -47,7 +47,6 @@ npm run launch
 
 - Dev/build only: `npm run build`
 - Installer / portable Windows build: `npm run dist` (output under `release/`)
-- Refresh Desktop shortcut: `npm run install-shortcut`
 - Shortcut scripts (after clone): `ViewerOne-Launch.cmd` / `ViewerOne-Launch.vbs`
 
 ### 3. Restore setlist / app config
