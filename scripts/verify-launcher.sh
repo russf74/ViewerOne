@@ -6,6 +6,8 @@ cd "$(dirname "$0")/.."
 test -f ViewerOne-Launch.vbs
 test -f ViewerOne-Launch-Silent.cmd
 test -f scripts/launch-viewerone.ps1
+test -f scripts/stop-viewerone.vbs
+test -f scripts/repair-shortcuts.vbs
 
 ver=$(node -p "require('./package.json').version")
 major=$(node -p "require('./package.json').version.split('.')[0]")

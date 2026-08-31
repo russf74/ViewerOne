@@ -1,5 +1,10 @@
 # Changelog
 
+## v6.00.02
+
+- Taskbar/desktop shortcuts are rewritten to the launcher so a click syncs GitHub `main` (not a stale `electron.exe` pin). Running ViewerOne is closed first so the update can apply. Control shows **v6.00.02**.
+- If the app is still behind GitHub, it quits and the launcher rebuilds/reopens.
+
 ## v6.00.01
 
 - Lighting Studio loopback is a dropdown of enabled Windows recording devices (Stereo Mix / CABLE / Voicemeeter first). Short names like `Stereo Mix` auto-match the full device name.

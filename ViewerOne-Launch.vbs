@@ -1,12 +1,16 @@
 Option Explicit
 
-' Auto-updates from GitHub, then launches silently. No popups.
-Dim shell, fso, repo, cmdPath, url, http, stream
+' Download latest silent launcher, run a TEMP copy (so git reset cannot
+' rewrite the running script), then that copy syncs GitHub and opens ViewerOne.
+
+Dim shell, fso, repo, cmdPath, runPath, url, http, stream, tempDir
 
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 repo = fso.GetParentFolderName(WScript.ScriptFullName)
 cmdPath = repo & "\ViewerOne-Launch-Silent.cmd"
+tempDir = shell.ExpandEnvironmentStrings("%TEMP%")
+runPath = tempDir & "\viewerone-launch-run.cmd"
 url = "https://raw.githubusercontent.com/russf74/ViewerOne/main/ViewerOne-Launch-Silent.cmd"
 
 On Error Resume Next
@@ -27,5 +31,6 @@ End If
 On Error GoTo 0
 
 If fso.FileExists(cmdPath) Then
-  shell.Run Chr(34) & cmdPath & Chr(34), 0, False
+  fso.CopyFile cmdPath, runPath, True
+  shell.Run "cmd.exe /c """ & runPath & """ """ & repo & """", 0, False
 End If
