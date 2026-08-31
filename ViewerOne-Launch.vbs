@@ -1,27 +1,28 @@
 Option Explicit
 
-Dim shell, fso, folder, batch, exitCode, logFile, logText, f
+' Auto-updates from GitHub, then launches silently. No popups.
+Dim shell, fso, repo, cmdPath, url, xhr, stream
 
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
-folder = fso.GetParentFolderName(WScript.ScriptFullName)
-batch = folder & "\ViewerOne-Launch-Silent.cmd"
-logFile = shell.ExpandEnvironmentStrings("%TEMP%") & "\viewerone-launch.log"
+repo = fso.GetParentFolderName(WScript.ScriptFullName)
+cmdPath = repo & "\ViewerOne-Launch-Silent.cmd"
+url = "https://raw.githubusercontent.com/russf74/ViewerOne/main/ViewerOne-Launch-Silent.cmd"
 
-If Not fso.FileExists(batch) Then
-  MsgBox "ViewerOne launcher missing:" & vbCrLf & batch, vbCritical, "ViewerOne"
-  WScript.Quit 1
+On Error Resume Next
+Set xhr = CreateObject("MSXML2.XMLHTTP")
+xhr.Open "GET", url, False
+xhr.Send
+If xhr.Status = 200 Then
+  Set stream = CreateObject("ADODB.Stream")
+  stream.Type = 1
+  stream.Open
+  stream.Write xhr.responseBody
+  stream.SaveToFile cmdPath, 2
+  stream.Close
 End If
+On Error GoTo 0
 
-exitCode = shell.Run(Chr(34) & batch & Chr(34), 0, True)
-
-If exitCode <> 0 Then
-  logText = "Log: " & logFile
-  If fso.FileExists(logFile) Then
-    Set f = fso.OpenTextFile(logFile, 1)
-    logText = f.ReadAll
-    f.Close
-    If Len(logText) > 600 Then logText = "..." & Right(logText, 600)
-  End If
-  MsgBox "ViewerOne did not start." & vbCrLf & vbCrLf & logText, vbCritical, "ViewerOne"
+If fso.FileExists(cmdPath) Then
+  shell.Run Chr(34) & cmdPath & Chr(34), 0, False
 End If
