@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.04
+
+- Updater is **visible** (black “ViewerOne update” window). It force-closes `ViewerOne.exe` and `electron.exe`, pulls GitHub, and **will not start** if the tree is still 6.00.00. Instant open = the old installed icon, not this updater.
+
 ## v6.00.03
 
 - Launcher now force-closes `electron.exe` (does not depend on extra scripts that old disks lack), then syncs GitHub. If the tree is still 6.00.00, it overlays a zip of `main` and rebuilds. Control shows **v6.00.03**.
