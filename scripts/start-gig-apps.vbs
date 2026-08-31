@@ -2,6 +2,8 @@ Option Explicit
 
 ' Start X32-Edit, Cubase 15, and ViewerOne at Windows logon.
 ' Invoked by Task Scheduler "ViewerOne Gig Startup" (and start-gig-apps.cmd).
+' Does not rebuild ViewerOne — launches electron.exe directly.
+' Paths under the user profile work on the backup PC even if the account name differs.
 
 Dim sh, fso, wmi
 Dim userProfile, pf86
@@ -60,9 +62,7 @@ StartExe "Cubase15.exe", cubase
 WScript.Sleep 5000
 
 If Not ViewerOneRunning() Then
-  If fso.FileExists(viewerOneDir & "\ViewerOne-Launch.vbs") Then
-    sh.Run "wscript.exe """ & viewerOneDir & "\ViewerOne-Launch.vbs""", 0, False
-  ElseIf fso.FileExists(viewerOneDir & "\node_modules\electron\dist\electron.exe") Then
+  If fso.FileExists(viewerOneDir & "\node_modules\electron\dist\electron.exe") Then
     sh.CurrentDirectory = viewerOneDir
     sh.Run """" & viewerOneDir & "\node_modules\electron\dist\electron.exe"" .", 1, False
   End If
