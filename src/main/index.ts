@@ -2,7 +2,6 @@ import { installProcessGuards } from './processGuards.js'
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { setupAppMenu } from './menu.js'
 import { existsSync, writeFileSync } from 'node:fs'
-import { spawn } from 'node:child_process'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -123,23 +122,6 @@ installProcessGuards()
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
-
-function refreshViewerOneShortcutsSilently(): void {
-  if (process.platform !== 'win32') return
-  try {
-    const root = join(__dirname, '../..')
-    const ps1 = join(root, 'scripts', 'install-viewerone-shortcut.ps1')
-    if (!existsSync(ps1)) return
-    const child = spawn(
-      process.env.ComSpec || 'cmd.exe',
-      ['/d', '/s', '/c', `powershell -NoProfile -ExecutionPolicy Bypass -File "${ps1}"`],
-      { detached: true, stdio: 'ignore', windowsHide: true, cwd: root }
-    )
-    child.unref()
-  } catch {
-    /* best effort */
-  }
-}
 
 function preloadScriptPath(): string {
   const mjs = join(__dirname, '../preload/index.mjs')
@@ -3395,7 +3377,6 @@ if (!gotTheLock) {
   })
 
   app.whenReady().then(() => {
-    refreshViewerOneShortcutsSilently()
     ensureLoopMidiRunning()
     resetCountdownForSong(getState(store).currentSongId)
     startCountdownTicker()

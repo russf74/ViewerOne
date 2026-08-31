@@ -2,11 +2,10 @@ Option Explicit
 
 ' Start X32-Edit, Cubase 15, and ViewerOne at Windows logon.
 ' Invoked by Task Scheduler "ViewerOne Gig Startup" (and start-gig-apps.cmd).
-' Syncs ViewerOne repo + refreshes shortcuts before launch.
 
 Dim sh, fso, wmi
 Dim userProfile, pf86
-Dim xedit, cubase, viewerOneDir, loopMidiA, loopMidiB, pullCmd, ps1, launcherVbs
+Dim xedit, cubase, viewerOneDir, loopMidiA, loopMidiB
 
 Set sh = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
@@ -49,15 +48,6 @@ Sub StartExe(imageName, exePath)
   sh.Run """" & exePath & """", 1, False
 End Sub
 
-If fso.FolderExists(viewerOneDir) Then
-  pullCmd = "cmd /c cd /d """ & viewerOneDir & """ && git pull --ff-only origin main 2>nul"
-  sh.Run pullCmd, 0, True
-  ps1 = viewerOneDir & "\scripts\install-viewerone-shortcut.ps1"
-  If fso.FileExists(ps1) Then
-    sh.Run "powershell -NoProfile -ExecutionPolicy Bypass -File """ & ps1 & """", 0, True
-  End If
-End If
-
 If fso.FileExists(loopMidiA) Then
   StartExe "loopMIDI.exe", loopMidiA
 ElseIf fso.FileExists(loopMidiB) Then
@@ -70,10 +60,7 @@ StartExe "Cubase15.exe", cubase
 WScript.Sleep 5000
 
 If Not ViewerOneRunning() Then
-  launcherVbs = userProfile & "\AppData\Local\ViewerOne\ViewerOne-Launch.vbs"
-  If fso.FileExists(launcherVbs) Then
-    sh.Run "wscript.exe """ & launcherVbs & """", 0, False
-  ElseIf fso.FileExists(viewerOneDir & "\ViewerOne-Launch.vbs") Then
+  If fso.FileExists(viewerOneDir & "\ViewerOne-Launch.vbs") Then
     sh.Run "wscript.exe """ & viewerOneDir & "\ViewerOne-Launch.vbs""", 0, False
   ElseIf fso.FileExists(viewerOneDir & "\node_modules\electron\dist\electron.exe") Then
     sh.CurrentDirectory = viewerOneDir

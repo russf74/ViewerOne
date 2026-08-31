@@ -832,15 +832,18 @@ function Install-ViewerOneShortcut {
 }
 
 function Install-GigStartupTask([string]$ViewerOneDir) {
-  $rawUrl = 'https://raw.githubusercontent.com/russf74/ViewerOne/main/scripts/remote-bootstrap.ps1'
-  $arg = "-NoProfile -ExecutionPolicy Bypass -Command ""& { `$p=`$env:TEMP+'\vo-boot.ps1'; (New-Object Net.WebClient).DownloadFile('$rawUrl', `$p); & `$p -RepoRoot '$ViewerOneDir' -Mode Logon }"""
-  $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg -WorkingDirectory $ViewerOneDir
+  $vbs = Join-Path $ViewerOneDir 'scripts\start-gig-apps.vbs'
+  if (-not (Test-Path -LiteralPath $vbs)) {
+    Write-Warn "Startup script missing -- scheduled task not created: $vbs"
+    return
+  }
+  $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\wscript.exe" -Argument "//nologo `"$vbs`"" -WorkingDirectory $ViewerOneDir
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
   $trigger.Delay = 'PT45S'
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
   $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-  Register-ScheduledTask -TaskName 'ViewerOne Gig Startup' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'Sync ViewerOne v6 + start gig apps after logon' -Force | Out-Null
-  Write-Ok 'Scheduled task: ViewerOne Gig Startup (network bootstrap at logon + 45s)'
+  Register-ScheduledTask -TaskName 'ViewerOne Gig Startup' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'Start X32-Edit, Cubase 15, and ViewerOne after Windows logon' -Force | Out-Null
+  Write-Ok "Scheduled task: ViewerOne Gig Startup (at logon + 45s)"
 }
 
 function Export-LoopMidiReg([string]$DestFile) {

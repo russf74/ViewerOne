@@ -1,8 +1,16 @@
 @echo off
-REM ViewerOne — always syncs v6 from GitHub, fixes taskbar/desktop pin, builds, launches.
-set "REPO=%~dp0"
-if exist "%LOCALAPPDATA%\ViewerOne\repo.txt" (
-  set /p REPO=<"%LOCALAPPDATA%\ViewerOne\repo.txt"
+REM Dev launcher with visible log. For normal use, double-click ViewerOne-Launch.vbs instead.
+cd /d "%~dp0"
+where npm >nul 2>nul || (
+  echo ViewerOne: Node.js/npm not found in PATH. Install Node.js LTS.
+  pause
+  exit /b 1
 )
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $p=$env:TEMP+'\vo-bootstrap.ps1'; (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/russf74/ViewerOne/main/scripts/remote-bootstrap.ps1',$p); & $p -RepoRoot '%REPO%' -Mode Launch }"
-exit /b %ERRORLEVEL%
+git pull --ff-only origin main 2>nul
+call npm run launch
+if errorlevel 1 (
+  echo.
+  echo ViewerOne: launch failed.
+  pause
+  exit /b 1
+)
