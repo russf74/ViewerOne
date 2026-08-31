@@ -98,7 +98,7 @@ export function synthesizeClickTrack(
   const countInMs = Math.round(
     opts.countInBars * opts.beatsPerBar * (60000 / Math.max(60, analysis.bpm))
   )
-  const totalMs = countInMs + analysis.durationMs + 500
+  const totalMs = countInMs + analysis.durationMs
   const sampleRate = opts.sampleRate
   const totalSamples = Math.ceil((totalMs / 1000) * sampleRate)
   const mix = new Float32Array(totalSamples)

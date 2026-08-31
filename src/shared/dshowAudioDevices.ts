@@ -16,6 +16,17 @@ export function isLikelyLoopbackDevice(name: string): boolean {
 
 /** Unique audio device names from ffmpeg `-f dshow -list_devices true` output. */
 export function parseDshowAudioDevices(output: string): string[] {
+  const tagged: string[] = []
+  for (const raw of output.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (/alternative name/i.test(line)) continue
+    const taggedMatch = line.match(/"([^"]+)"\s*\((audio|video)\)/i)
+    if (taggedMatch?.[1] && taggedMatch[2].toLowerCase() === 'audio') {
+      tagged.push(taggedMatch[1])
+    }
+  }
+  if (tagged.length > 0) return [...new Set(tagged)]
+
   const names: string[] = []
   let inAudio = false
   for (const raw of output.split(/\r?\n/)) {
@@ -31,7 +42,7 @@ export function parseDshowAudioDevices(output: string): string[] {
     if (!inAudio) continue
     if (/alternative name/i.test(line)) continue
     const quoted = line.match(/"([^"]+)"/)
-    if (quoted?.[1]) names.push(quoted[1])
+    if (quoted?.[1] && !quoted[1].startsWith('@device')) names.push(quoted[1])
   }
   return [...new Set(names)]
 }
@@ -76,4 +87,31 @@ export function resolveLoopbackDevice(saved: string, devices: string[]): string 
     if (mixes.length === 1) return mixes[0]
   }
   return null
+}
+
+/** ffmpeg dshow input. Do not wrap the name in extra quotes — Node spawn already quotes the argv. */
+export function dshowAudioFilename(deviceName: string): string {
+  const name = deviceName.trim()
+  if (!name) return 'audio=Stereo Mix'
+  return `audio=${name}`
+}
+
+/** Prefer the real dshow reason over ffmpeg's generic last line. */
+export function formatDshowOpenError(stderr: string, deviceName: string): string {
+  const lines = stderr
+    .split(/\r?\n/)
+    .map((l) => l.replace(/^\[dshow[^\]]*\]\s*/i, '').trim())
+    .filter(Boolean)
+  const useful = [...lines]
+    .reverse()
+    .find(
+      (l) =>
+        /could not|not find|permission|denied|busy|in use|no such/i.test(l) &&
+        !/opening input files/i.test(l)
+    )
+  if (/i\/o error/i.test(stderr) || /could not find/i.test(stderr) || /could not audio/i.test(stderr)) {
+    const shown = deviceName.trim() || 'this device'
+    return `Can't open “${shown}”. Enable it in Sound → Recording (Show Disabled Devices), allow Microphone for desktop apps, Refresh, and pick the full name — not just “Stereo Mix”.`
+  }
+  return useful ?? lines[lines.length - 1] ?? 'Loopback open failed'
 }

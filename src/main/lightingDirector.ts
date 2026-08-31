@@ -82,7 +82,7 @@ export class LightingDirector {
     this.applyCue(cue)
   }
 
-  arm(song: SetlistItem | null, liveAudio: boolean): void {
+  arm(song: SetlistItem | null, liveAudio: boolean, loopbackDevice?: string): void {
     this.disarm(false)
     if (!song?.lightingProgram?.cues?.length) {
       this.active = false
@@ -99,6 +99,7 @@ export class LightingDirector {
 
     if (liveAudio && this.analysis) {
       this.liveCapture.start({
+        deviceName: loopbackDevice,
         onError: (msg) => console.warn('[ViewerOne] Live audio:', msg)
       })
     }
@@ -138,7 +139,7 @@ export class LightingDirector {
           volume: clickSettings.volume,
           accentVolume: clickSettings.accentVolume,
           accentEvery: clickSettings.accentEvery,
-          countInBars: clickSettings.countInBars
+          countInBars: 0
         })
         clickTrackPath = written.path
         clickTrackCountInMs = written.countInMs

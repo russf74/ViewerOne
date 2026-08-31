@@ -1,5 +1,50 @@
 # Changelog
 
+## v6.00.17
+
+- Click WAV is now the same length as the Cubase render (no prepended count-in, which had shifted every beat). Beat grid uses a constant-tempo tracker plus kick-phase so the click sits on the song, not a dummy 120/136 grid.
+- Lighting programs change ESP pattern every section. Freedom Sticks and the spinning PowerDome use complementary looks instead of copying the LED strip.
+
+## v6.00.16
+
+- Analyze from Cubase Space-play now actually presses Space (PowerShell was dropping the key). WAV peak is read from the `data` chunk so silent captures cannot get a fake 120 BPM lighting program. Quiet Stereo Mix recordings are peak-normalized before BPM/section analysis (loopback sits around −36 dB FS).
+
+## v6.00.15
+
+- Lighting analysis uses energy-flux onsets instead of a naive DFT (a 4-minute Cubase render was taking many minutes). Analyze walks scanned arranger songs only (skips leftover rows with no arranger index). Capture unmutes Cubase ALL/FX and Space-starts transport so Stereo Mix actually hears playback.
+
+## v6.00.14
+
+- Analyze from Cubase locates songs by arranger name (same OCR path as length scan) instead of waiting for song PCs after rewind. First-song `--lighting-analyze-max=1` no longer dies when Cubase does not re-send a PC.
+
+## v6.00.13
+
+- Analyze from Cubase now waits for a real song Program Change after rewind (same Next/timeout as Arranger scan) instead of giving up after 800ms.
+
+## v6.00.12
+
+- Analyze from Cubase skips Soundcheck/Intro/Outro. `--lighting-analyze-max=N` captures N performance songs then stops (first-song test without playing the whole set).
+
+## v6.00.11
+
+- Loopback meter uses a 40ms DirectShow buffer and faster peak fall-off so the bar tracks Cubase instead of lagging on the default capture latency.
+
+## v6.00.10
+
+- Loopback open was wrapping the device name in extra quotes. Node spawn already quotes the argument, so ffmpeg looked for `"Stereo Mix (Realtek(R) Audio)"` (with quote marks) and failed. Cubase does not need to be closed.
+
+## v6.00.09
+
+- ffmpeg 6.1 lists DirectShow devices as `"Name" (audio)` with no section headers. The old parser saw zero devices, so the meter kept opening short `Stereo Mix` and failed with I/O error.
+
+## v6.00.08
+
+- Loopback meter/capture now quotes and resolves the full DirectShow name (e.g. `Stereo Mix (Realtek…)`). Short `Stereo Mix` was opening as an I/O error.
+
+## v6.00.07
+
+- Lighting Studio loopback meter: live signal bar of the selected recording device so you can confirm Cubase is reaching Analyze without the Windows volume/Recording tab.
+
 ## v6.00.06
 
 - **Local again.** Shortcut builds and opens the folder on this PC. GitHub is backup only (fast-forward pull if this folder is a git clone). No script download, no `git reset`, no cloud updater.

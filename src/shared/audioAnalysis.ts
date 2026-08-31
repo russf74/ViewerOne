@@ -69,72 +69,191 @@ function frameEnergy(samples: Float32Array, frameSize: number): Float32Array {
   return energy
 }
 
+/** Half-wave energy flux of a 1-pole highpass — O(n), not a DFT. */
 function spectralFlux(samples: Float32Array, frameSize: number, hop: number): Float32Array {
   const frames = Math.max(1, Math.floor((samples.length - frameSize) / hop))
   const flux = new Float32Array(frames)
-  let prev = new Float32Array(frameSize / 2)
+  let prev = 0
   for (let f = 0; f < frames; f++) {
     const start = f * hop
-    const mag = new Float32Array(frameSize / 2)
-    for (let k = 0; k < frameSize / 2; k++) {
-      let re = 0
-      let im = 0
-      for (let n = 0; n < frameSize; n++) {
-        const x = samples[start + n] ?? 0
-        const angle = (2 * Math.PI * k * n) / frameSize
-        re += x * Math.cos(angle)
-        im -= x * Math.sin(angle)
-      }
-      mag[k] = Math.sqrt(re * re + im * im)
-    }
     let sum = 0
-    for (let k = 0; k < mag.length; k++) {
-      const d = mag[k] - prev[k]
-      if (d > 0) sum += d
+    let hpPrev = samples[start] ?? 0
+    for (let n = 1; n < frameSize; n++) {
+      const x = samples[start + n] ?? 0
+      const hp = x - hpPrev
+      hpPrev = x
+      sum += hp * hp
     }
-    flux[f] = sum
-    prev = mag
+    const energy = Math.sqrt(sum / Math.max(1, frameSize - 1))
+    flux[f] = Math.max(0, energy - prev)
+    prev = energy
   }
   return flux
 }
 
-function pickOnsets(flux: Float32Array, hopMs: number): number[] {
-  if (flux.length < 3) return []
-  const sorted = [...flux].sort((a, b) => a - b)
-  const median = sorted[Math.floor(sorted.length / 2)] ?? 0
-  const threshold = median * 1.4 + 0.002
-  const minGapMs = 120
-  const onsets: number[] = []
-  let lastMs = -minGapMs
-  for (let i = 1; i < flux.length - 1; i++) {
-    const v = flux[i]
-    if (v < threshold) continue
-    if (v <= flux[i - 1] || v < flux[i + 1]) continue
-    const ms = i * hopMs
-    if (ms - lastMs < minGapMs) {
-      if (v > (flux[Math.round(lastMs / hopMs)] ?? 0)) {
-        onsets[onsets.length - 1] = ms
-      }
-      continue
-    }
-    onsets.push(ms)
-    lastMs = ms
+function peakOf(samples: Float32Array): number {
+  let peak = 0
+  for (let i = 0; i < samples.length; i++) {
+    const a = Math.abs(samples[i])
+    if (a > peak) peak = a
   }
-  return onsets
+  return peak
 }
 
-function estimateBpm(onsetsMs: number[]): { bpm: number; offsetMs: number } {
-  if (onsetsMs.length < 4) return { bpm: 120, offsetMs: onsetsMs[0] ?? 0 }
-  const intervals: number[] = []
-  for (let i = 1; i < onsetsMs.length; i++) {
-    const d = onsetsMs[i] - onsetsMs[i - 1]
-    if (d >= 250 && d <= 1200) intervals.push(d)
+/** Scale to ~0.95 peak so quiet Stereo Mix captures still have usable onsets. */
+function peakNormalize(samples: Float32Array, peak: number, target = 0.95): Float32Array {
+  if (peak < 0.004) return samples
+  const g = target / peak
+  const out = new Float32Array(samples.length)
+  for (let i = 0; i < samples.length; i++) out[i] = samples[i] * g
+  return out
+}
+
+function energyNovelty(energy: Float32Array): Float32Array {
+  const out = new Float32Array(energy.length)
+  for (let i = 1; i < energy.length; i++) {
+    out[i] = Math.max(0, energy[i] - energy[i - 1])
   }
-  if (intervals.length === 0) return { bpm: 120, offsetMs: onsetsMs[0] ?? 0 }
-  intervals.sort((a, b) => a - b)
-  const beatMs = intervals[Math.floor(intervals.length / 2)]
-  const bpm = Math.max(60, Math.min(200, Math.round(60000 / beatMs)))
-  return { bpm, offsetMs: onsetsMs[0] ?? 0 }
+  return out
+}
+
+function combineNovelty(flux: Float32Array, energyNov: Float32Array): Float32Array {
+  const n = Math.min(flux.length, energyNov.length)
+  const out = new Float32Array(n)
+  for (let i = 0; i < n; i++) out[i] = flux[i] + energyNov[i]
+  return out
+}
+
+function meanNoveltyOnGrid(
+  novelty: Float32Array,
+  hopMs: number,
+  beatMs: number,
+  offsetMs: number
+): number {
+  let sum = 0
+  let n = 0
+  const lastMs = novelty.length * hopMs
+  for (let t = offsetMs; t < lastMs; t += beatMs) {
+    const i = t / hopMs
+    const i0 = Math.floor(i)
+    if (i0 < 0 || i0 >= novelty.length) continue
+    const frac = i - i0
+    const a = novelty[i0] ?? 0
+    const b = novelty[i0 + 1] ?? a
+    sum += a * (1 - frac) + b * frac
+    n++
+  }
+  return n > 0 ? sum / n : 0
+}
+
+/** Constant-tempo beat tracker: BPM + phase that best hit the onset envelope. */
+function trackTempoAndPhase(novelty: Float32Array, hopMs: number): { bpm: number; offsetMs: number } {
+  if (novelty.length < 8) return { bpm: 120, offsetMs: 0 }
+  const minBpm = 84
+  const maxBpm = 168
+  let bestBpm = 120
+  let bestOff = 0
+  let bestScore = -1
+  for (let bpm = minBpm; bpm <= maxBpm; bpm++) {
+    const beatMs = 60000 / bpm
+    const steps = Math.max(4, Math.round(beatMs / hopMs))
+    for (let s = 0; s < steps; s++) {
+      const offsetMs = s * hopMs
+      const score = meanNoveltyOnGrid(novelty, hopMs, beatMs, offsetMs)
+      if (score > bestScore) {
+        bestScore = score
+        bestBpm = bpm
+        bestOff = offsetMs
+      }
+    }
+  }
+  return { bpm: bestBpm, offsetMs: bestOff }
+}
+
+function onePoleLowpass(samples: Float32Array, alpha = 0.045): Float32Array {
+  const out = new Float32Array(samples.length)
+  let y = 0
+  for (let i = 0; i < samples.length; i++) {
+    y += alpha * (samples[i] - y)
+    out[i] = y
+  }
+  return out
+}
+
+/** Prefer kick phase over snare (half-beat) using low-frequency novelty. */
+function pickKickPhase(
+  bassNovelty: Float32Array,
+  hopMs: number,
+  bpm: number,
+  offsetMs: number
+): number {
+  const beatMs = 60000 / bpm
+  const wrap = (ms: number) => ((ms % beatMs) + beatMs) % beatMs
+  const a = wrap(offsetMs)
+  const b = wrap(offsetMs + beatMs / 2)
+  const sa = meanNoveltyOnGrid(bassNovelty, hopMs, beatMs, a)
+  const sb = meanNoveltyOnGrid(bassNovelty, hopMs, beatMs, b)
+  let chosen = sa >= sb ? a : b
+  const best = Math.max(sa, sb)
+  const nearZero = a <= hopMs * 2 ? a : b <= hopMs * 2 ? b : chosen
+  if (nearZero !== chosen) {
+    const s0 = meanNoveltyOnGrid(bassNovelty, hopMs, beatMs, nearZero)
+    if (s0 >= best * 0.9) chosen = nearZero
+  }
+  return chosen
+}
+
+function musicalSections(
+  energyFrames: Float32Array,
+  hopMs: number,
+  durationMs: number,
+  bpm: number
+): SongSection[] {
+  if (energyFrames.length === 0) {
+    return [{ label: 'unknown', startMs: 0, energy: 0.5 }]
+  }
+  const barMs = (60000 / Math.max(60, bpm)) * 4
+  const blockMs = Math.max(barMs * 4, 8000)
+  const blockFrames = Math.max(1, Math.round(blockMs / hopMs))
+  const maxE = Math.max(...energyFrames, 0.001)
+  const chunks: { startMs: number; energy: number }[] = []
+  for (let i = 0; i < energyFrames.length; i += blockFrames) {
+    const end = Math.min(energyFrames.length, i + blockFrames)
+    let sum = 0
+    for (let j = i; j < end; j++) sum += energyFrames[j]
+    chunks.push({
+      startMs: Math.round(i * hopMs),
+      energy: sum / Math.max(1, end - i) / maxE
+    })
+  }
+  const sorted = chunks.map((c) => c.energy).sort((a, b) => a - b)
+  const p33 = sorted[Math.floor(sorted.length * 0.33)] ?? 0.4
+  const p66 = sorted[Math.floor(sorted.length * 0.66)] ?? 0.7
+  const rotate: SongSectionLabel[] = ['verse', 'chorus', 'prechorus', 'bridge', 'drop']
+  const out: SongSection[] = []
+  let rot = 0
+  for (let i = 0; i < chunks.length; i++) {
+    const c = chunks[i]
+    let label: SongSectionLabel
+    if (i === 0) label = 'intro'
+    else if (c.startMs > durationMs * 0.88) label = 'outro'
+    else if (c.energy >= p66) label = i % 3 === 0 ? 'drop' : 'chorus'
+    else if (c.energy <= p33) label = 'verse'
+    else label = i % 2 === 0 ? 'prechorus' : 'bridge'
+    const prev = out[out.length - 1]
+    if (prev && prev.label === 'outro' && label === 'outro') continue
+    if (prev && prev.label === label && label !== 'outro') {
+      rot++
+      label = rotate[rot % rotate.length]
+      if (label === prev.label) label = rotate[(rot + 1) % rotate.length]
+    }
+    out.push({
+      label,
+      startMs: c.startMs,
+      energy: Math.round(c.energy * 1000) / 1000
+    })
+  }
+  return out
 }
 
 function buildBeatGrid(durationMs: number, bpm: number, offsetMs: number): number[] {
@@ -148,47 +267,6 @@ function buildBeatGrid(durationMs: number, bpm: number, offsetMs: number): numbe
   return beats
 }
 
-function labelSections(energyFrames: Float32Array, frameMs: number, durationMs: number): SongSection[] {
-  if (energyFrames.length === 0) {
-    return [{ label: 'unknown', startMs: 0, energy: 0.5 }]
-  }
-  const maxE = Math.max(...energyFrames, 0.001)
-  const norm = energyFrames.map((e) => e / maxE)
-
-  // Merge ~4s windows into section boundaries via energy jumps.
-  const windowFrames = Math.max(1, Math.round(4000 / frameMs))
-  const sections: SongSection[] = []
-  let cursor = 0
-  let sectionIdx = 0
-  while (cursor < norm.length) {
-    const end = Math.min(norm.length, cursor + windowFrames)
-    let sum = 0
-    for (let i = cursor; i < end; i++) sum += norm[i]
-    const avg = sum / Math.max(1, end - cursor)
-    const startMs = Math.round(cursor * frameMs)
-    const label = sectionLabelForIndex(sectionIdx, avg, startMs, durationMs)
-    sections.push({ label, startMs, energy: Math.round(avg * 1000) / 1000 })
-    cursor = end
-    sectionIdx++
-  }
-  if (sections.length === 0) sections.push({ label: 'unknown', startMs: 0, energy: 0.5 })
-  return sections
-}
-
-function sectionLabelForIndex(
-  index: number,
-  energy: number,
-  startMs: number,
-  durationMs: number
-): SongSectionLabel {
-  if (startMs < 8000 && index === 0) return 'intro'
-  if (startMs > durationMs * 0.88) return 'outro'
-  if (energy < 0.35) return index % 2 === 0 ? 'breakdown' : 'verse'
-  if (energy > 0.82) return index % 3 === 0 ? 'drop' : 'chorus'
-  if (energy > 0.62) return index % 2 === 0 ? 'chorus' : 'prechorus'
-  return index % 2 === 0 ? 'verse' : 'bridge'
-}
-
 /**
  * Analyze mono PCM (float -1..1). Returns BPM, beat grid, and section map.
  */
@@ -197,7 +275,9 @@ export function analyzeMonoPcm(
   sampleRate: number,
   durationMsOverride?: number
 ): SongAudioAnalysis {
-  const pcm = resampleMonoPcm(samples, sampleRate, ANALYSIS_SAMPLE_RATE)
+  const resampled = resampleMonoPcm(samples, sampleRate, ANALYSIS_SAMPLE_RATE)
+  const peak = peakOf(resampled)
+  const pcm = peakNormalize(resampled, peak)
   const durationMs =
     durationMsOverride ?? Math.round((pcm.length / ANALYSIS_SAMPLE_RATE) * 1000)
 
@@ -206,18 +286,13 @@ export function analyzeMonoPcm(
   const hopMs = (hop / ANALYSIS_SAMPLE_RATE) * 1000
 
   const flux = spectralFlux(pcm, frameSize, hop)
-  const onsets = pickOnsets(flux, hopMs)
-  const { bpm, offsetMs } = estimateBpm(onsets)
-  const beatTimesMs = buildBeatGrid(durationMs, bpm, offsetMs)
-
   const energyFrames = frameEnergy(pcm, hop)
-  const sections = labelSections(energyFrames, hopMs, durationMs)
-
-  let peak = 0
-  for (let i = 0; i < pcm.length; i++) {
-    const a = Math.abs(pcm[i])
-    if (a > peak) peak = a
-  }
+  const novelty = combineNovelty(flux, energyNovelty(energyFrames))
+  const { bpm, offsetMs: rawOff } = trackTempoAndPhase(novelty, hopMs)
+  const bassNov = energyNovelty(frameEnergy(onePoleLowpass(pcm), hop))
+  const offsetMs = pickKickPhase(bassNov, hopMs, bpm, rawOff)
+  const beatTimesMs = buildBeatGrid(durationMs, bpm, offsetMs)
+  const sections = musicalSections(energyFrames, hopMs, durationMs, bpm)
 
   return {
     analyzedAt: new Date().toISOString(),

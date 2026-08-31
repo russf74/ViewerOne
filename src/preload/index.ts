@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { LoopbackMeterSample } from '../shared/audioLevel.js'
 import type { AppState, PublicState, SetlistItem } from '../shared/types.js'
 
 const api = {
@@ -46,7 +47,15 @@ const api = {
   cancelLightingAnalyze: (): Promise<PublicState> => ipcRenderer.invoke('lighting:cancelAnalyze'),
   setLightingProgram: (songId: string, program: unknown): Promise<PublicState> =>
     ipcRenderer.invoke('lighting:setProgram', songId, program),
-  listLoopbackDevices: (): Promise<string[]> => ipcRenderer.invoke('lighting:listLoopbackDevices')
+  listLoopbackDevices: (): Promise<string[]> => ipcRenderer.invoke('lighting:listLoopbackDevices'),
+  startLoopbackMeter: (deviceName: string): Promise<string | null> =>
+    ipcRenderer.invoke('lighting:startLoopbackMeter', deviceName),
+  stopLoopbackMeter: (): Promise<void> => ipcRenderer.invoke('lighting:stopLoopbackMeter'),
+  onLoopbackMeter: (fn: (s: LoopbackMeterSample) => void): (() => void) => {
+    const listener = (_: Electron.IpcRendererEvent, s: LoopbackMeterSample) => fn(s)
+    ipcRenderer.on('lighting:loopbackMeter', listener)
+    return () => ipcRenderer.removeListener('lighting:loopbackMeter', listener)
+  }
 }
 
 contextBridge.exposeInMainWorld('viewer', api)

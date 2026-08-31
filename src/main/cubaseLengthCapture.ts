@@ -306,6 +306,7 @@ function runPowershell(args: string[], timeoutMs = POWERSHELL_TIMEOUT_MS): Promi
     action === 'expand' ||
     action === 'renderprep' ||
     action === 'stop' ||
+    action === 'play' ||
     action === 'zoom'
   ) {
     return runOnPsHost(args, timeoutMs)
@@ -1177,6 +1178,15 @@ export async function cubaseRenderPrepare(eventName: string): Promise<CubaseLeng
 export async function cubasePsStop(): Promise<void> {
   try {
     await runPowershell(['stop', tempWorkDir(), ''], POWERSHELL_TIMEOUT_MS)
+  } catch {
+    /* best effort */
+  }
+}
+
+/** Foreground Cubase and Space — actual transport Play (MIDI Start often does not roll ASIO/Stereo Mix). */
+export async function cubasePsPlay(): Promise<void> {
+  try {
+    await runPowershell(['play', tempWorkDir(), ''], POWERSHELL_TIMEOUT_MS)
   } catch {
     /* best effort */
   }

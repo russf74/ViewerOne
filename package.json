@@ -1,6 +1,6 @@
 {
   "name": "viewer-one",
-  "version": "6.0.6",
+  "version": "6.0.17",
   "description": "Live setlist display + MIDI control for Cubase",
   "author": "ViewerOne",
   "main": "out/main/index.js",
@@ -16,7 +16,8 @@
     "gig-backup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/gig-backup/GigBackup.ps1 -Mode Copy",
     "test:audio-analysis": "npx tsx scripts/test-audio-analysis.ts",
     "test:click-track": "npx tsx scripts/test-click-track.ts",
-    "test:dshow-devices": "npx tsx scripts/test-dshow-devices.ts"
+    "test:dshow-devices": "npx tsx scripts/test-dshow-devices.ts",
+    "test:audio-level": "npx tsx scripts/test-audio-level.ts"
   },
   "dependencies": {
     "easymidi": "^3.1.0",

@@ -1,13 +1,17 @@
 import fs from 'node:fs'
 import {
   cubasePsStop,
+  cubasePsPlay,
   cubaseRenderPrepare,
   isKeepableLengthForTitle,
+  prepareCubaseWindowForCapture,
   titlesFuzzyMatch,
   type CubaseLengthRead
 } from './cubaseLengthCapture.js'
 import { cubaseRenderPathForSong } from './cubaseRenderPaths.js'
-import type { LightingAnalyzeScanState, SetlistItem } from '../shared/types.js'
+import type { ClickTrackSettings, LightingAnalyzeScanState, SetlistItem } from '../shared/types.js'
+import type { SongAudioAnalysis } from '../shared/audioAnalysis.js'
+import type { LightingProgram } from '../shared/lightingProgram.js'
 import { LoopbackRecorder } from './loopbackRecord.js'
 import { songLengthSeconds } from '../shared/setlistTiming.js'
 import type { LightingDirector } from './lightingDirector.js'
@@ -27,15 +31,26 @@ export type LightingAnalyzeDeps = {
   /** Isolated Cubase play/stop — must NOT update gig countdown/transport. */
   sendAnalyzePlay: () => void
   sendAnalyzeStop: () => void
+  /** Unmute Cubase ALL/FX for the capture window; restore afterwards. */
+  withLiveMix: <T>(fn: () => Promise<T>) => Promise<T>
   minimizeUi: () => Promise<void>
   restoreUi: () => Promise<void>
   loopbackDevice: string
   clickSettings: ClickTrackSettings
   director: LightingDirector
+  /** Stop after this many successful captures (CLI `--lighting-analyze-max=N`). */
+  maxCaptures?: number
 }
 
 const CAPTURE_PAD_MS = 600
 const MIN_CAPTURE_SEC = 5
+
+function shouldCaptureSong(row: SetlistItem): boolean {
+  const t = row.title.toUpperCase()
+  if (t.includes('SOUNDCHECK')) return false
+  if (t.startsWith('INTRO') || t.startsWith('OUTRO')) return false
+  return row.program >= 1 && row.program <= 119
+}
 
 function isUsablePrep(read: CubaseLengthRead, title: string): boolean {
   return Boolean(
@@ -46,6 +61,32 @@ function isUsablePrep(read: CubaseLengthRead, title: string): boolean {
   )
 }
 
+function wavFilePeak(filePath: string): number {
+  try {
+    const buf = fs.readFileSync(filePath)
+    if (buf.length < 12 || buf.toString('ascii', 0, 4) !== 'RIFF') return 0
+    let offset = 12
+    while (offset + 8 <= buf.length) {
+      const id = buf.toString('ascii', offset, offset + 4)
+      const size = buf.readUInt32LE(offset + 4)
+      const dataStart = offset + 8
+      if (id === 'data') {
+        const end = Math.min(buf.length, dataStart + size)
+        let peak = 0
+        for (let i = dataStart; i + 1 < end; i += 2) {
+          const s = Math.abs(buf.readInt16LE(i))
+          if (s > peak) peak = s
+        }
+        return peak / 32768
+      }
+      offset = dataStart + size + (size % 2)
+    }
+    return 0
+  } catch {
+    return 0
+  }
+}
+
 async function captureRenderedPlayback(
   deps: LightingAnalyzeDeps,
   outputPath: string,
@@ -54,20 +95,31 @@ async function captureRenderedPlayback(
   const recorder = new LoopbackRecorder()
   const durationMs = Math.max(MIN_CAPTURE_SEC, durationSec) * 1000 + CAPTURE_PAD_MS
   try {
-    recorder.start({
-      outputPath,
-      deviceName: deps.loopbackDevice,
-      onError: (msg) => console.warn('[ViewerOne] Loopback record:', msg)
+    return await deps.withLiveMix(async () => {
+      recorder.start({
+        outputPath,
+        deviceName: deps.loopbackDevice,
+        durationSec: durationMs / 1000,
+        onError: (msg) => console.warn('[ViewerOne] Loopback record:', msg)
+      })
+      await deps.sleep(250)
+      deps.sendAnalyzePlay()
+      await cubasePsPlay()
+      await deps.sleep(durationMs + 800)
+      deps.sendAnalyzeStop()
+      await cubasePsStop()
+      await deps.sleep(200)
+      await recorder.stop()
+      await deps.sleep(120)
+      if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size <= 1000) return false
+      const peak = wavFilePeak(outputPath)
+      console.log(`[ViewerOne] Lighting analyze: capture peak ${peak.toFixed(4)} (${outputPath})`)
+      if (peak < 0.004) {
+        console.warn('[ViewerOne] Lighting analyze: capture was silence — Cubase ALL/FX mute or Stereo Mix not hearing playback')
+        return false
+      }
+      return true
     })
-    await deps.sleep(250)
-    deps.sendAnalyzePlay()
-    await deps.sleep(durationMs)
-    deps.sendAnalyzeStop()
-    await cubasePsStop()
-    await deps.sleep(200)
-    await recorder.stop()
-    await deps.sleep(120)
-    return fs.existsSync(outputPath) && fs.statSync(outputPath).size > 1000
   } catch (err) {
     console.warn('[ViewerOne] Render capture failed:', err)
     await recorder.stop()
@@ -115,38 +167,26 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
     phase: 'preparing',
     collected: 0,
     total: setlist.length,
-    message: 'Rewinding Cubase arranger…'
+    message: 'Preparing Cubase for render capture…'
   })
 
   try {
-    await deps.rewindArranger()
+    await prepareCubaseWindowForCapture()
     if (deps.isCancelled()) {
       deps.setScan({ active: false, phase: 'cancelled', message: 'Cancelled.' })
       return
     }
 
-    const programs: number[] = []
-    let currentProgram = deps.getLatestProgram()
-    if (currentProgram == null) {
-      deps.sendArrangerCommand('next')
-      await deps.sleep(800)
-      currentProgram = deps.getLatestProgram()
-    }
-    if (currentProgram == null) {
-      deps.setScan({
-        active: false,
-        phase: 'error',
-        message: 'No Cubase song PC detected — check MIDI connection.'
-      })
-      return
-    }
+    const targets = setlist
+      .filter((r) => shouldCaptureSong(r) && r.arrangerIndex != null)
+      .sort((a, b) => (a.arrangerIndex ?? 0) - (b.arrangerIndex ?? 0))
+    const limit = deps.maxCaptures && deps.maxCaptures > 0 ? deps.maxCaptures : targets.length
+    const planned = targets.slice(0, limit)
+    deps.setScan({ total: planned.length })
 
-    programs.push(currentProgram)
     let captured = 0
 
-    const processSong = async (program: number, index: number): Promise<void> => {
-      const row = setlist.find((r) => r.program === program)
-      if (!row) return
+    const processSong = async (row: SetlistItem, index: number): Promise<void> => {
       const title = row.title.trim()
       if (!title) return
 
@@ -168,7 +208,7 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
 
       if (!isUsablePrep(prep, title) && prep.infoName && !titlesFuzzyMatch(title, prep.infoName)) {
         console.warn(
-          `[ViewerOne] Lighting analyze: skip PC ${program} “${title}” — Cubase name mismatch (${prep.infoName})`
+          `[ViewerOne] Lighting analyze: skip PC ${row.program} “${title}” — Cubase name mismatch (${prep.infoName})`
         )
         return
       }
@@ -183,7 +223,7 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
         return
       }
 
-      const renderPath = cubaseRenderPathForSong(program, title)
+      const renderPath = cubaseRenderPathForSong(row.program, title)
       deps.setScan({
         message: `Song ${index}: “${title}” — recording Cubase output (${prep.mmss || row.length})…`
       })
@@ -220,25 +260,13 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
       captured++
       deps.setScan({ collected: captured })
       console.log(
-        `[ViewerOne] Lighting analyze: PC ${program} “${title}” → ${analyzed.audioAnalysis.bpm} BPM, ${analyzed.lightingProgram.cues.length} cues`
+        `[ViewerOne] Lighting analyze: PC ${row.program} “${title}” → ${analyzed.audioAnalysis.bpm} BPM, ${analyzed.lightingProgram.cues.length} cues`
       )
     }
 
-    deps.setScan({ phase: 'walking', message: `Capturing song 1…` })
-    await processSong(currentProgram, 1)
-
-    while (!deps.isCancelled()) {
-      const before = currentProgram
-      deps.sendArrangerCommand('next')
-      const next = await deps.waitForProgramChange(before)
-      if (next == null || next === before || programs.includes(next)) break
-      programs.push(next)
-      currentProgram = next
-      await deps.restoreProgram(currentProgram)
-      await processSong(currentProgram, programs.length)
+    for (let i = 0; i < planned.length && !deps.isCancelled(); i++) {
+      await processSong(planned[i], i + 1)
     }
-
-    await deps.rewindArranger()
 
     deps.setScan({
       active: false,

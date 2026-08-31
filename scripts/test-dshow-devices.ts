@@ -1,4 +1,6 @@
 import {
+  dshowAudioFilename,
+  formatDshowOpenError,
   isLikelyLoopbackDevice,
   parseDshowAudioDevices,
   resolveLoopbackDevice,
@@ -41,6 +43,35 @@ if (resolveLoopbackDevice('stereo mix', names) !== 'Stereo Mix (Realtek(R) Audio
 }
 if (resolveLoopbackDevice('Microphone Array', names) == null) {
   throw new Error('unique prefix of mic array should resolve')
+}
+
+const gyanDump = `
+[dshow @ 000001] "Integrated Webcam" (video)
+[dshow @ 000001]   Alternative name
+"@device_pnp_\\\\?\\usb#vid"
+[dshow @ 000001] "Microphone Array (Intel® Smart Sound Technology for Digital Microphones)" (audio)
+[dshow @ 000001]   Alternative name
+"@device_cm_{33D9A762-90C8-11D0-BD43-00A0C911CE86}\\wave_{B387}"
+[dshow @ 000001] "Stereo Mix (Realtek(R) Audio)" (audio)
+[dshow @ 000001]   Alternative name
+"@device_cm_{33D9A762-90C8-11D0-BD43-00A0C911CE86}\\wave_{53F2}"
+`
+const gyan = parseDshowAudioDevices(gyanDump)
+if (gyan.length !== 2) throw new Error(`gyan tagged list expected 2 audio, got ${gyan.length}: ${gyan.join(' | ')}`)
+if (gyan.some((n) => n.startsWith('@device') || /webcam/i.test(n))) {
+  throw new Error('gyan parse leaked video or alternative name')
+}
+if (resolveLoopbackDevice('Stereo Mix', gyan) !== 'Stereo Mix (Realtek(R) Audio)') {
+  throw new Error(`gyan short name should resolve, got ${resolveLoopbackDevice('Stereo Mix', gyan)}`)
+}
+
+const quoted = dshowAudioFilename('Stereo Mix (Realtek(R) Audio)')
+if (quoted !== 'audio=Stereo Mix (Realtek(R) Audio)') {
+  throw new Error(`dshow filename quoting, got ${quoted}`)
+}
+const io = formatDshowOpenError('Error opening input files: I/O error', 'Stereo Mix')
+if (!/Can't open/i.test(io) || /opening input files/i.test(io)) {
+  throw new Error(`I/O error should be rewritten, got ${io}`)
 }
 
 console.log('dshow-devices: OK', sorted)

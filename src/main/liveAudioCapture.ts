@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { LiveBeatSync } from '../shared/liveAudioSync.js'
+import { dshowAudioFilename } from '../shared/dshowAudioDevices.js'
 import { resolveFfmpegPath } from './audioDecode.js'
 
 export type LiveAudioCaptureOptions = {
@@ -40,7 +41,7 @@ export class LiveAudioCapture {
           '-f',
           'dshow',
           '-i',
-          `audio=${opts.deviceName ?? 'Stereo Mix'}`,
+          dshowAudioFilename(opts.deviceName ?? 'Stereo Mix'),
           '-ac',
           '1',
           '-ar',

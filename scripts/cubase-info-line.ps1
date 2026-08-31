@@ -14,7 +14,7 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File cubase-info-line.ps1 grab <outDir> <name>
 
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('prepare', 'capture', 'click', 'health', 'grab', 'serve', 'zoomin', 'stop', 'infoline', 'expand')][string]$Action,
+  [Parameter(Mandatory = $true)][ValidateSet('prepare', 'capture', 'click', 'health', 'grab', 'serve', 'zoomin', 'stop', 'play', 'infoline', 'expand', 'renderprep')][string]$Action,
   [string]$OutDir = '',
   [string]$EventName = ''
 )
@@ -86,6 +86,7 @@ public class CubaseUi {
   public const byte VK_E = 0x45;
   public const byte VK_F = 0x46;
   public const byte VK_NUMPAD0 = 0x60;
+  public const byte VK_SPACE = 0x20;
   public static void ScrollWheel(int delta) {
     mouse_event(MOUSEEVENTF_WHEEL, 0, 0, unchecked((uint)delta), UIntPtr.Zero);
   }
@@ -2030,6 +2031,18 @@ if ($Action -eq 'serve') {
         }
         Invoke-CubaseStop $win
         @{ ok = $true; stopped = $true } | ConvertTo-Json -Compress
+      } elseif ($act -eq 'play') {
+        $prep = Prepare-CubaseWindow -Quick
+        $win = [pscustomobject]@{
+          Process = $prep.Proc
+          Handle = $prep.Handle
+          Left = $prep.left
+          Top = $prep.top
+          Width = $prep.width
+          Height = $prep.height
+        }
+        Invoke-CubaseKey $win ([CubaseUi]::VK_SPACE)
+        @{ ok = $true; playing = $true } | ConvertTo-Json -Compress
       } elseif ($act -eq 'zoom') {
         $prep = Prepare-CubaseWindow -Quick
         $win = [pscustomobject]@{
@@ -2043,7 +2056,7 @@ if ($Action -eq 'serve') {
         Invoke-CubaseZoomToEvent $win
         @{ ok = $true; zoomed = $true } | ConvertTo-Json -Compress
       } elseif ($act -eq 'renderprep') {
-        $grab = Invoke-Grab $EventName -Quick
+        $grab = Invoke-Grab $EventName
         if ($grab.ok) {
           $prep = Prepare-CubaseWindow -Quick
           $win = [pscustomobject]@{
@@ -2262,6 +2275,21 @@ if ($Action -eq 'stop') {
   }
   Invoke-CubaseStop $win
   @{ ok = $true; stopped = $true } | ConvertTo-Json -Compress
+  exit 0
+}
+
+if ($Action -eq 'play') {
+  $prep = Prepare-CubaseWindow -Quick
+  $win = [pscustomobject]@{
+    Process = $prep.Proc
+    Handle = $prep.Handle
+    Left = $prep.left
+    Top = $prep.top
+    Width = $prep.width
+    Height = $prep.height
+  }
+  Invoke-CubaseKey $win ([CubaseUi]::VK_SPACE)
+  @{ ok = $true; playing = $true } | ConvertTo-Json -Compress
   exit 0
 }
 

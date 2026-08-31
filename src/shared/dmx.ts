@@ -168,15 +168,36 @@ export function resolveDmxLedPattern(patternId: number, songSalt = 1): number {
   return id
 }
 
+function partyPatternId(id: number, offset: number): number {
+  const n = clampLedPatternId(id)
+  if (n === 99) return 99
+  if (n === 0 || n === 21) return offset % 2 === 0 ? 5 : 17
+  const base = n === 20 ? 7 : n
+  return ((base - 1 + offset) % 19) + 1
+}
+
+/** Freedom Sticks — different motion/palette than the ESP strip. */
+export function complementaryStickPatternId(espPatternId: number): number {
+  return partyPatternId(espPatternId, 7)
+}
+
+/** Spinning PowerDome — complementary colour/spin to ESP + sticks. */
+export function complementaryDomePatternId(espPatternId: number): number {
+  return partyPatternId(espPatternId, 12)
+}
+
 export function dmxUniverseForLedPattern(
   patternId: number,
   tMs = 0,
-  stickBrightness = 1
+  stickBrightness = 1,
+  opts?: { stickPatternId?: number; domePatternId?: number }
 ): DmxChannelValue[] {
   if (patternId === 99) return []
-  const dome = LED_DOME_CUES[patternId] ?? LED_DOME_CUES[7]
+  const stickId = clampLedPatternId(opts?.stickPatternId ?? complementaryStickPatternId(patternId))
+  const domeId = clampLedPatternId(opts?.domePatternId ?? complementaryDomePatternId(patternId))
+  const dome = LED_DOME_CUES[domeId] ?? LED_DOME_CUES[7]
   return [
-    ...encodeStick48(DMX_FREEDOM_STICK_START, renderStickPixels(patternId, tMs, stickBrightness)),
+    ...encodeStick48(DMX_FREEDOM_STICK_START, renderStickPixels(stickId, tMs, stickBrightness)),
     ...encodeDome(DMX_POWERDOME_START, dome)
   ]
 }

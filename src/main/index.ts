@@ -55,6 +55,7 @@ import {
   CUBASE_MIDI_SPY_LIMIT,
   CUBASE_MUTE_CHANNEL,
   CUBASE_MUTE_CC,
+  CUBASE_ALL_MUTE_CC,
   CUBASE_SYNTH_MUTE_CC,
   CUBASE_PIANO_MUTE_CC,
   CUBASE_CHANNEL_MUTE_INVERTED,
@@ -117,6 +118,9 @@ import { normalizeSongAudioAnalysis } from '../shared/audioAnalysisNormalize.js'
 import { normalizeClickTrackSettings } from '../shared/clickTrackSettings.js'
 import { formatViewerOneVersion } from '../shared/appVersion.js'
 import { listWindowsAudioDevices } from './listAudioDevices.js'
+import { LoopbackMeter } from './loopbackMeter.js'
+import type { LoopbackMeterSample } from '../shared/audioLevel.js'
+import { resolveLoopbackDevice } from '../shared/dshowAudioDevices.js'
 
 // Must run before any MIDI/serial traffic — EPIPE on stdout used to kill the main process mid-gig.
 installProcessGuards()
@@ -138,6 +142,7 @@ let controlWindow: BrowserWindow | null = null
 const store = createAppStore()
 const lightingDirector = new LightingDirector()
 const liveClickTrack = new LiveClickTrack()
+const loopbackMeter = new LoopbackMeter((sample) => broadcastLoopbackMeter(sample))
 
 let dmxCueOverride: DmxCueOverride | undefined
 let dmxStickBrightnessScale = 1
@@ -227,7 +232,7 @@ function armLightingDirectorForCurrentSong(): void {
     lightingDirector.disarm()
     return
   }
-  lightingDirector.arm(row, st.liveAudioSyncEnabled)
+  lightingDirector.arm(row, st.liveAudioSyncEnabled, st.lightingLoopbackDevice)
   tickPerformanceSync()
 }
 
@@ -310,6 +315,7 @@ async function shutdownViewerOneResources(): Promise<void> {
   clearMidiReconnectTimer()
   stopCountdownTicker()
   stopPerformanceSyncTicker()
+  loopbackMeter.stop()
   lightingDirector.shutdown()
   clearEsp32DisplayCoalesceTimer()
   stopEsp32ClockSync()
@@ -517,7 +523,7 @@ function sendAnalyzeStop(): void {
   sendCubaseTransportStop('lighting analyze capture')
 }
 
-async function runLightingAnalyzeFromCubase(): Promise<void> {
+async function runLightingAnalyzeFromCubase(maxCaptures?: number): Promise<void> {
   if (lightingAnalyzePromise) return
   if (arrangerScanPromise || arrangerScan.active) {
     setLightingAnalyze({
@@ -529,6 +535,14 @@ async function runLightingAnalyzeFromCubase(): Promise<void> {
   }
   lightingAnalyzeCancelled = false
   const st = getState(store)
+  let loopbackDevice = st.lightingLoopbackDevice || 'Stereo Mix'
+  try {
+    const devices = await listWindowsAudioDevices()
+    loopbackDevice = resolveLoopbackDevice(loopbackDevice, devices) ?? loopbackDevice
+  } catch {
+    /* keep saved name */
+  }
+  loopbackMeter.pauseExclusive()
   lightingAnalyzePromise = runLightingAnalyzePass({
     getSetlist: () => getState(store).setlist,
     updateRow: updateSetlistRow,
@@ -537,14 +551,25 @@ async function runLightingAnalyzeFromCubase(): Promise<void> {
     sleep,
     sendArrangerCommand: (dir) => sendArrangerCommand(dir),
     rewindArranger: async () => {
-      await rewindArrangerToBeginning(true)
+      await rewindArrangerToBeginning(false)
     },
-    waitForProgramChange: (from) =>
-      stepArrangerUntilChanged('next', from, !lightingAnalyzeCancelled),
+    waitForProgramChange: (from) => stepArrangerUntilChanged('next', from, false),
     getLatestProgram: () => latestSongProgram,
-    restoreProgram: (program) => restoreArrangerToProgram(program, !lightingAnalyzeCancelled, []),
+    restoreProgram: (program) => restoreArrangerToProgram(program, false, []),
     sendAnalyzePlay,
     sendAnalyzeStop,
+    withLiveMix: async (fn) => {
+      sendMuteCcToCubase(false, CUBASE_ALL_MUTE_CC)
+      sendMuteCcToCubase(false, CUBASE_MUTE_CC)
+      await sleep(200)
+      try {
+        return await fn()
+      } finally {
+        const cur = getState(store)
+        sendMuteCcToCubase(cur.allMuted, CUBASE_ALL_MUTE_CC)
+        sendMuteCcToCubase(cur.fxMuted, CUBASE_MUTE_CC)
+      }
+    },
     minimizeUi: async () => {
       if (controlWindow && !controlWindow.isDestroyed() && !controlWindow.isMinimized()) {
         controlWindow.minimize()
@@ -556,9 +581,10 @@ async function runLightingAnalyzeFromCubase(): Promise<void> {
         controlWindow.restore()
       }
     },
-    loopbackDevice: st.lightingLoopbackDevice || 'Stereo Mix',
+    loopbackDevice,
     clickSettings: st.clickTrack,
-    director: lightingDirector
+    director: lightingDirector,
+    maxCaptures
   })
     .catch((err) => {
       console.warn('[ViewerOne] Lighting analyze failed:', err)
@@ -570,6 +596,7 @@ async function runLightingAnalyzeFromCubase(): Promise<void> {
     })
     .finally(() => {
       lightingAnalyzePromise = null
+      loopbackMeter.resumeExclusive()
       broadcastState()
     })
   await lightingAnalyzePromise
@@ -1173,7 +1200,10 @@ function pushDmxFrame(): void {
   }
   dmxSetChannels(
     mergeDmxCueOverrides(
-      dmxUniverseForLedPattern(patternId, tMs, dmxStickBrightnessScale),
+      dmxUniverseForLedPattern(patternId, tMs, dmxStickBrightnessScale, {
+        stickPatternId: dmxCueOverride?.stickPatternId,
+        domePatternId: dmxCueOverride?.domePatternId
+      }),
       dmxCueOverride,
       getState(store).dmxFixture1Channel,
       getState(store).dmxFixture2Channel
@@ -1632,6 +1662,13 @@ function broadcastUiState(): void {
   }
 }
 
+function broadcastLoopbackMeter(sample: LoopbackMeterSample): void {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (w.isDestroyed()) continue
+    w.webContents.send('lighting:loopbackMeter', sample)
+  }
+}
+
 function broadcastState(): void {
   broadcastUiState()
   broadcastEsp32DisplayIfEnabled()
@@ -1708,6 +1745,7 @@ function connectMidi(): void {
       if (lightingAnalyze.active) {
         latestSongProgram = wireProgram + 1
         songIdentityRevision++
+        console.log(`[ViewerOne] Lighting analyze: song PC ${latestSongProgram} ch ${channel0 + 1}`)
         return
       }
       const pc = wireProgram + 1
@@ -3284,6 +3322,27 @@ function registerIpc(): void {
     }
   })
 
+  ipcMain.handle('lighting:startLoopbackMeter', async (_e, deviceName: unknown) => {
+    const saved = typeof deviceName === 'string' ? deviceName.trim() : ''
+    if (!saved) {
+      loopbackMeter.stop()
+      return null
+    }
+    let resolved = saved
+    try {
+      const devices = await listWindowsAudioDevices()
+      resolved = resolveLoopbackDevice(saved, devices) ?? saved
+    } catch {
+      /* open saved name */
+    }
+    loopbackMeter.start(resolved)
+    return resolved
+  })
+
+  ipcMain.handle('lighting:stopLoopbackMeter', () => {
+    loopbackMeter.stop()
+  })
+
   ipcMain.handle('lighting:setProgram', (_e, songId: unknown, program: unknown) => {
     if (typeof songId !== 'string' || !program || typeof program !== 'object') {
       return buildPublicState()
@@ -3433,6 +3492,20 @@ if (!gotTheLock) {
           console.log(`[ViewerOne] --scan-arranger done: ${arrangerScan.phase} — ${arrangerScan.message}`)
         })()
       }, 6000)
+    }
+
+    const analyzeMaxArg = process.argv.find((a) => a.startsWith('--lighting-analyze-max='))
+    if (analyzeMaxArg) {
+      const n = Math.max(1, Math.round(Number(analyzeMaxArg.split('=')[1]) || 1))
+      setTimeout(() => {
+        void (async () => {
+          console.log(`[ViewerOne] --lighting-analyze-max=${n}: starting Cubase lighting analyze`)
+          await runLightingAnalyzeFromCubase(n)
+          console.log(
+            `[ViewerOne] --lighting-analyze-max done: ${lightingAnalyze.phase} — ${lightingAnalyze.message}`
+          )
+        })()
+      }, 8000)
     }
 
     app.on('activate', () => {

@@ -4,6 +4,10 @@ import type { LightingProgram } from '../../shared/lightingProgram'
 import { LED_PATTERNS } from '../../shared/ledPatterns'
 import { formatMsToTimecode, parseTimecodeToMs } from '../../shared/lightingProgram'
 import { resolveLoopbackDevice, sortAudioDevices } from '../../shared/dshowAudioDevices'
+import {
+  peakToMeterWidth,
+  type LoopbackMeterSample
+} from '../../shared/audioLevel'
 
 type Props = {
   row: SetlistItem | null
@@ -163,6 +167,81 @@ export function LightingCueEditor({ row, onSaveProgram }: Pick<Props, 'row' | 'o
   )
 }
 
+function loopbackMeterLabel(sample: LoopbackMeterSample | null, hold: number): string {
+  if (!sample) return 'meter off'
+  if (sample.error) return "can't open"
+  if (sample.paused) return 'paused (analyze recording)'
+  if (!sample.listening) return 'opening device…'
+  if (hold < 0.003) return 'no signal'
+  const db = sample.peakDbfs <= -89 ? '-∞ dB' : `${sample.peakDbfs.toFixed(0)} dB`
+  if (hold > 0.89) return `hot  ${db}`
+  return db
+}
+
+function LoopbackSignalBar({
+  device,
+  onResolved
+}: {
+  device: string
+  onResolved: (name: string) => void
+}) {
+  const [sample, setSample] = useState<LoopbackMeterSample | null>(null)
+  const holdRef = useRef(0)
+  const [hold, setHold] = useState(0)
+  const onResolvedRef = useRef(onResolved)
+  onResolvedRef.current = onResolved
+
+  useEffect(() => {
+    if (!device.trim()) {
+      void window.viewer.stopLoopbackMeter()
+      setSample(null)
+      holdRef.current = 0
+      setHold(0)
+      return
+    }
+    let cancelled = false
+    void window.viewer.startLoopbackMeter(device).then((resolved) => {
+      if (cancelled || !resolved) return
+      if (resolved !== device) onResolvedRef.current(resolved)
+    })
+    const off = window.viewer.onLoopbackMeter((next) => {
+      setSample(next)
+      const p = next.paused || next.error ? 0 : next.peak
+      if (p >= holdRef.current) holdRef.current = p
+      else holdRef.current = Math.max(p, holdRef.current * 0.55)
+      setHold(holdRef.current)
+    })
+    return () => {
+      cancelled = true
+      off()
+      void window.viewer.stopLoopbackMeter()
+    }
+  }, [device])
+
+  const width = peakToMeterWidth(hold)
+  const tone = !sample || sample.error || sample.paused || hold < 0.003 ? '' : hold > 0.89 ? 'hot' : 'ok'
+
+  return (
+    <div
+      className={`loopback-meter${tone ? ` loopback-meter--${tone}` : ''}${sample?.error ? ' loopback-meter--hot' : ''}`}
+      role="meter"
+      aria-label="Cubase loopback level"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(width * 100)}
+    >
+      <div className="loopback-meter-row">
+        <div className="loopback-meter-track">
+          <div className="loopback-meter-fill" style={{ width: `${width * 100}%` }} />
+          <div className="loopback-meter-peak" style={{ left: `${width * 100}%` }} />
+        </div>
+        <span className="loopback-meter-db">{loopbackMeterLabel(sample, hold)}</span>
+      </div>
+      {sample?.error ? <p className="settings-hint settings-hint--warn">{sample.error}</p> : null}
+    </div>
+  )
+}
+
 export function LightingStudio({ row, state, onSaveProgram, onPatchSettings, onPatchClickTrack }: Props) {
   const readiness = state.lightingReadiness
   const ct = state.clickTrack
@@ -290,6 +369,8 @@ export function LightingStudio({ row, state, onSaveProgram, onPatchSettings, onP
           </div>
           <p className="settings-hint">
             Pick Stereo Mix (or your interface loopback). The list is enabled Windows recording devices.
+            Play Cubase — the bar is what Analyze will record. Stereo Mix follows PC volume; a virtual
+            cable (VB-Cable / Voicemeeter) does not.
           </p>
         </div>
         <div className="field">
@@ -308,6 +389,18 @@ export function LightingStudio({ row, state, onSaveProgram, onPatchSettings, onP
           </select>
         </div>
       </div>
+      {listingDevices && devices.length === 0 ? (
+        <p className="settings-hint">Looking for recording devices…</p>
+      ) : (
+        <LoopbackSignalBar
+          device={state.lightingLoopbackDevice}
+          onResolved={(name) => {
+            if (name !== state.lightingLoopbackDevice) {
+              onPatchSettings({ lightingLoopbackDevice: name })
+            }
+          }}
+        />
+      )}
 
       <h4 className="settings-subheading">IEM click track</h4>
       <p className="settings-hint">
@@ -385,8 +478,8 @@ export function LightingStudio({ row, state, onSaveProgram, onPatchSettings, onP
         <p className="settings-hint">
           Current song: {row.audioAnalysis.bpm} BPM
           {row.clickTrackCountInMs
-            ? ` · count-in ${Math.round(row.clickTrackCountInMs / 1000)}s`
-            : ''}
+            ? ` · count-in ${Math.round(row.clickTrackCountInMs / 1000)}s (live MIDI)`
+            : ' · click WAV matches song length'}
           {clickHint ? ` · click file ${clickHint}` : ''}
         </p>
       ) : null}

@@ -1,4 +1,5 @@
 import type { DmxFixtureMode } from './dmx.js'
+import { complementaryDomePatternId, complementaryStickPatternId } from './dmx.js'
 import type { SongAudioAnalysis } from './audioAnalysis.js'
 import { clampLedPatternId } from './ledPatterns.js'
 
@@ -8,6 +9,10 @@ export type DmxCueOverride = {
   powerDomeDimmer?: number
   /** Scale stick pixel brightness 0–1. */
   stickBrightnessScale?: number
+  /** Freedom Stick animation pattern (defaults to a complement of the ESP pattern). */
+  stickPatternId?: number
+  /** PowerDome colour/spin look (defaults to a complement of the ESP pattern). */
+  domePatternId?: number
   fixture1Mode?: DmxFixtureMode
   fixture2Mode?: DmxFixtureMode
 }
@@ -99,17 +104,28 @@ function dmxLookForSection(label: string): 'off' | 'idle' | 'live' {
   return 'live'
 }
 
-function dmxForSection(label: string, energy: number): DmxCueOverride | undefined {
-  if (label === 'chorus' || label === 'drop') {
-    return { powerDomeAuto: energy > 0.85 ? 5 : 3, stickBrightnessScale: 1 }
+function dmxForSection(espPatternId: number, energy: number): DmxCueOverride {
+  return {
+    stickPatternId: complementaryStickPatternId(espPatternId),
+    domePatternId: complementaryDomePatternId(espPatternId),
+    stickBrightnessScale: energy > 0.72 ? 1 : energy > 0.4 ? 0.78 : 0.5
   }
-  if (label === 'breakdown') {
-    return { powerDomeDimmer: 80, stickBrightnessScale: 0.45, fixture2Mode: 'off' }
+}
+
+const SECTION_PATTERN_CYCLE = [2, 3, 8, 16, 12, 13, 18, 6, 9, 14, 4, 17, 1, 19] as const
+
+function uniqueEspPattern(label: string, energy: number, used: Set<number>, index: number): number {
+  let p = patternForSection(label, energy)
+  if (used.has(p)) {
+    p = SECTION_PATTERN_CYCLE[index % SECTION_PATTERN_CYCLE.length]
+    let guard = 0
+    while (used.has(p) && guard < SECTION_PATTERN_CYCLE.length) {
+      p = SECTION_PATTERN_CYCLE[(index + guard + 1) % SECTION_PATTERN_CYCLE.length]
+      guard++
+    }
   }
-  if (label === 'verse') {
-    return { stickBrightnessScale: 0.75 }
-  }
-  return undefined
+  used.add(p)
+  return clampLedPatternId(p)
 }
 
 /** Detect short energy spikes between sections → fill cues. */
@@ -136,54 +152,34 @@ export function buildLightingProgram(
   options: BuildProgramOptions = {}
 ): LightingProgram {
   const beatsPerBar = options.beatsPerBar ?? 4
-  const barAccentEvery = options.barAccentEvery ?? 8
   const beatMs = 60000 / Math.max(60, analysis.bpm)
-  const barMs = beatMs * beatsPerBar
   const cues: LightingCue[] = []
+  const usedEsp = new Set<number>()
 
-  for (const section of analysis.sections) {
+  for (let i = 0; i < analysis.sections.length; i++) {
+    const section = analysis.sections[i]
     const label = section.label
     const atMs = snapToBeat(section.startMs, analysis)
-    const patternId = clampLedPatternId(patternForSection(label, section.energy))
+    const patternId = uniqueEspPattern(label, section.energy, usedEsp, i)
     cues.push({
       id: crypto.randomUUID(),
       atMs,
       ledPatternId: patternId,
       label,
       dmxLook: dmxLookForSection(label),
-      dmx: dmxForSection(label, section.energy)
+      dmx: dmxForSection(patternId, section.energy)
     })
 
     if (section.energy > 0.75 && (label === 'chorus' || label === 'drop')) {
+      const hitPattern = clampLedPatternId(18)
       cues.push({
         id: crypto.randomUUID(),
         atMs: snapToBeat(Math.round(atMs + beatMs), analysis),
-        ledPatternId: clampLedPatternId(18),
+        ledPatternId: hitPattern,
         label: `${label} hit`,
         accentDurationMs: Math.round(beatMs * 0.75),
-        dmx: { powerDomeAuto: 5, stickBrightnessScale: 1 }
+        dmx: dmxForSection(hitPattern, 1)
       })
-    }
-
-    // Bar-aligned texture shifts within long sections.
-    const sectionEnd =
-      analysis.sections.find((s) => s.startMs > section.startMs)?.startMs ?? analysis.durationMs
-    const sectionLen = sectionEnd - atMs
-    if (sectionLen > barMs * barAccentEvery * 1.5 && label !== 'breakdown') {
-      for (
-        let bar = barAccentEvery;
-        bar * barMs < sectionLen - barMs * 2;
-        bar += barAccentEvery
-      ) {
-        const barAt = snapToBeat(Math.round(atMs + bar * barMs), analysis)
-        cues.push({
-          id: crypto.randomUUID(),
-          atMs: barAt,
-          ledPatternId: clampLedPatternId(label === 'verse' ? 6 : 15),
-          label: `${label} bar ${bar}`,
-          dmxLook: 'live'
-        })
-      }
     }
   }
 

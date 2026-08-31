@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { dshowAudioFilename } from '../shared/dshowAudioDevices.js'
 import { resolveFfmpegPath } from './audioDecode.js'
 
 export type LoopbackRecordOptions = {
@@ -6,6 +7,8 @@ export type LoopbackRecordOptions = {
   /** Windows dshow device name, e.g. "Stereo Mix (Realtek...)". */
   deviceName?: string
   sampleRate?: number
+  /** Stop ffmpeg cleanly after this many seconds (avoids truncated WAV from SIGINT). */
+  durationSec?: number
   onError?: (message: string) => void
 }
 
@@ -38,14 +41,13 @@ export class LoopbackRecorder {
           '-f',
           'dshow',
           '-i',
-          `audio=${opts.deviceName ?? 'Stereo Mix'}`,
+          dshowAudioFilename(opts.deviceName ?? 'Stereo Mix'),
           '-ac',
           '1',
           '-ar',
           String(opts.sampleRate ?? this.sampleRate),
           '-c:a',
-          'pcm_s16le',
-          opts.outputPath
+          'pcm_s16le'
         ]
       : [
           '-hide_banner',
@@ -61,9 +63,12 @@ export class LoopbackRecorder {
           '-ar',
           String(opts.sampleRate ?? this.sampleRate),
           '-c:a',
-          'pcm_s16le',
-          opts.outputPath
+          'pcm_s16le'
         ]
+    if (opts.durationSec && opts.durationSec > 0) {
+      args.push('-t', String(opts.durationSec))
+    }
+    args.push(opts.outputPath)
 
     const proc = spawn(ffmpeg, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     this.proc = proc

@@ -14,6 +14,12 @@ function normalizeDmxOverride(raw: unknown): DmxCueOverride | undefined {
   if (r.stickBrightnessScale !== undefined && Number.isFinite(Number(r.stickBrightnessScale))) {
     out.stickBrightnessScale = Math.max(0, Math.min(1, Number(r.stickBrightnessScale)))
   }
+  if (r.stickPatternId !== undefined && Number.isFinite(Number(r.stickPatternId))) {
+    out.stickPatternId = clampLedPatternId(r.stickPatternId)
+  }
+  if (r.domePatternId !== undefined && Number.isFinite(Number(r.domePatternId))) {
+    out.domePatternId = clampLedPatternId(r.domePatternId)
+  }
   if (r.fixture1Mode === 'off' || r.fixture1Mode === 'on' || r.fixture1Mode === 'sound') {
     out.fixture1Mode = r.fixture1Mode
   }

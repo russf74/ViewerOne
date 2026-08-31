@@ -1,3 +1,4 @@
+import type { LoopbackMeterSample } from '../shared/audioLevel'
 import type { AppState, PublicState, SetlistItem } from '../shared/types'
 
 export type ViewerApi = {
@@ -30,6 +31,9 @@ export type ViewerApi = {
   cancelLightingAnalyze: () => Promise<PublicState>
   setLightingProgram: (songId: string, program: unknown) => Promise<PublicState>
   listLoopbackDevices: () => Promise<string[]>
+  startLoopbackMeter: (deviceName: string) => Promise<string | null>
+  stopLoopbackMeter: () => Promise<void>
+  onLoopbackMeter: (fn: (s: LoopbackMeterSample) => void) => () => void
 }
 
 declare global {

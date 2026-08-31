@@ -1274,6 +1274,69 @@ button:disabled {
   align-self: center;
 }
 
+.loopback-meter {
+  margin: 0 0 8px;
+}
+
+.loopback-meter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.loopback-meter-track {
+  position: relative;
+  flex: 1;
+  height: 12px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: linear-gradient(
+    90deg,
+    #2d6a4f 0%,
+    #52b788 50%,
+    #e9c46a 82%,
+    #e06c75 100%
+  );
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.loopback-meter-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: transparent;
+  box-shadow: 2000px 0 0 2000px #0a0c10;
+  transition: width 25ms linear;
+}
+
+.loopback-meter-peak {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: #fff;
+  opacity: 0.9;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.loopback-meter-db {
+  flex: 0 0 7.5rem;
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.loopback-meter--hot .loopback-meter-db {
+  color: var(--danger);
+}
+
+.loopback-meter--ok .loopback-meter-db {
+  color: #9ae6b4;
+}
+
 .lighting-readiness {
   margin: 8px 0;
   font-size: 0.72rem;
