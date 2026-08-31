@@ -819,17 +819,10 @@ function Install-CopyShortcut {
 }
 
 function Install-ViewerOneShortcut {
-  $bootstrapSrc = Join-Path $ViewerOneSrc 'scripts\bootstrap\ViewerOne-Launch.vbs'
-  $bootstrapDir = Join-Path $env:LOCALAPPDATA 'ViewerOne'
-  $bootstrap = Join-Path $bootstrapDir 'ViewerOne-Launch.vbs'
-  New-Item -ItemType Directory -Path $bootstrapDir -Force | Out-Null
-  if (Test-Path -LiteralPath $bootstrapSrc) {
-    Copy-Item -LiteralPath $bootstrapSrc -Destination $bootstrap -Force
-  } elseif (-not (Test-Path -LiteralPath $bootstrap)) {
-    return
-  }
+  $vbs = Join-Path $env:USERPROFILE 'ViewerOne\ViewerOne-Launch.vbs'
+  if (-not (Test-Path -LiteralPath $vbs)) { return }
   $dest = Join-Path $env:USERPROFILE 'Desktop\ViewerOne.lnk'
-  New-Shortcut -Path $dest -Target "$env:SystemRoot\System32\wscript.exe" -Arguments "`"$bootstrap`"" -WorkDir $bootstrapDir -Description 'ViewerOne'
+  New-Shortcut -Path $dest -Target "$env:SystemRoot\System32\wscript.exe" -Arguments "`"$vbs`"" -WorkDir (Split-Path $vbs) -Description 'ViewerOne'
   Write-Ok "Desktop shortcut: $dest"
 }
 

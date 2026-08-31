@@ -1,28 +1,30 @@
 Option Explicit
 
-' Repo copy of the stable bootstrap — delegates to %LOCALAPPDATA%\ViewerOne\ViewerOne-Launch.vbs
-Dim sh, fso, bootstrap, repoBootstrap, url, ps1, cmd, repo
+' Silent launcher: build then open ViewerOne (no console window).
+' Desktop shortcut should point to this file.
+
+Dim sh, fso, scriptDir, electronExe, code, buildCmd, launchCmd
+
 Set sh = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
-bootstrap = sh.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\ViewerOne\ViewerOne-Launch.vbs"
-repo = sh.ExpandEnvironmentStrings("%USERPROFILE%") & "\ViewerOne"
-repoBootstrap = fso.GetParentFolderName(WScript.ScriptFullName) & "\scripts\bootstrap\ViewerOne-Launch.vbs"
+scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
 
-If Not fso.FolderExists(sh.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\ViewerOne") Then
-  fso.CreateFolder sh.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\ViewerOne"
+buildCmd = "cmd /c cd /d """ & scriptDir & """ && npm run build"
+code = sh.Run(buildCmd, 0, True)
+
+If code <> 0 Then
+  MsgBox "ViewerOne could not build." & vbCrLf & vbCrLf & _
+    "Open a terminal in the project folder and run: npm run build", _
+    vbCritical, "ViewerOne"
+  WScript.Quit code
 End If
 
-If fso.FileExists(repoBootstrap) Then
-  fso.CopyFile repoBootstrap, bootstrap, True
+electronExe = scriptDir & "\node_modules\electron\dist\electron.exe"
+If Not fso.FileExists(electronExe) Then
+  MsgBox "Electron was not found under node_modules." & vbCrLf & vbCrLf & _
+    "In the project folder run: npm install", vbCritical, "ViewerOne"
+  WScript.Quit 1
 End If
 
-If fso.FileExists(bootstrap) Then
-  sh.Run """" & bootstrap & """", 0, True
-Else
-  url = "https://raw.githubusercontent.com/russf74/ViewerOne/main/scripts/launch-viewerone.ps1"
-  ps1 = sh.ExpandEnvironmentStrings("%TEMP%") & "\viewerone-launch.ps1"
-  cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command ""& { " & _
-    "(New-Object Net.WebClient).DownloadFile('" & url & "','" & ps1 & "'); " & _
-    "& '" & ps1 & "' -RepoRoot '" & repo & "' }"""
-  sh.Run cmd, 0, True
-End If
+launchCmd = "cmd /c cd /d """ & scriptDir & """ && """ & electronExe & """ ."
+sh.Run launchCmd, 0, False
