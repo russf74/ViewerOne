@@ -1,5 +1,15 @@
 # Changelog
 
+## v6.00.00 — Lighting Director
+
+Major release: sound-to-light sidecar, Cubase-render analysis, IEM click track, and Lighting Studio.
+
+- **Analyze from Cubase** — loopback-records real arrangement audio (tempo/key/cuts baked in); builds BPM, beat grid, sections, and lighting program per song
+- **Lighting Studio** — gig readiness audit, cue timeline/table editor, director + click settings (Detail panel)
+- **Lighting Director** — PC 127 timed cues with bar-aligned programs, accent flashes, DMX overrides; optional live loopback beat sync
+- **IEM click track** — auto-generated click WAV on analyze; live MIDI click during transport (configurable channel/notes/count-in)
+- Sidecar / opt-in: director disabled by default; normal Cubase + ViewerOne gig flow unchanged unless enabled
+
 ## v5.12.86
 
 - Arranger scan now visits **Soundcheck** and reads its Cubase Info Line length (it was

@@ -1,4 +1,4 @@
-﻿# Cubase info-line Length helper for ViewerOne (5.12.82).
+﻿# Cubase info-line Length helper for ViewerOne (6.0.0).
 # MUST be invoked only as:
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<full-path>\cubase-info-line.ps1" <action> ...
 # Never double-click / Start-Process / shell-open this .ps1 (Windows opens Notepad).

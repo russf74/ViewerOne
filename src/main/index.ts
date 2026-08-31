@@ -115,6 +115,7 @@ import { LightingDirector } from './lightingDirector.js'
 import { runLightingAnalyzePass } from './lightingAnalyzePass.js'
 import { normalizeSongAudioAnalysis } from '../shared/audioAnalysisNormalize.js'
 import { normalizeClickTrackSettings } from '../shared/clickTrackSettings.js'
+import { formatViewerOneVersion } from '../shared/appVersion.js'
 
 // Must run before any MIDI/serial traffic — EPIPE on stdout used to kill the main process mid-gig.
 installProcessGuards()
@@ -955,7 +956,7 @@ function buildPublicState(): PublicState {
     : null
   return {
     ...base,
-    appVersion: app.getVersion(),
+    appVersion: formatViewerOneVersion(app.getVersion()),
     ledPattern,
     esp32Display,
     dmx: getDmxStatus(),
@@ -2786,7 +2787,7 @@ function createControlWindow(): BrowserWindow {
     minWidth: 560,
     minHeight: 520,
     show: true,
-    title: `ViewerOne v${app.getVersion()} — Control`,
+    title: `ViewerOne v${formatViewerOneVersion(app.getVersion())} — Control`,
     webPreferences: {
       preload: preloadScriptPath(),
       contextIsolation: true,
