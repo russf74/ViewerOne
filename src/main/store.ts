@@ -1,3 +1,5 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import Store from 'electron-store'
 import type { AppState, ArrangerMidiMapping, SetlistItem, TransportMidiMapping } from '../shared/types.js'
 import { normalizeSongAudioAnalysis } from '../shared/audioAnalysisNormalize.js'
@@ -64,7 +66,20 @@ export function clampCountdownStartLeadMs(value: unknown, fallback = 2500): numb
   return Math.max(0, Math.min(15000, Math.round(parsed)))
 }
 
+/** electron-store JSON.parse dies on a UTF-8 BOM and leaves ViewerOne running with no window. */
+function stripViewerOneConfigBom(): void {
+  const appData = process.env.APPDATA
+  if (!appData) return
+  const file = join(appData, 'viewer-one', 'viewer-one-config.json')
+  if (!existsSync(file)) return
+  const buf = readFileSync(file)
+  if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+    writeFileSync(file, buf.subarray(3))
+  }
+}
+
 export function createAppStore(): AppStore {
+  stripViewerOneConfigBom()
   return new Store<AppState>({
     name: 'viewer-one-config',
     defaults

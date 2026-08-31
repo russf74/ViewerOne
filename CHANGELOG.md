@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.21
+
+- ViewerOne opens again if the settings file has a UTF-8 BOM (that used to start the app with no window).
+
 ## v6.00.20
 
 - Click WAV is named `…-click-48khz.wav` so Cubase does not reuse the old 44.1 kHz pool clip.
