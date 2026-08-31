@@ -4,7 +4,7 @@
     {
       "label": "ViewerOne: sync from GitHub",
       "type": "shell",
-      "command": "git fetch origin main && git reset --hard origin/main && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/sync-viewerone.ps1",
+      "command": "git fetch origin main && git reset --hard origin/main && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/launch-viewerone.ps1 -FixOnly",
       "options": { "cwd": "${workspaceFolder}" },
       "runOptions": { "runOn": "folderOpen" },
       "problemMatcher": []

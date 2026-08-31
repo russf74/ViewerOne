@@ -2,12 +2,12 @@ Option Explicit
 
 ' Start X32-Edit, Cubase 15, and ViewerOne at Windows logon.
 ' Invoked by Task Scheduler "ViewerOne Gig Startup" (and start-gig-apps.cmd).
-' Does not rebuild ViewerOne — launches electron.exe directly.
-' Paths under the user profile work on the backup PC even if the account name differs.
+' Repairs ViewerOne shortcuts to v6 bootstrap, syncs repo, then launches.
 
 Dim sh, fso, wmi
 Dim userProfile, pf86
 Dim xedit, cubase, viewerOneDir, loopMidiA, loopMidiB
+Dim bootstrap, repoBootstrap, launchPs1, fixCmd
 
 Set sh = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
@@ -22,6 +22,9 @@ cubase = "C:\Program Files\Steinberg\Cubase 15\Cubase15.exe"
 viewerOneDir = userProfile & "\ViewerOne"
 loopMidiA = "C:\Program Files\Tobias Erichsen\loopMIDI\loopMIDI.exe"
 loopMidiB = pf86 & "\Tobias Erichsen\loopMIDI\loopMIDI.exe"
+bootstrap = sh.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\ViewerOne\ViewerOne-Launch.vbs"
+repoBootstrap = viewerOneDir & "\scripts\bootstrap\ViewerOne-Launch.vbs"
+launchPs1 = viewerOneDir & "\scripts\launch-viewerone.ps1"
 
 Function ProcessRunning(imageName)
   Dim col
@@ -50,6 +53,21 @@ Sub StartExe(imageName, exePath)
   sh.Run """" & exePath & """", 1, False
 End Sub
 
+Sub RepairViewerOneShortcuts()
+  If Not fso.FolderExists(sh.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\ViewerOne") Then
+    fso.CreateFolder sh.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\ViewerOne"
+  End If
+  If fso.FileExists(repoBootstrap) Then
+    fso.CopyFile repoBootstrap, bootstrap, True
+  End If
+  If fso.FileExists(launchPs1) Then
+    fixCmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & launchPs1 & """ -RepoRoot """ & viewerOneDir & """ -FixOnly"
+    sh.Run fixCmd, 0, True
+  End If
+End Sub
+
+RepairViewerOneShortcuts
+
 If fso.FileExists(loopMidiA) Then
   StartExe "loopMIDI.exe", loopMidiA
 ElseIf fso.FileExists(loopMidiB) Then
@@ -62,7 +80,9 @@ StartExe "Cubase15.exe", cubase
 WScript.Sleep 5000
 
 If Not ViewerOneRunning() Then
-  If fso.FileExists(viewerOneDir & "\node_modules\electron\dist\electron.exe") Then
+  If fso.FileExists(bootstrap) Then
+    sh.Run """" & bootstrap & """", 0, False
+  ElseIf fso.FileExists(viewerOneDir & "\node_modules\electron\dist\electron.exe") Then
     sh.CurrentDirectory = viewerOneDir
     sh.Run """" & viewerOneDir & "\node_modules\electron\dist\electron.exe"" .", 1, False
   End If

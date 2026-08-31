@@ -1,41 +1,28 @@
 Option Explicit
 
-' Silent launcher: sync repo, fix shortcuts, build, open ViewerOne.
-' Desktop / taskbar shortcut should point here via wscript.exe.
-
-Dim sh, fso, scriptDir, electronExe, code, syncCmd, buildCmd, launchCmd
-
+' Repo copy of the stable bootstrap — delegates to %LOCALAPPDATA%\ViewerOne\ViewerOne-Launch.vbs
+Dim sh, fso, bootstrap, repoBootstrap, url, ps1, cmd, repo
 Set sh = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
-scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
+bootstrap = sh.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\ViewerOne\ViewerOne-Launch.vbs"
+repo = sh.ExpandEnvironmentStrings("%USERPROFILE%") & "\ViewerOne"
+repoBootstrap = fso.GetParentFolderName(WScript.ScriptFullName) & "\scripts\bootstrap\ViewerOne-Launch.vbs"
 
-' Match GitHub main (silent — ok if offline).
-syncCmd = "cmd /c cd /d """ & scriptDir & """ && git fetch origin main 2>nul && git reset --hard origin/main 2>nul"
-sh.Run syncCmd, 0, True
-
-' Retarget desktop + taskbar pins if they drifted to an old installed .exe.
-If fso.FileExists(scriptDir & "\scripts\sync-viewerone.ps1") Then
-  sh.Run "powershell -NoProfile -ExecutionPolicy Bypass -File """ & scriptDir & "\scripts\sync-viewerone.ps1""", 0, True
+If Not fso.FolderExists(sh.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\ViewerOne") Then
+  fso.CreateFolder sh.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\ViewerOne"
 End If
 
-If Not fso.FolderExists(scriptDir & "\node_modules") Then
-  sh.Run "cmd /c cd /d """ & scriptDir & """ && npm install --no-fund --no-audit", 0, True
+If fso.FileExists(repoBootstrap) Then
+  fso.CopyFile repoBootstrap, bootstrap, True
 End If
 
-buildCmd = "cmd /c cd /d """ & scriptDir & """ && npm run build"
-code = sh.Run(buildCmd, 0, True)
-
-If code <> 0 Then
-  MsgBox "ViewerOne could not build." & vbCrLf & vbCrLf & _
-    "Folder: " & scriptDir, vbCritical, "ViewerOne"
-  WScript.Quit code
+If fso.FileExists(bootstrap) Then
+  sh.Run """" & bootstrap & """", 0, True
+Else
+  url = "https://raw.githubusercontent.com/russf74/ViewerOne/main/scripts/launch-viewerone.ps1"
+  ps1 = sh.ExpandEnvironmentStrings("%TEMP%") & "\viewerone-launch.ps1"
+  cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command ""& { " & _
+    "(New-Object Net.WebClient).DownloadFile('" & url & "','" & ps1 & "'); " & _
+    "& '" & ps1 & "' -RepoRoot '" & repo & "' }"""
+  sh.Run cmd, 0, True
 End If
-
-electronExe = scriptDir & "\node_modules\electron\dist\electron.exe"
-If Not fso.FileExists(electronExe) Then
-  MsgBox "Electron not found — run npm install in:" & vbCrLf & scriptDir, vbCritical, "ViewerOne"
-  WScript.Quit 1
-End If
-
-launchCmd = "cmd /c cd /d """ & scriptDir & """ && """ & electronExe & """ ."
-sh.Run launchCmd, 0, False
