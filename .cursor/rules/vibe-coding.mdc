@@ -7,3 +7,5 @@ alwaysApply: true
 - Never ask the user to run PowerShell, git, npm, or terminal commands. Handle everything autonomously.
 - Do not show branch/checkout/commit dialogs or instructions to the user.
 - Keep ViewerOne launch fully automatic: shortcut click syncs, builds, and opens with no popups.
+- Every change that should appear in the app: bump `package.json` patch (6.0.1 shows as **6.00.01**), add a CHANGELOG line, and land it on `main` before telling the user it is ready. Desktop/taskbar shortcuts reset to `origin/main` — a side branch is invisible to those links.
+- You cannot click the user's Windows shortcut from the cloud. Push to `main` so their next shortcut click syncs and opens the new version. Do not use PowerShell to launch on their PC.
