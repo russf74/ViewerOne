@@ -116,6 +116,7 @@ import { runLightingAnalyzePass } from './lightingAnalyzePass.js'
 import { normalizeSongAudioAnalysis } from '../shared/audioAnalysisNormalize.js'
 import { normalizeClickTrackSettings } from '../shared/clickTrackSettings.js'
 import { formatViewerOneVersion } from '../shared/appVersion.js'
+import { listWindowsAudioDevices } from './listAudioDevices.js'
 
 // Must run before any MIDI/serial traffic — EPIPE on stdout used to kill the main process mid-gig.
 installProcessGuards()
@@ -3268,6 +3269,15 @@ function registerIpc(): void {
     lightingAnalyzeCancelled = true
     setLightingAnalyze({ phase: 'cancelled', message: 'Cancelling…' })
     return buildPublicState()
+  })
+
+  ipcMain.handle('lighting:listLoopbackDevices', async () => {
+    try {
+      return await listWindowsAudioDevices()
+    } catch (err) {
+      console.warn('[ViewerOne] List audio devices failed:', err)
+      return []
+    }
   })
 
   ipcMain.handle('lighting:setProgram', (_e, songId: unknown, program: unknown) => {

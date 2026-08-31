@@ -45,7 +45,8 @@ const api = {
     ipcRenderer.invoke('lighting:analyzeFromCubase'),
   cancelLightingAnalyze: (): Promise<PublicState> => ipcRenderer.invoke('lighting:cancelAnalyze'),
   setLightingProgram: (songId: string, program: unknown): Promise<PublicState> =>
-    ipcRenderer.invoke('lighting:setProgram', songId, program)
+    ipcRenderer.invoke('lighting:setProgram', songId, program),
+  listLoopbackDevices: (): Promise<string[]> => ipcRenderer.invoke('lighting:listLoopbackDevices')
 }
 
 contextBridge.exposeInMainWorld('viewer', api)

@@ -1258,6 +1258,22 @@ button:disabled {
   margin: 8px 0;
 }
 
+.loopback-device-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.loopback-device-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.loopback-device-row .track-btn {
+  flex: 0 0 auto;
+  align-self: center;
+}
+
 .lighting-readiness {
   margin: 8px 0;
   font-size: 0.72rem;

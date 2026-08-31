@@ -9,6 +9,7 @@ Major release: sound-to-light sidecar, Cubase-render analysis, IEM click track, 
 - **Lighting Director** — PC 127 timed cues with bar-aligned programs, accent flashes, DMX overrides; optional live loopback beat sync
 - **IEM click track** — auto-generated click WAV on analyze; live MIDI click during transport (configurable channel/notes/count-in)
 - Sidecar / opt-in: director disabled by default; normal Cubase + ViewerOne gig flow unchanged unless enabled
+- Lighting Studio loopback is a dropdown of enabled Windows recording devices (Stereo Mix / CABLE / Voicemeeter first). Short names like `Stereo Mix` auto-match the full device name.
 
 ## v5.12.86
 

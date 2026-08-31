@@ -29,6 +29,7 @@ export type ViewerApi = {
   analyzeLightingFromCubase: () => Promise<PublicState>
   cancelLightingAnalyze: () => Promise<PublicState>
   setLightingProgram: (songId: string, program: unknown) => Promise<PublicState>
+  listLoopbackDevices: () => Promise<string[]>
 }
 
 declare global {

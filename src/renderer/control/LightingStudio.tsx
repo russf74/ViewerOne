@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppState, PublicState, SetlistItem } from '../../shared/types'
 import type { LightingProgram } from '../../shared/lightingProgram'
 import { LED_PATTERNS } from '../../shared/ledPatterns'
 import { formatMsToTimecode, parseTimecodeToMs } from '../../shared/lightingProgram'
+import { resolveLoopbackDevice, sortAudioDevices } from '../../shared/dshowAudioDevices'
 
 type Props = {
   row: SetlistItem | null
@@ -165,6 +166,42 @@ export function LightingCueEditor({ row, onSaveProgram }: Pick<Props, 'row' | 'o
 export function LightingStudio({ row, state, onSaveProgram, onPatchSettings, onPatchClickTrack }: Props) {
   const readiness = state.lightingReadiness
   const ct = state.clickTrack
+  const [devices, setDevices] = useState<string[]>([])
+  const [listingDevices, setListingDevices] = useState(true)
+  const autoMatched = useRef(false)
+
+  const loadDevices = () => {
+    setListingDevices(true)
+    void window.viewer
+      .listLoopbackDevices()
+      .then((found) => {
+        const list = Array.isArray(found) ? found.filter((n) => typeof n === 'string' && n.trim()) : []
+        setDevices(list)
+        if (!autoMatched.current) {
+          const resolved = resolveLoopbackDevice(state.lightingLoopbackDevice, list)
+          if (resolved && resolved !== state.lightingLoopbackDevice) {
+            autoMatched.current = true
+            onPatchSettings({ lightingLoopbackDevice: resolved })
+          } else if (resolved) {
+            autoMatched.current = true
+          }
+        }
+      })
+      .catch(() => setDevices([]))
+      .finally(() => setListingDevices(false))
+  }
+
+  useEffect(() => {
+    loadDevices()
+    // Load once when Lighting Studio opens; Refresh re-lists.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const deviceOptions = useMemo(() => {
+    const current = state.lightingLoopbackDevice.trim()
+    const extra = current && !devices.includes(current) ? [current] : []
+    return sortAudioDevices([...devices, ...extra])
+  }, [devices, state.lightingLoopbackDevice])
 
   const clickHint = useMemo(() => {
     if (!row?.clickTrackPath) return null
@@ -219,13 +256,41 @@ export function LightingStudio({ row, state, onSaveProgram, onPatchSettings, onP
 
       <div className="lighting-studio-grid">
         <div className="field">
-          <label htmlFor="loopback-device">Loopback device (Stereo Mix)</label>
-          <input
-            id="loopback-device"
-            className="text-input"
-            value={state.lightingLoopbackDevice}
-            onChange={(e) => onPatchSettings({ lightingLoopbackDevice: e.target.value })}
-          />
+          <label htmlFor="loopback-device">Recording device Cubase is heard through</label>
+          <div className="loopback-device-row">
+            <select
+              id="loopback-device"
+              value={state.lightingLoopbackDevice}
+              disabled={listingDevices && devices.length === 0}
+              onChange={(e) => onPatchSettings({ lightingLoopbackDevice: e.target.value })}
+            >
+              {listingDevices && devices.length === 0 ? (
+                <option value={state.lightingLoopbackDevice}>Looking for devices…</option>
+              ) : deviceOptions.length === 0 ? (
+                <option value="">No recording devices found</option>
+              ) : (
+                deviceOptions.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))
+              )}
+            </select>
+            <button
+              type="button"
+              className="track-btn"
+              onClick={() => {
+                autoMatched.current = false
+                loadDevices()
+              }}
+              disabled={listingDevices}
+            >
+              Refresh
+            </button>
+          </div>
+          <p className="settings-hint">
+            Pick Stereo Mix (or your interface loopback). The list is enabled Windows recording devices.
+          </p>
         </div>
         <div className="field">
           <label htmlFor="capture-mode">Cubase capture mode</label>
