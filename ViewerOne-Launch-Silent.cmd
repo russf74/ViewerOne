@@ -4,24 +4,23 @@ REM %1 = repo folder. When omitted, this .cmd lives in the repo.
 set "REPO=%~1"
 if "%REPO%"=="" set "REPO=%~dp0"
 for %%I in ("%REPO%") do set "REPO=%%~fI"
+cd /d "%REPO%"
 
 set "LOG=%TEMP%\viewerone-launch.log"
-echo %DATE% %TIME% Launch REPO=%REPO% visible=%VIEWERONE_VISIBLE%>>"%LOG%"
+echo %DATE% %TIME% BEGIN %REPO%>>"%LOG%"
 
-REM Hidden shortcut clicks must pop a visible window so you can see the update.
-if not defined VIEWERONE_VISIBLE (
-  copy /Y "%~f0" "%TEMP%\viewerone-launch-run.cmd" >nul
-  set "VIEWERONE_VISIBLE=1"
-  start "ViewerOne update" /wait cmd /c ""%TEMP%\viewerone-launch-run.cmd" "%REPO%""
-  exit /b %ERRORLEVEL%
-)
-
-cd /d "%REPO%"
 title ViewerOne update
 echo.
-echo  Updating ViewerOne — leave this window open.
-echo  The old app will close. You want v6.00.04 when it reopens.
+echo ========================================
+echo   Updating ViewerOne to v6.00.05
+echo   Keep this window open.
+echo ========================================
 echo.
+
+REM Always tell you this ran, even if the shortcut hid the console.
+> "%TEMP%\vo-upd.vbs" echo Set s = CreateObject("WScript.Shell")
+>> "%TEMP%\vo-upd.vbs" echo s.Popup "Updating ViewerOne to v6.00.05. Wait — do not use the old app.", 6, "ViewerOne", 64
+start "" wscript.exe "%TEMP%\vo-upd.vbs"
 
 if exist "%ProgramFiles%\nodejs\node.exe" set "PATH=%ProgramFiles%\nodejs;%PATH%"
 if exist "%ProgramFiles(x86)%\nodejs\node.exe" set "PATH=%ProgramFiles(x86)%\nodejs;%PATH%"
@@ -34,7 +33,8 @@ taskkill /F /IM electron.exe >>"%LOG%" 2>&1
 ping -n 4 127.0.0.1 >nul
 
 echo Syncing from GitHub...
-where git >nul 2>nul && (
+where git >nul 2>nul
+if not errorlevel 1 (
   git remote set-url origin https://github.com/russf74/ViewerOne.git 2>nul
   git fetch origin main >>"%LOG%" 2>&1
   git checkout main >>"%LOG%" 2>&1
@@ -44,45 +44,45 @@ where git >nul 2>nul && (
 
 set "VO_VER="
 if exist "package.json" for /f "delims=" %%V in ('node -p "require('./package.json').version" 2^>nul') do set "VO_VER=%%V"
-echo After git: %VO_VER%
-echo version after git %VO_VER%>>"%LOG%"
+echo After git: [%VO_VER%]
+echo after git %VO_VER%>>"%LOG%"
 
-set "NEEDZIP=0"
-if not exist "package.json" set "NEEDZIP=1"
-if "%VO_VER%"=="" set "NEEDZIP=1"
-if "%VO_VER%"=="6.0.0" set "NEEDZIP=1"
-if "%VO_VER%"=="6.0.1" set "NEEDZIP=1"
-if "%VO_VER%"=="6.0.2" set "NEEDZIP=1"
+set "NEEDZIP=1"
+if "%VO_VER%"=="6.0.5" set "NEEDZIP=0"
 
 if "%NEEDZIP%"=="1" (
-  echo Git did not get the new version — downloading zip...
+  echo Downloading ViewerOne from GitHub zip...
   if exist "%TEMP%\ViewerOne-main" rmdir /S /Q "%TEMP%\ViewerOne-main" >>"%LOG%" 2>&1
   curl.exe -L --fail -o "%TEMP%\viewerone-main.zip" https://github.com/russf74/ViewerOne/archive/refs/heads/main.zip
   if exist "%TEMP%\viewerone-main.zip" (
     tar.exe -xf "%TEMP%\viewerone-main.zip" -C "%TEMP%"
     if exist "%TEMP%\ViewerOne-main\package.json" (
-      xcopy /E /Y /Q /I "%TEMP%\ViewerOne-main\*" "%REPO%\" >>"%LOG%" 2>&1
+      xcopy /E /Y /Q /I "%TEMP%\ViewerOne-main\*" "%REPO%\"
     )
   )
   set "VO_VER="
   if exist "package.json" for /f "delims=" %%V in ('node -p "require('./package.json').version" 2^>nul') do set "VO_VER=%%V"
-  echo After zip: %VO_VER%
+  echo After zip: [%VO_VER%]
+  echo after zip %VO_VER%>>"%LOG%"
 )
 
-if "%VO_VER%"=="6.0.0" goto :stale
-if "%VO_VER%"=="6.0.1" goto :stale
-if "%VO_VER%"=="6.0.2" goto :stale
-if "%VO_VER%"=="" goto :stale
+if not "%VO_VER%"=="6.0.5" (
+  echo.
+  echo FAILED: still version [%VO_VER%] — not opening the old app.
+  echo Log: %LOG%
+  pause
+  exit /b 1
+)
 
 where npm >nul 2>nul
 if errorlevel 1 (
-  echo ERROR: npm not found. Install Node.js LTS.
+  echo ERROR: npm / Node.js not found.
   pause
   exit /b 1
 )
 
 if not exist "node_modules" (
-  echo First-time npm install...
+  echo Installing npm packages...
   call npm install --no-fund --no-audit
 )
 
@@ -95,7 +95,7 @@ if errorlevel 1 (
 )
 
 if not exist "node_modules\electron\dist\electron.exe" (
-  echo ERROR: electron missing
+  echo ERROR: electron.exe missing
   pause
   exit /b 1
 )
@@ -107,10 +107,3 @@ echo Starting ViewerOne v%VO_VER%...
 start "" /D "%REPO%" "%REPO%\node_modules\electron\dist\electron.exe" .
 echo Started OK v%VO_VER%>>"%LOG%"
 exit /b 0
-
-:stale
-echo.
-echo ViewerOne is still %VO_VER% — not opening the old app.
-echo Log: %LOG%
-pause
-exit /b 1

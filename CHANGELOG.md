@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.05
+
+- Updater no longer flashes and dies: it shows a “updating” message, closes `ViewerOne.exe` and `electron.exe`, then **refuses to start** unless the tree is **6.0.5**. That stops the instant 6.00.00 reopen.
+
 ## v6.00.04
 
 - Updater is **visible** (black “ViewerOne update” window). It force-closes `ViewerOne.exe` and `electron.exe`, pulls GitHub, and **will not start** if the tree is still 6.00.00. Instant open = the old installed icon, not this updater.
