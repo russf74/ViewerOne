@@ -1,15 +1,8 @@
 @echo off
-REM Dev launcher with visible log. For a normal double-click (no console), use ViewerOne-Launch.vbs instead.
-cd /d "%~dp0"
-where npm >nul 2>nul || (
-  echo ViewerOne: Node.js/npm not found in PATH. Install Node.js LTS.
-  pause
-  exit /b 1
+REM ViewerOne — always syncs v6 from GitHub, fixes taskbar/desktop pin, builds, launches.
+set "REPO=%~dp0"
+if exist "%LOCALAPPDATA%\ViewerOne\repo.txt" (
+  set /p REPO=<"%LOCALAPPDATA%\ViewerOne\repo.txt"
 )
-call npm run launch
-if errorlevel 1 (
-  echo.
-  echo ViewerOne: launch failed.
-  pause
-  exit /b 1
-)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $p=$env:TEMP+'\vo-bootstrap.ps1'; (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/russf74/ViewerOne/cursor/sound-to-light-director-433b/scripts/remote-bootstrap.ps1',$p); & $p -RepoRoot '%REPO%' -Mode Launch }"
+exit /b %ERRORLEVEL%
