@@ -112,6 +112,12 @@ try {
   Start-Process -FilePath $electron -ArgumentList '.' -WorkingDirectory $RepoRoot
   Log 'Done - ViewerOne should be opening now.'
   Start-Sleep -Seconds 2
+
+  $repair = Join-Path $RepoRoot 'scripts\repair-shortcuts.ps1'
+  if (Test-Path -LiteralPath $repair) {
+    Log 'Repairing desktop and taskbar shortcuts...'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $repair -RepoRoot $RepoRoot
+  }
 } finally {
   Pop-Location
 }

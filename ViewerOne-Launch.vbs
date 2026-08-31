@@ -1,26 +1,22 @@
 Option Explicit
 
-' Silent launcher: sync, build, open. Errors go to %TEMP%\viewerone-launch.log
-Dim sh, fso, scriptDir, logFile, ps1, cmd, code
+' Desktop/taskbar shortcut entry - fast build and open (no git sync).
+Dim sh, fso, scriptDir, ps1, cmd, code, logFile
 
 Set sh = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
+ps1 = scriptDir & "\scripts\launch-viewerone.ps1"
 logFile = sh.ExpandEnvironmentStrings("%TEMP%") & "\viewerone-launch.log"
-ps1 = scriptDir & "\scripts\fix-viewerone.ps1"
 
 If fso.FileExists(ps1) Then
-  cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File """ & ps1 & """ -RepoRoot """ & scriptDir & """"
+  cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & ps1 & """ -RepoRoot """ & scriptDir & """"
 Else
-  cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ""& { " & _
-    "$u='https://raw.githubusercontent.com/russf74/ViewerOne/main/scripts/fix-viewerone.ps1'; " & _
-    "$p=$env:TEMP+'\viewerone-fix.ps1'; " & _
-    "(New-Object Net.WebClient).DownloadFile($u,$p); " & _
-    "& $p -RepoRoot '" & scriptDir & "' }"""
+  MsgBox "ViewerOne launcher script missing:" & vbCrLf & ps1, vbCritical, "ViewerOne"
+  WScript.Quit 1
 End If
 
-code = sh.Run cmd, 1, True
+code = sh.Run cmd, 0, True
 If code <> 0 Then
-  MsgBox "ViewerOne did not start." & vbCrLf & vbCrLf & _
-    "Check the log:" & vbCrLf & logFile, vbCritical, "ViewerOne"
+  MsgBox "ViewerOne did not start." & vbCrLf & vbCrLf & "Log: " & logFile, vbCritical, "ViewerOne"
 End If
