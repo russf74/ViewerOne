@@ -48,8 +48,6 @@ npm run launch
 - Dev/build only: `npm run build`
 - Installer / portable Windows build: `npm run dist` (output under `release/`)
 - Shortcut scripts (after clone): `ViewerOne-Launch.cmd` / `ViewerOne-Launch.vbs`
-- If the desktop/taskbar shortcut shows a VBScript error or **ViewerOne did not start**,
-  double-click `ViewerOne-Fix.cmd` once. After that the normal shortcut is enough.
 
 ### 3. Restore setlist / app config
 

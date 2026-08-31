@@ -1,9 +1,8 @@
 ---
-description: ViewerOne cloud-agent working style
+description: Keep the Windows app launcher simple
 alwaysApply: true
 ---
 
-- Do not ask the user to reconfigure MIDI, Cubase, loopMIDI, or hardware.
-- Desktop/taskbar launch errors must be visible (message box or console). Never swallow shortcut failures with On Error Resume Next.
-- Capturing VBScript `WScript.Shell.Run` requires parentheses: `exitCode = sh.Run(command, 0, True)`.
-- If a local shortcut is already broken, it cannot update itself from GitHub. Ship `ViewerOne-Fix.cmd` and say so plainly.
+The daily ViewerOne shortcut is local: PATH, `npm run build`, start `electron.exe`.
+Do not add git pull, GitHub downloads, cloud bootstrap, or extra branches to that path.
+Lighting Director / sound-to-light lives in the app, not in the launcher.
