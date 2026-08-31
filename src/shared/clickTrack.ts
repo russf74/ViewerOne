@@ -18,6 +18,8 @@ export type ClickTrackOptions = {
   clickMs?: number
   /** Accent click length in ms. */
   accentClickMs?: number
+  /** If set, click WAV lasts this long (ms) instead of analysis.durationMs. */
+  durationMs?: number
 }
 
 const DEFAULT_OPTS: Required<ClickTrackOptions> = {
@@ -26,9 +28,10 @@ const DEFAULT_OPTS: Required<ClickTrackOptions> = {
   accentEvery: 4,
   countInBars: 1,
   beatsPerBar: 4,
-  sampleRate: 44100,
+  sampleRate: 48000,
   clickMs: 8,
-  accentClickMs: 12
+  accentClickMs: 12,
+  durationMs: 0
 }
 
 /** Full beat grid for click generation (not storage-capped). */
@@ -48,7 +51,8 @@ export function buildFullBeatGrid(analysis: SongAudioAnalysis): number[] {
 export function beatTimesWithCountIn(
   analysis: SongAudioAnalysis,
   countInBars: number,
-  beatsPerBar = 4
+  beatsPerBar = 4,
+  untilMs = 0
 ): { atMs: number; accent: boolean; beatIndex: number }[] {
   const opts = { ...DEFAULT_OPTS, countInBars, beatsPerBar }
   const beatMs = 60000 / Math.max(60, analysis.bpm)
@@ -61,7 +65,8 @@ export function beatTimesWithCountIn(
     beatIndex++
   }
   let t = Math.max(0, analysis.beatOffsetMs)
-  while (t <= analysis.durationMs && out.length < 12000) {
+  const endMs = Math.max(analysis.durationMs, untilMs)
+  while (t <= endMs && out.length < 12000) {
     out.push({
       atMs: Math.round(t),
       accent: beatIndex % opts.accentEvery === 0,
@@ -98,7 +103,8 @@ export function synthesizeClickTrack(
   const countInMs = Math.round(
     opts.countInBars * opts.beatsPerBar * (60000 / Math.max(60, analysis.bpm))
   )
-  const totalMs = countInMs + analysis.durationMs
+  const songMs = Math.max(analysis.durationMs, opts.durationMs ?? 0)
+  const totalMs = countInMs + songMs
   const sampleRate = opts.sampleRate
   const totalSamples = Math.ceil((totalMs / 1000) * sampleRate)
   const mix = new Float32Array(totalSamples)
@@ -106,7 +112,7 @@ export function synthesizeClickTrack(
   const regular = synthesizeClickSample(sampleRate, opts.clickMs, 1800, opts.volume)
   const accent = synthesizeClickSample(sampleRate, opts.accentClickMs, 2400, opts.accentVolume)
 
-  const events = beatTimesWithCountIn(analysis, opts.countInBars, opts.beatsPerBar)
+  const events = beatTimesWithCountIn(analysis, opts.countInBars, opts.beatsPerBar, songMs)
   for (const ev of events) {
     const offsetMs = ev.atMs + countInMs
     if (offsetMs < 0) continue

@@ -16,17 +16,23 @@ function clickTrackPcm(bpm: number, durationSec: number, sr = 22050): Float32Arr
 }
 
 const analysis = analyzeMonoPcm(clickTrackPcm(120, 10), 22050)
-const aligned = synthesizeClickTrack(analysis, { countInBars: 0, sampleRate: 44100 })
-const alignedMs = (aligned.samples.length / 44100) * 1000
+const aligned = synthesizeClickTrack(analysis, { countInBars: 0 })
+const alignedMs = (aligned.samples.length / aligned.sampleRate) * 1000
+if (aligned.sampleRate !== 48000) throw new Error(`expected 48 kHz click, got ${aligned.sampleRate}`)
 if (Math.abs(alignedMs - analysis.durationMs) > 30) {
   throw new Error(`click WAV length ${alignedMs} != song ${analysis.durationMs}`)
 }
 if (aligned.countInMs !== 0) throw new Error('cubase click should have no count-in')
-const withCount = synthesizeClickTrack(analysis, { countInBars: 2, sampleRate: 44100 })
+const stretched = synthesizeClickTrack(analysis, { countInBars: 0, durationMs: 226000 })
+const stretchedMs = Math.round((stretched.samples.length / stretched.sampleRate) * 1000)
+if (stretchedMs !== 226000) throw new Error(`expected 226000 ms click, got ${stretchedMs}`)
+const withCount = synthesizeClickTrack(analysis, { countInBars: 2 })
 if (withCount.countInMs <= 0) throw new Error('live count-in missing')
 console.log('click-track: OK', {
   bpm: analysis.bpm,
   songMs: analysis.durationMs,
   clickMs: Math.round(alignedMs),
+  cubaseMs: stretchedMs,
+  sampleRate: aligned.sampleRate,
   liveCountInMs: withCount.countInMs
 })

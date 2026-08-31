@@ -60,10 +60,19 @@ const analysis = analyzeMonoPcm(samples, 22050)
 const program = buildLightingProgram(analysis)
 const clickPath = wav.replace(/\.wav$/i, '-click.wav')
 if (fs.existsSync(clickPath)) fs.unlinkSync(clickPath)
-const written = writeClickTrackWav(clickPath, analysis, { countInBars: 0, accentEvery: 4 })
+const written = writeClickTrackWav(clickPath, analysis, {
+  countInBars: 0,
+  accentEvery: 4,
+  sampleRate: 48000,
+  durationMs: 226000
+})
 const st = fs.statSync(clickPath)
 console.log('click written', clickPath, 'bytes', st.size, 'mtime', st.mtime.toISOString())
-const clickSynth = synthesizeClickTrack(analysis, { countInBars: 0 })
+const clickSynth = synthesizeClickTrack(analysis, {
+  countInBars: 0,
+  sampleRate: 48000,
+  durationMs: 226000
+})
 const clickDurMs = Math.round((clickSynth.samples.length / clickSynth.sampleRate) * 1000)
 
 const bases = program.cues.filter((c) => !c.accentDurationMs)
@@ -87,8 +96,8 @@ console.log(
   )
 )
 
-if (Math.abs(clickDurMs - analysis.durationMs) > 50) {
-  throw new Error(`click duration ${clickDurMs} != song ${analysis.durationMs}`)
+if (Math.abs(clickDurMs - 226000) > 50) {
+  throw new Error(`click duration ${clickDurMs} != 226000`)
 }
 
 const configPath = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'viewer-one-config.json')
