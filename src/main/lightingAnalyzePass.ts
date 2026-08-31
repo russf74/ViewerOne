@@ -7,12 +7,10 @@ import {
   type CubaseLengthRead
 } from './cubaseLengthCapture.js'
 import { cubaseRenderPathForSong } from './cubaseRenderPaths.js'
-import { decodeAudioFileToMonoPcm } from './audioDecode.js'
-import { analyzeMonoPcm } from '../shared/audioAnalysis.js'
-import { buildLightingProgram } from '../shared/lightingProgram.js'
-import type { LightingAnalyzeScanState, LightingProgram, SetlistItem, SongAudioAnalysis } from '../shared/types.js'
+import type { LightingAnalyzeScanState, SetlistItem } from '../shared/types.js'
 import { LoopbackRecorder } from './loopbackRecord.js'
 import { songLengthSeconds } from '../shared/setlistTiming.js'
+import type { LightingDirector } from './lightingDirector.js'
 
 export type LightingAnalyzeDeps = {
   getSetlist: () => SetlistItem[]
@@ -32,6 +30,8 @@ export type LightingAnalyzeDeps = {
   minimizeUi: () => Promise<void>
   restoreUi: () => Promise<void>
   loopbackDevice: string
+  clickSettings: ClickTrackSettings
+  director: LightingDirector
 }
 
 const CAPTURE_PAD_MS = 600
@@ -78,13 +78,17 @@ async function captureRenderedPlayback(
 }
 
 async function analyzeRenderFile(
+  deps: LightingAnalyzeDeps,
+  song: SetlistItem,
   filePath: string
-): Promise<{ audioAnalysis: SongAudioAnalysis; lightingProgram: LightingProgram } | null> {
+): Promise<{
+  audioAnalysis: SongAudioAnalysis
+  lightingProgram: LightingProgram
+  clickTrackPath?: string
+  clickTrackCountInMs?: number
+} | null> {
   try {
-    const { samples, sampleRate, durationMs } = await decodeAudioFileToMonoPcm(filePath)
-    const audioAnalysis = analyzeMonoPcm(samples, sampleRate, durationMs)
-    const lightingProgram = buildLightingProgram(audioAnalysis)
-    return { audioAnalysis, lightingProgram }
+    return await deps.director.analyzeFromRenderWav(song, filePath, deps.clickSettings)
   } catch (err) {
     console.warn('[ViewerOne] Render analyze failed:', err)
     return null
@@ -199,7 +203,7 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
       }
 
       deps.setScan({ phase: 'analyzing', message: `Song ${index}: “${title}” — analyzing render…` })
-      const analyzed = await analyzeRenderFile(renderPath)
+      const analyzed = await analyzeRenderFile(deps, row, renderPath)
       if (!analyzed) return
 
       deps.updateRow(row.id, {
@@ -209,6 +213,8 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
         backingTrackPath: undefined,
         audioAnalysis: analyzed.audioAnalysis,
         lightingProgram: analyzed.lightingProgram,
+        clickTrackPath: analyzed.clickTrackPath,
+        clickTrackCountInMs: analyzed.clickTrackCountInMs,
         length: prep.mmss || row.length
       })
       captured++

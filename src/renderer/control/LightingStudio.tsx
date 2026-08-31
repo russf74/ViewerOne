@@ -1,0 +1,353 @@
+import { useMemo, useState } from 'react'
+import type { AppState, PublicState, SetlistItem } from '../../shared/types'
+import type { LightingProgram } from '../../shared/lightingProgram'
+import { LED_PATTERNS } from '../../shared/ledPatterns'
+import { formatMsToTimecode, parseTimecodeToMs } from '../../shared/lightingProgram'
+
+type Props = {
+  row: SetlistItem | null
+  state: PublicState
+  onSaveProgram: (program: LightingProgram) => void
+  onPatchSettings: (patch: Partial<AppState>) => void
+  onPatchClickTrack: (patch: Partial<AppState['clickTrack']>) => void
+}
+
+export function LightingCueEditor({ row, onSaveProgram }: Pick<Props, 'row' | 'onSaveProgram'>) {
+  const [timeDrafts, setTimeDrafts] = useState<Record<string, string>>({})
+
+  const program = row?.lightingProgram
+
+  if (!row || !program?.cues?.length) {
+    return (
+      <p className="settings-hint">
+        Select a song with a lighting program to edit cues, or run Analyze from Cubase.
+      </p>
+    )
+  }
+
+  const updateCue = (idx: number, patch: Partial<(typeof program.cues)[0]>) => {
+    const next: LightingProgram = {
+      ...program,
+      cues: program.cues.map((c, i) => (i === idx ? { ...c, ...patch } : c))
+    }
+    onSaveProgram(next)
+  }
+
+  const addCue = () => {
+    const last = program.cues[program.cues.length - 1]
+    const next: LightingProgram = {
+      ...program,
+      cues: [
+        ...program.cues,
+        {
+          id: crypto.randomUUID(),
+          atMs: (last?.atMs ?? 0) + 15000,
+          ledPatternId: 8,
+          label: 'manual',
+          dmxLook: 'live'
+        }
+      ].sort((a, b) => a.atMs - b.atMs)
+    }
+    onSaveProgram(next)
+  }
+
+  const removeCue = (idx: number) => {
+    if (program.cues.length <= 1) return
+    onSaveProgram({
+      ...program,
+      cues: program.cues.filter((_, i) => i !== idx)
+    })
+  }
+
+  const durationMs = row.audioAnalysis?.durationMs ?? program.cues[program.cues.length - 1].atMs + 1000
+
+  return (
+    <div className="lighting-cue-editor">
+      <div className="cue-timeline" aria-hidden>
+        {program.cues.map((cue) => (
+          <span
+            key={cue.id ?? cue.atMs}
+            className="cue-timeline-mark"
+            style={{ left: `${Math.min(100, (cue.atMs / durationMs) * 100)}%` }}
+            title={`${cue.label ?? 'cue'} @ ${formatMsToTimecode(cue.atMs)}`}
+          />
+        ))}
+      </div>
+      <div className="cue-table-wrap">
+        <table className="cue-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Section</th>
+              <th>Pattern</th>
+              <th>DMX</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {program.cues.map((cue, idx) => {
+              const key = cue.id ?? String(cue.atMs)
+              const timeVal = timeDrafts[key] ?? formatMsToTimecode(cue.atMs)
+              return (
+                <tr key={key}>
+                  <td>
+                    <input
+                      className="text-input cue-time-input"
+                      value={timeVal}
+                      onChange={(e) =>
+                        setTimeDrafts((d) => ({ ...d, [key]: e.target.value }))
+                      }
+                      onBlur={() => {
+                        const ms = parseTimecodeToMs(timeDrafts[key] ?? '')
+                        if (ms != null) updateCue(idx, { atMs: ms })
+                        setTimeDrafts((d) => {
+                          const next = { ...d }
+                          delete next[key]
+                          return next
+                        })
+                      }}
+                      aria-label="Cue time mm:ss"
+                    />
+                  </td>
+                  <td>
+                    <input
+                      className="text-input"
+                      value={cue.label ?? ''}
+                      onChange={(e) => updateCue(idx, { label: e.target.value })}
+                      aria-label="Section label"
+                    />
+                  </td>
+                  <td>
+                    <select
+                      value={cue.ledPatternId}
+                      onChange={(e) => updateCue(idx, { ledPatternId: Number(e.target.value) })}
+                    >
+                      {LED_PATTERNS.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <select
+                      value={cue.dmxLook ?? 'live'}
+                      onChange={(e) =>
+                        updateCue(idx, {
+                          dmxLook: e.target.value as 'off' | 'idle' | 'live'
+                        })
+                      }
+                      aria-label="DMX look"
+                    >
+                      <option value="live">Live</option>
+                      <option value="idle">Idle</option>
+                      <option value="off">Off</option>
+                    </select>
+                  </td>
+                  <td>
+                    <button type="button" className="track-btn" onClick={() => removeCue(idx)}>
+                      ×
+                    </button>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      <button type="button" className="setlist-step-btn" onClick={addCue}>
+        + Add cue
+      </button>
+    </div>
+  )
+}
+
+export function LightingStudio({ row, state, onSaveProgram, onPatchSettings, onPatchClickTrack }: Props) {
+  const readiness = state.lightingReadiness
+  const ct = state.clickTrack
+
+  const clickHint = useMemo(() => {
+    if (!row?.clickTrackPath) return null
+    const parts = row.clickTrackPath.split(/[/\\]/)
+    return parts[parts.length - 1]
+  }, [row?.clickTrackPath])
+
+  return (
+    <div className="lighting-studio">
+      <h3 className="settings-subheading">Lighting Studio</h3>
+      <p className="settings-hint">
+        Sidecar only — Cubase playback and ViewerOne gig flow stay unchanged until you opt in.
+        Analyze captures <strong>real Cubase output</strong> (tempo/key/cut/paste included).
+      </p>
+
+      <div className="lighting-readiness">
+        <strong>
+          Gig readiness: {readiness.readyCount}/{readiness.totalSongs} songs
+        </strong>
+        {!readiness.gigReady && readiness.totalSongs > 0 ? (
+          <ul className="readiness-issues">
+            {readiness.rows
+              .filter((r) => !r.ready)
+              .slice(0, 6)
+              .map((r) => (
+                <li key={r.id}>
+                  PC {r.program} {r.title}: {r.issues.join('; ')}
+                </li>
+              ))}
+          </ul>
+        ) : readiness.gigReady ? (
+          <p className="settings-hint lighting-director-live">All performance songs ready.</p>
+        ) : null}
+      </div>
+
+      <label className="esp-enable">
+        <input
+          type="checkbox"
+          checked={state.lightingDirectorEnabled}
+          onChange={(e) => onPatchSettings({ lightingDirectorEnabled: e.target.checked })}
+        />
+        <span>Enable PC 127 timed lighting programs at the gig</span>
+      </label>
+      <label className="esp-enable">
+        <input
+          type="checkbox"
+          checked={state.liveAudioSyncEnabled}
+          onChange={(e) => onPatchSettings({ liveAudioSyncEnabled: e.target.checked })}
+        />
+        <span>Live audio beat sync (loopback nudge during show)</span>
+      </label>
+
+      <div className="lighting-studio-grid">
+        <div className="field">
+          <label htmlFor="loopback-device">Loopback device (Stereo Mix)</label>
+          <input
+            id="loopback-device"
+            className="text-input"
+            value={state.lightingLoopbackDevice}
+            onChange={(e) => onPatchSettings({ lightingLoopbackDevice: e.target.value })}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="capture-mode">Cubase capture mode</label>
+          <select
+            id="capture-mode"
+            value={state.lightingCaptureMode}
+            onChange={(e) =>
+              onPatchSettings({
+                lightingCaptureMode: e.target.value as 'playback' | 'export'
+              })
+            }
+          >
+            <option value="playback">Playback + loopback record (recommended)</option>
+            <option value="export">Export folder watch (advanced)</option>
+          </select>
+        </div>
+      </div>
+
+      <h4 className="settings-subheading">IEM click track</h4>
+      <p className="settings-hint">
+        Generates a WAV click aligned to analyzed beats (import into Cubase or IEM player). Live
+        MIDI click sends notes on each beat while transport plays — route to a dedicated channel
+        away from Cubase instruments.
+      </p>
+      <label className="esp-enable">
+        <input
+          type="checkbox"
+          checked={ct.generateWav}
+          onChange={(e) => onPatchClickTrack({ generateWav: e.target.checked })}
+        />
+        <span>Auto-generate click WAV when analyzing</span>
+      </label>
+      <label className="esp-enable">
+        <input
+          type="checkbox"
+          checked={ct.liveMidiEnabled}
+          onChange={(e) => onPatchClickTrack({ liveMidiEnabled: e.target.checked })}
+        />
+        <span>Live MIDI click during transport (IEM)</span>
+      </label>
+      <div className="lighting-studio-grid">
+        <div className="field">
+          <label htmlFor="click-ch">MIDI channel</label>
+          <input
+            id="click-ch"
+            className="text-input"
+            type="number"
+            min={1}
+            max={16}
+            value={ct.midiChannel}
+            onChange={(e) => onPatchClickTrack({ midiChannel: Number(e.target.value) })}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="click-note">Beat note</label>
+          <input
+            id="click-note"
+            className="text-input"
+            type="number"
+            min={0}
+            max={127}
+            value={ct.midiNote}
+            onChange={(e) => onPatchClickTrack({ midiNote: Number(e.target.value) })}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="accent-note">Downbeat note</label>
+          <input
+            id="accent-note"
+            className="text-input"
+            type="number"
+            min={0}
+            max={127}
+            value={ct.accentNote}
+            onChange={(e) => onPatchClickTrack({ accentNote: Number(e.target.value) })}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="count-in">Count-in bars</label>
+          <input
+            id="count-in"
+            className="text-input"
+            type="number"
+            min={0}
+            max={4}
+            value={ct.countInBars}
+            onChange={(e) => onPatchClickTrack({ countInBars: Number(e.target.value) })}
+          />
+        </div>
+      </div>
+      {row?.audioAnalysis ? (
+        <p className="settings-hint">
+          Current song: {row.audioAnalysis.bpm} BPM
+          {row.clickTrackCountInMs
+            ? ` · count-in ${Math.round(row.clickTrackCountInMs / 1000)}s`
+            : ''}
+          {clickHint ? ` · click file ${clickHint}` : ''}
+        </p>
+      ) : null}
+      {state.clickTrackLive.enabled && state.transport.playing ? (
+        <p className="settings-hint lighting-director-live">
+          Live click active · beat {state.clickTrackLive.lastBeatIndex ?? '—'}
+          {state.clickTrackLive.nextBeatMs != null
+            ? ` · next @ ${formatMsToTimecode(state.clickTrackLive.nextBeatMs)}`
+            : ''}
+        </p>
+      ) : null}
+
+      {state.lightingDirector.active ? (
+        <p className="settings-hint lighting-director-live">
+          Director: {state.lightingDirector.activeCueLabel ?? '—'} · pattern{' '}
+          {state.lightingDirector.activePatternId ?? '—'} ·{' '}
+          {Math.round(state.lightingDirector.performanceMs / 1000)}s
+        </p>
+      ) : null}
+
+      {state.lightingAnalyze.active ? (
+        <p className="settings-hint">Cubase analyze: {state.lightingAnalyze.message}</p>
+      ) : null}
+
+      <h4 className="settings-subheading">Cue program — {row?.title ?? 'no song selected'}</h4>
+      <LightingCueEditor row={row} onSaveProgram={onSaveProgram} />
+    </div>
+  )
+}

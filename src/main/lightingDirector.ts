@@ -1,8 +1,11 @@
 import { analyzeMonoPcm } from '../shared/audioAnalysis.js'
-import { buildLightingProgram, activeLightingCue, nextLightingCue } from '../shared/lightingProgram.js'
+import { buildLightingProgram, resolveActiveCues, nextLightingCue } from '../shared/lightingProgram.js'
+import type { LightingCue } from '../shared/lightingProgram.js'
 import { LiveBeatSync } from '../shared/liveAudioSync.js'
-import type { LightingProgram, SetlistItem, SongAudioAnalysis } from '../shared/types.js'
+import type { ClickTrackSettings, LightingProgram, SetlistItem, SongAudioAnalysis } from '../shared/types.js'
 import { decodeAudioFileToMonoPcm } from './audioDecode.js'
+import { writeClickTrackWav } from './clickTrackWav.js'
+import { clickTrackPathForSong } from './clickTrackPaths.js'
 import { LiveAudioCapture } from './liveAudioCapture.js'
 
 export type LightingDirectorSnapshot = {
@@ -18,27 +21,35 @@ export type LightingDirectorSnapshot = {
   analyzeError: string | null
 }
 
-export type ApplyPatternFn = (patternId: number, brightness?: number, dmxLook?: 'off' | 'idle' | 'live') => void
+export type ApplyCueFn = (cue: LightingCue) => void
+
+export type AnalyzeSongResult = {
+  audioAnalysis: SongAudioAnalysis
+  lightingProgram: LightingProgram
+  clickTrackPath?: string
+  clickTrackCountInMs?: number
+}
 
 export class LightingDirector {
   private active = false
   private songId: string | null = null
   private program: LightingProgram | null = null
   private analysis: SongAudioAnalysis | null = null
-  private lastAppliedPatternId: number | null = null
+  private lastAppliedKey: string | null = null
   private analyzingSongId: string | null = null
   private analyzeError: string | null = null
   private readonly beatSync = new LiveBeatSync()
   private readonly liveCapture = new LiveAudioCapture(this.beatSync)
-  private applyPattern: ApplyPatternFn = () => {}
+  private applyCue: ApplyCueFn = () => {}
 
-  setApplyPattern(fn: ApplyPatternFn): void {
-    this.applyPattern = fn
+  setApplyCue(fn: ApplyCueFn): void {
+    this.applyCue = fn
   }
 
   snapshot(): LightingDirectorSnapshot {
     const perf = this.beatSync.adjustedPerformanceMs(this.rawPerformanceMs)
-    const cue = activeLightingCue(this.program ?? undefined, perf)
+    const state = resolveActiveCues(this.program ?? undefined, perf)
+    const cue = state ? state.accent ?? state.base : null
     const next = nextLightingCue(this.program ?? undefined, perf)
     return {
       active: this.active,
@@ -46,7 +57,7 @@ export class LightingDirector {
       performanceMs: Math.round(perf),
       syncOffsetMs: Math.round(this.beatSync.getSyncOffsetMs()),
       activeCueLabel: cue?.label ?? null,
-      activePatternId: cue?.ledPatternId ?? this.lastAppliedPatternId,
+      activePatternId: cue?.ledPatternId ?? null,
       nextCueAtMs: next?.atMs ?? null,
       liveAudioCapturing: this.liveCapture.capturing,
       analyzingSongId: this.analyzingSongId,
@@ -56,18 +67,19 @@ export class LightingDirector {
 
   private rawPerformanceMs = 0
 
-  /** Update performance clock from countdown (elapsed ms from song start). */
   tick(performanceMs: number): void {
     this.rawPerformanceMs = performanceMs
     this.beatSync.setPerformanceMs(performanceMs)
     if (!this.active || !this.program) return
 
     const adjusted = this.beatSync.adjustedPerformanceMs(performanceMs)
-    const cue = activeLightingCue(this.program, adjusted)
-    if (!cue) return
-    if (cue.ledPatternId === this.lastAppliedPatternId) return
-    this.lastAppliedPatternId = cue.ledPatternId
-    this.applyPattern(cue.ledPatternId, cue.brightness, cue.dmxLook)
+    const state = resolveActiveCues(this.program, adjusted)
+    if (!state) return
+    const cue = state.accent ?? state.base
+    const key = `${cue.atMs}:${cue.ledPatternId}:${cue.label ?? ''}:${state.accent ? 'a' : 'b'}`
+    if (key === this.lastAppliedKey) return
+    this.lastAppliedKey = key
+    this.applyCue(cue)
   }
 
   arm(song: SetlistItem | null, liveAudio: boolean): void {
@@ -80,7 +92,7 @@ export class LightingDirector {
     this.songId = song.id
     this.program = song.lightingProgram
     this.analysis = song.audioAnalysis ?? null
-    this.lastAppliedPatternId = null
+    this.lastAppliedKey = null
     this.rawPerformanceMs = 0
     this.beatSync.setAnalysis(this.analysis)
     this.beatSync.resetPerformance(0)
@@ -97,7 +109,7 @@ export class LightingDirector {
     this.songId = null
     this.program = null
     this.analysis = null
-    this.lastAppliedPatternId = null
+    this.lastAppliedKey = null
     this.rawPerformanceMs = 0
     if (stopLiveAudio) this.liveCapture.stop()
     this.beatSync.setAnalysis(null)
@@ -107,22 +119,31 @@ export class LightingDirector {
     this.disarm(true)
   }
 
-  async analyzeSongBackingTrack(song: SetlistItem): Promise<{
-    audioAnalysis: SongAudioAnalysis
-    lightingProgram: LightingProgram
-  }> {
-    if (!song.backingTrackPath) {
-      throw new Error('No backing track path set for this song.')
-    }
+  async analyzeFromRenderWav(
+    song: SetlistItem,
+    wavPath: string,
+    clickSettings: ClickTrackSettings
+  ): Promise<AnalyzeSongResult> {
     this.analyzingSongId = song.id
     this.analyzeError = null
     try {
-      const { samples, sampleRate, durationMs } = await decodeAudioFileToMonoPcm(
-        song.backingTrackPath
-      )
+      const { samples, sampleRate, durationMs } = await decodeAudioFileToMonoPcm(wavPath)
       const audioAnalysis = analyzeMonoPcm(samples, sampleRate, durationMs)
       const lightingProgram = buildLightingProgram(audioAnalysis)
-      return { audioAnalysis, lightingProgram }
+      let clickTrackPath: string | undefined
+      let clickTrackCountInMs: number | undefined
+      if (clickSettings.generateWav) {
+        const clickPath = clickTrackPathForSong(song.program, song.title)
+        const written = writeClickTrackWav(clickPath, audioAnalysis, {
+          volume: clickSettings.volume,
+          accentVolume: clickSettings.accentVolume,
+          accentEvery: clickSettings.accentEvery,
+          countInBars: clickSettings.countInBars
+        })
+        clickTrackPath = written.path
+        clickTrackCountInMs = written.countInMs
+      }
+      return { audioAnalysis, lightingProgram, clickTrackPath, clickTrackCountInMs }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       this.analyzeError = msg
@@ -130,5 +151,15 @@ export class LightingDirector {
     } finally {
       this.analyzingSongId = null
     }
+  }
+
+  async analyzeSongBackingTrack(
+    song: SetlistItem,
+    clickSettings: ClickTrackSettings
+  ): Promise<AnalyzeSongResult> {
+    if (!song.backingTrackPath) {
+      throw new Error('No backing track path set for this song.')
+    }
+    return this.analyzeFromRenderWav(song, song.backingTrackPath, clickSettings)
   }
 }

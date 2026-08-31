@@ -29,7 +29,7 @@ import {
   MIXER_MUTE_CHANNEL
 } from '../../shared/midiConfig'
 import { SortableRow } from './SortableRow'
-import { LightingCueEditor } from './LightingCueEditor'
+import { LightingStudio } from './LightingStudio'
 import { Esp32Preview } from './Esp32Preview'
 
 type StatusLine = { text: string; tone: 'ok' | 'warn' | 'error' }
@@ -966,81 +966,25 @@ export function App() {
                     Set each stick to 48CH / d097 (not 8-CH). PC 125 blackout, PC 126 dim royal blue, PC 127
                     follows ESP (random rotates every 10s).
                   </p>
-                  <div className="lighting-director-panel">
-                    <h3 className="settings-subheading">Lighting Director (sidecar)</h3>
-                    <p className="settings-hint">
-                      Opt-in only — does not change Cubase playback or normal PC 127 behaviour until
-                      enabled. Analyze captures <strong>real Cubase output</strong> (your tempo/key
-                      edits, cuts, and repeats are baked in).
-                    </p>
-                    <label className="esp-enable">
-                      <input
-                        type="checkbox"
-                        checked={state.lightingDirectorEnabled}
-                        onChange={(e) =>
-                          void patchSettings({ lightingDirectorEnabled: e.target.checked })
-                        }
-                      />
-                      <span>Enable PC 127 timed lighting programs at the gig</span>
-                    </label>
-                    <label className="esp-enable">
-                      <input
-                        type="checkbox"
-                        checked={state.liveAudioSyncEnabled}
-                        onChange={(e) =>
-                          void patchSettings({ liveAudioSyncEnabled: e.target.checked })
-                        }
-                      />
-                      <span>Live beat sync during show (loopback nudge)</span>
-                    </label>
-                    <div className="field">
-                      <label htmlFor="loopback-device">Loopback device (Stereo Mix name)</label>
-                      <input
-                        id="loopback-device"
-                        className="text-input"
-                        type="text"
-                        value={state.lightingLoopbackDevice}
-                        onChange={(e) =>
-                          void patchSettings({ lightingLoopbackDevice: e.target.value })
-                        }
-                        placeholder="Stereo Mix"
-                      />
-                    </div>
-                    {state.lightingAnalyze.active ? (
-                      <p className="settings-hint lighting-director-live">
-                        Cubase analyze: {state.lightingAnalyze.message}
-                      </p>
-                    ) : null}
-                    {state.lightingDirector.active ? (
-                      <p className="settings-hint lighting-director-live">
-                        Live: {state.lightingDirector.activeCueLabel ?? '—'} · pattern{' '}
-                        {state.lightingDirector.activePatternId ?? '—'} ·{' '}
-                        {Math.round(state.lightingDirector.performanceMs / 1000)}s
-                        {state.lightingDirector.syncOffsetMs
-                          ? ` · sync ${state.lightingDirector.syncOffsetMs > 0 ? '+' : ''}${state.lightingDirector.syncOffsetMs}ms`
-                          : ''}
-                      </p>
-                    ) : null}
-                    {state.lightingDirector.analyzeError ? (
-                      <p className="settings-hint settings-hint--warn">
-                        {state.lightingDirector.analyzeError}
-                      </p>
-                    ) : null}
-                    <LightingCueEditor
-                      row={
-                        state.currentSongId
-                          ? state.setlist.find((r) => r.id === state.currentSongId) ?? null
-                          : null
-                      }
-                      onSave={(program) => {
-                        const row = state.currentSongId
-                          ? state.setlist.find((r) => r.id === state.currentSongId)
-                          : null
-                        if (!row) return
-                        void window.viewer.setLightingProgram(row.id, program).then(apply)
-                      }}
-                    />
-                  </div>
+                  <LightingStudio
+                    row={
+                      state.currentSongId
+                        ? state.setlist.find((r) => r.id === state.currentSongId) ?? null
+                        : null
+                    }
+                    state={state}
+                    onSaveProgram={(program) => {
+                      const row = state.currentSongId
+                        ? state.setlist.find((r) => r.id === state.currentSongId)
+                        : null
+                      if (!row) return
+                      void window.viewer.setLightingProgram(row.id, program).then(apply)
+                    }}
+                    onPatchSettings={(patch) => void patchSettings(patch)}
+                    onPatchClickTrack={(patch) =>
+                      void patchSettings({ clickTrack: { ...state.clickTrack, ...patch } })
+                    }
+                  />
                 </div>
               </section>
             ) : null}

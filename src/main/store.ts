@@ -2,6 +2,7 @@ import Store from 'electron-store'
 import type { AppState, ArrangerMidiMapping, SetlistItem, TransportMidiMapping } from '../shared/types.js'
 import { normalizeSongAudioAnalysis } from '../shared/audioAnalysisNormalize.js'
 import { normalizeLightingProgram } from '../shared/lightingProgramNormalize.js'
+import { DEFAULT_CLICK_TRACK, normalizeClickTrackSettings } from '../shared/clickTrackSettings.js'
 import { clampDmxChannel, normalizeDmxFixtureMode } from '../shared/dmx.js'
 import {
   clampLedBrightness,
@@ -50,7 +51,10 @@ const defaults: AppState = {
   countdownStartLeadMs: 2500,
   lightingDirectorEnabled: false,
   liveAudioSyncEnabled: false,
-  lightingLoopbackDevice: 'Stereo Mix'
+  lightingLoopbackDevice: 'Stereo Mix',
+  clickTrack: { ...DEFAULT_CLICK_TRACK },
+  lightingCaptureMode: 'playback',
+  cubaseExportFolder: undefined
 }
 
 /** Clamp persisted / patched start-lead (ms). */
@@ -105,7 +109,15 @@ function normalizeSetlist(list: unknown): SetlistItem[] {
           ? r.cubaseRenderPath.trim()
           : undefined,
       cubaseRenderCapturedAt:
-        typeof r.cubaseRenderCapturedAt === 'string' ? r.cubaseRenderCapturedAt : undefined
+        typeof r.cubaseRenderCapturedAt === 'string' ? r.cubaseRenderCapturedAt : undefined,
+      clickTrackPath:
+        typeof r.clickTrackPath === 'string' && r.clickTrackPath.trim()
+          ? r.clickTrackPath.trim()
+          : undefined,
+      clickTrackCountInMs:
+        r.clickTrackCountInMs !== undefined && Number.isFinite(Number(r.clickTrackCountInMs))
+          ? Math.round(Number(r.clickTrackCountInMs))
+          : undefined
     }
   })
 }
@@ -178,7 +190,15 @@ export function getState(store: AppStore): AppState {
       typeof store.get('lightingLoopbackDevice') === 'string' &&
       String(store.get('lightingLoopbackDevice')).trim()
         ? String(store.get('lightingLoopbackDevice')).trim()
-        : 'Stereo Mix'
+        : 'Stereo Mix',
+    clickTrack: normalizeClickTrackSettings(store.get('clickTrack')),
+    lightingCaptureMode:
+      store.get('lightingCaptureMode') === 'export' ? 'export' : 'playback',
+    cubaseExportFolder:
+      typeof store.get('cubaseExportFolder') === 'string' &&
+      String(store.get('cubaseExportFolder')).trim()
+        ? String(store.get('cubaseExportFolder')).trim()
+        : undefined
   }
 }
 

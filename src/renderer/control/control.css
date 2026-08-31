@@ -1245,6 +1245,57 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.lighting-studio {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.lighting-studio-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.lighting-readiness {
+  margin: 8px 0;
+  font-size: 0.72rem;
+}
+
+.readiness-issues {
+  margin: 4px 0 0;
+  padding-left: 1.2rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.cue-timeline {
+  position: relative;
+  height: 8px;
+  background: #0d1016;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  margin-bottom: 6px;
+}
+
+.cue-timeline-mark {
+  position: absolute;
+  top: 1px;
+  width: 3px;
+  height: 6px;
+  background: #63b3ed;
+  border-radius: 1px;
+  transform: translateX(-1px);
+}
+
+.cue-time-input {
+  width: 4.2rem;
+  min-width: 0;
+  font-size: 0.65rem;
+  padding: 1px 3px;
+}
+
 .lighting-director-panel {
   margin-top: 8px;
   padding-top: 8px;

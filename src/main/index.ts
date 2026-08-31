@@ -34,6 +34,11 @@ import {
   shutdownDmxSerialAsync
 } from './dmxBridge.js'
 import { dmxUniverseForLedPattern, dmxUniverseForLook, DMX_RANDOM_ROTATE_MS, DMX_STICK_FRAME_MS, type DmxLook } from '../shared/dmx.js'
+import { mergeDmxCueOverrides } from '../shared/dmxCue.js'
+import type { DmxCueOverride, LightingCue } from '../shared/lightingProgram.js'
+import type { LightingReadinessReport } from '../shared/lightingReadiness.js'
+import { auditLightingReadiness } from '../shared/lightingReadiness.js'
+import { LiveClickTrack } from './liveClickTrack.js'
 import { buildEsp32DisplayPayload } from '../shared/esp32Payload.js'
 import {
   clampLedBrightness,
@@ -109,7 +114,7 @@ import {
 import { LightingDirector } from './lightingDirector.js'
 import { runLightingAnalyzePass } from './lightingAnalyzePass.js'
 import { normalizeSongAudioAnalysis } from '../shared/audioAnalysisNormalize.js'
-import { normalizeLightingProgram } from '../shared/lightingProgramNormalize.js'
+import { normalizeClickTrackSettings } from '../shared/clickTrackSettings.js'
 
 // Must run before any MIDI/serial traffic — EPIPE on stdout used to kill the main process mid-gig.
 installProcessGuards()
@@ -126,26 +131,31 @@ function preloadScriptPath(): string {
 let controlWindow: BrowserWindow | null = null
 const store = createAppStore()
 const lightingDirector = new LightingDirector()
+const liveClickTrack = new LiveClickTrack()
 
-function applyDirectorPattern(
-  patternId: number,
-  brightness?: number,
-  dmxLookOverride?: DmxLook
-): void {
-  const id = clampLedPatternId(patternId)
+let dmxCueOverride: DmxCueOverride | undefined
+let dmxStickBrightnessScale = 1
+
+function applyDirectorCue(cue: LightingCue): void {
+  const id = clampLedPatternId(cue.ledPatternId)
   const st = getState(store)
   ledIdleDimActive = false
   ledPattern = ledPatternName(id)
-  if (dmxLookOverride) {
-    dmxLook = dmxLookOverride
-    if (dmxLookOverride === 'off') stopDmxRandomRotator()
-    else if (dmxLookOverride === 'idle') stopDmxRandomRotator()
+  dmxCueOverride = cue.dmx
+  dmxStickBrightnessScale = cue.dmx?.stickBrightnessScale ?? 1
+  const look = cue.dmxLook
+  if (look) {
+    dmxLook = look
+    if (look === 'off') stopDmxRandomRotator()
+    else if (look === 'idle') stopDmxRandomRotator()
     else armDmxForLedPattern(id)
   } else {
     armDmxForLedPattern(id)
   }
   const bright =
-    brightness !== undefined ? clampLedBrightness(brightness, st.ledExternalPower) : st.ledBrightness
+    cue.brightness !== undefined
+      ? clampLedBrightness(cue.brightness, st.ledExternalPower)
+      : st.ledBrightness
   if (st.esp32Enabled) {
     pushEsp32LedPattern(id)
     pushEsp32LedBrightness(bright)
@@ -154,7 +164,7 @@ function applyDirectorPattern(
   broadcastUiState()
 }
 
-lightingDirector.setApplyPattern(applyDirectorPattern)
+lightingDirector.setApplyCue(applyDirectorCue)
 
 let lightingDirectorTimer: ReturnType<typeof setInterval> | null = null
 
@@ -169,40 +179,50 @@ function songPerformanceMs(now = Date.now()): number | null {
   return row?.audioAnalysis?.durationMs ?? null
 }
 
-function tickLightingDirector(now = Date.now()): void {
-  const perf = songPerformanceMs(now)
-  if (perf == null) return
-  lightingDirector.tick(perf)
-}
-
-function startLightingDirectorTicker(): void {
+function startPerformanceSyncTicker(): void {
   if (lightingDirectorTimer) return
-  lightingDirectorTimer = setInterval(() => tickLightingDirector(), 50)
+  lightingDirectorTimer = setInterval(() => tickPerformanceSync(), 50)
   lightingDirectorTimer.unref()
 }
 
-function stopLightingDirectorTicker(): void {
+function stopPerformanceSyncTicker(): void {
   if (!lightingDirectorTimer) return
   clearInterval(lightingDirectorTimer)
   lightingDirectorTimer = null
+}
+
+let clickTrackArmedSongId: string | null = null
+
+function tickPerformanceSync(now = Date.now()): void {
+  const perf = songPerformanceMs(now)
+  if (perf == null) return
+  const st = getState(store)
+  if (st.lightingDirectorEnabled) {
+    lightingDirector.tick(perf)
+  }
+  if (st.clickTrack.liveMidiEnabled) {
+    const row = st.currentSongId ? st.setlist.find((r) => r.id === st.currentSongId) : null
+    if (row?.id !== clickTrackArmedSongId) {
+      clickTrackArmedSongId = row?.id ?? null
+      liveClickTrack.arm(row?.audioAnalysis ?? null, st.clickTrack)
+    }
+    liveClickTrack.tick(perf, transportPlaying)
+  }
 }
 
 function armLightingDirectorForCurrentSong(): void {
   const st = getState(store)
   if (!st.lightingDirectorEnabled) {
     lightingDirector.disarm()
-    stopLightingDirectorTicker()
     return
   }
   const row = st.currentSongId ? st.setlist.find((r) => r.id === st.currentSongId) : null
   if (!row?.lightingProgram?.cues?.length) {
     lightingDirector.disarm()
-    stopLightingDirectorTicker()
     return
   }
   lightingDirector.arm(row, st.liveAudioSyncEnabled)
-  startLightingDirectorTicker()
-  tickLightingDirector()
+  tickPerformanceSync()
 }
 
 function updateSetlistRow(songId: string, patch: Partial<SetlistItem>): void {
@@ -283,7 +303,7 @@ async function shutdownViewerOneResources(): Promise<void> {
   arrangerScanCancelled = true
   clearMidiReconnectTimer()
   stopCountdownTicker()
-  stopLightingDirectorTicker()
+  stopPerformanceSyncTicker()
   lightingDirector.shutdown()
   clearEsp32DisplayCoalesceTimer()
   stopEsp32ClockSync()
@@ -530,7 +550,9 @@ async function runLightingAnalyzeFromCubase(): Promise<void> {
         controlWindow.restore()
       }
     },
-    loopbackDevice: st.lightingLoopbackDevice || 'Stereo Mix'
+    loopbackDevice: st.lightingLoopbackDevice || 'Stereo Mix',
+    clickSettings: st.clickTrack,
+    director: lightingDirector
   })
     .catch((err) => {
       console.warn('[ViewerOne] Lighting analyze failed:', err)
@@ -954,6 +976,15 @@ function buildPublicState(): PublicState {
     },
     lightingDirector: lightingDirector.snapshot(),
     lightingAnalyze,
+    lightingReadiness: auditLightingReadiness(base.setlist, base.clickTrack),
+    clickTrackLive: {
+      enabled: liveClickTrack.isEnabled(),
+      lastBeatIndex: liveClickTrack.getLastBeatIndex(),
+      nextBeatMs: (() => {
+        const perf = songPerformanceMs()
+        return perf != null ? liveClickTrack.nextBeatMs(perf) : null
+      })()
+    },
     midi: {
       cubaseInputName,
       cubaseInputOpen,
@@ -1134,7 +1165,14 @@ function pushDmxFrame(): void {
     dmxSetChannels(dmxUniverseForLook('idle', tMs * 0.55))
     return
   }
-  dmxSetChannels(dmxUniverseForLedPattern(patternId, tMs, 1))
+  dmxSetChannels(
+    mergeDmxCueOverrides(
+      dmxUniverseForLedPattern(patternId, tMs, dmxStickBrightnessScale),
+      dmxCueOverride,
+      getState(store).dmxFixture1Channel,
+      getState(store).dmxFixture2Channel
+    )
+  )
 }
 
 function startDmxStickAnimator(): void {
@@ -1199,7 +1237,7 @@ function syncDmxFromStore(): void {
  */
 function applyLedBlackout(): void {
   lightingDirector.disarm()
-  stopLightingDirectorTicker()
+  liveClickTrack.disarm()
   noteLedMidiPulse(MIDI_PC_LED_BLACKOUT)
   const st = getState(store)
   ledIdleDimActive = false
@@ -1220,7 +1258,7 @@ function applyLedBlackout(): void {
  */
 function applyLedIdle(): void {
   lightingDirector.disarm()
-  stopLightingDirectorTicker()
+  liveClickTrack.disarm()
   noteLedMidiPulse(MIDI_PC_LED_IDLE)
   ledIdleDimActive = true
   dmxLook = 'idle'
@@ -1258,7 +1296,7 @@ function applyLedForCurrentSong(): void {
   }
 
   lightingDirector.disarm()
-  stopLightingDirectorTicker()
+  dmxCueOverride = undefined
 
   const id = row ? clampLedPatternId(row.ledPattern) : 0
   if (!row || id === 0 || title.includes('SOUNDCHECK')) {
@@ -2805,7 +2843,8 @@ function registerIpc(): void {
       lightingProgram: normalizeLightingProgram(row.lightingProgram),
       audioSource: row.audioSource,
       cubaseRenderPath: row.cubaseRenderPath,
-      cubaseRenderCapturedAt: row.cubaseRenderCapturedAt
+      clickTrackPath: row.clickTrackPath,
+      clickTrackCountInMs: row.clickTrackCountInMs
     }))
     const st = getState(store)
     const still =
@@ -2904,6 +2943,19 @@ function registerIpc(): void {
       const dev = String(patch.lightingLoopbackDevice).trim()
       if (dev) allowed.lightingLoopbackDevice = dev
     }
+    if (patch.clickTrack && typeof patch.clickTrack === 'object') {
+      allowed.clickTrack = normalizeClickTrackSettings({
+        ...st.clickTrack,
+        ...patch.clickTrack
+      })
+    }
+    if (patch.lightingCaptureMode === 'export' || patch.lightingCaptureMode === 'playback') {
+      allowed.lightingCaptureMode = patch.lightingCaptureMode
+    }
+    if (patch.cubaseExportFolder !== undefined) {
+      const folder = String(patch.cubaseExportFolder).trim()
+      allowed.cubaseExportFolder = folder || undefined
+    }
 
     let nextExternal =
       patch.ledExternalPower !== undefined ? Boolean(patch.ledExternalPower) : st.ledExternalPower
@@ -2937,7 +2989,6 @@ function registerIpc(): void {
     ) {
       if (!getState(store).lightingDirectorEnabled) {
         lightingDirector.disarm()
-        stopLightingDirectorTicker()
       }
     }
     broadcastState()
@@ -3165,11 +3216,16 @@ function registerIpc(): void {
     const row = st.setlist.find((r) => r.id === songId)
     if (!row?.backingTrackPath) return buildPublicState()
     try {
-      const { audioAnalysis, lightingProgram } =
-        await lightingDirector.analyzeSongBackingTrack(row)
-      updateSetlistRow(songId, { audioAnalysis, lightingProgram, audioSource: 'external-file' })
+      const result = await lightingDirector.analyzeSongBackingTrack(row, st.clickTrack)
+      updateSetlistRow(songId, {
+        audioAnalysis: result.audioAnalysis,
+        lightingProgram: result.lightingProgram,
+        clickTrackPath: result.clickTrackPath,
+        clickTrackCountInMs: result.clickTrackCountInMs,
+        audioSource: 'external-file'
+      })
       console.log(
-        `[ViewerOne] Lighting: analyzed "${row.title}" — ${audioAnalysis.bpm} BPM, ${lightingProgram.cues.length} cues`
+        `[ViewerOne] Lighting: analyzed "${row.title}" — ${result.audioAnalysis.bpm} BPM, ${result.lightingProgram.cues.length} cues`
       )
     } catch (err) {
       console.warn('[ViewerOne] Lighting analyze failed:', err)
@@ -3183,15 +3239,16 @@ function registerIpc(): void {
     for (const row of st.setlist) {
       if (!row.backingTrackPath) continue
       try {
-        const { audioAnalysis, lightingProgram } =
-          await lightingDirector.analyzeSongBackingTrack(row)
+        const result = await lightingDirector.analyzeSongBackingTrack(row, st.clickTrack)
         updateSetlistRow(row.id, {
-          audioAnalysis,
-          lightingProgram,
+          audioAnalysis: result.audioAnalysis,
+          lightingProgram: result.lightingProgram,
+          clickTrackPath: result.clickTrackPath,
+          clickTrackCountInMs: result.clickTrackCountInMs,
           audioSource: 'external-file'
         })
         console.log(
-          `[ViewerOne] Lighting: analyzed "${row.title}" — ${audioAnalysis.bpm} BPM, ${lightingProgram.cues.length} cues`
+          `[ViewerOne] Lighting: analyzed "${row.title}" — ${result.audioAnalysis.bpm} BPM, ${result.lightingProgram.cues.length} cues`
         )
       } catch (err) {
         console.warn(`[ViewerOne] Lighting analyze failed for "${row.title}":`, err)
@@ -3322,6 +3379,11 @@ if (!gotTheLock) {
     ensureLoopMidiRunning()
     resetCountdownForSong(getState(store).currentSongId)
     startCountdownTicker()
+    startPerformanceSyncTicker()
+    liveClickTrack.setSendMidi((ch, note, vel, dur) => {
+      if (!cubaseOutputOpen) return
+      midi.sendNotePulse(ch, note, vel, dur ?? 30)
+    })
     setEsp32LineHandler(handleEsp32Line)
     setEsp32ConnectionHandler((connected) => {
       const enabled = getState(store).esp32Enabled
