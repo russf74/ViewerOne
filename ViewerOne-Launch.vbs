@@ -1,15 +1,26 @@
 Option Explicit
 
-' Downloads the latest launch script from GitHub every click — works even if this local file is old.
-Dim sh, repo, url, ps1, cmd
+' Silent launcher: sync, build, open. Errors go to %TEMP%\viewerone-launch.log
+Dim sh, fso, scriptDir, logFile, ps1, cmd, code
+
 Set sh = CreateObject("WScript.Shell")
-repo = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName)
-url = "https://raw.githubusercontent.com/russf74/ViewerOne/main/scripts/launch-from-github.ps1"
-ps1 = sh.ExpandEnvironmentStrings("%TEMP%") & "\viewerone-launch.ps1"
+Set fso = CreateObject("Scripting.FileSystemObject")
+scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
+logFile = sh.ExpandEnvironmentStrings("%TEMP%") & "\viewerone-launch.log"
+ps1 = scriptDir & "\scripts\fix-viewerone.ps1"
 
-cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command ""& { " & _
-  "try { (New-Object Net.WebClient).DownloadFile('" & url & "','" & ps1 & "') } catch { " & _
-  "MsgBox 'ViewerOne could not reach GitHub.' & vbCrLf & vbCrLf & 'Check internet connection.', vbCritical, 'ViewerOne': WScript.Quit 1 }; " & _
-  "& '" & ps1 & "' -RepoRoot '" & repo & "' }"""
+If fso.FileExists(ps1) Then
+  cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File """ & ps1 & """ -RepoRoot """ & scriptDir & """"
+Else
+  cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ""& { " & _
+    "$u='https://raw.githubusercontent.com/russf74/ViewerOne/main/scripts/fix-viewerone.ps1'; " & _
+    "$p=$env:TEMP+'\viewerone-fix.ps1'; " & _
+    "(New-Object Net.WebClient).DownloadFile($u,$p); " & _
+    "& $p -RepoRoot '" & scriptDir & "' }"""
+End If
 
-sh.Run cmd, 0, True
+code = sh.Run cmd, 1, True
+If code <> 0 Then
+  MsgBox "ViewerOne did not start." & vbCrLf & vbCrLf & _
+    "Check the log:" & vbCrLf & logFile, vbCritical, "ViewerOne"
+End If
