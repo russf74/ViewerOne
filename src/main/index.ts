@@ -117,7 +117,6 @@ import { normalizeSongAudioAnalysis } from '../shared/audioAnalysisNormalize.js'
 import { normalizeClickTrackSettings } from '../shared/clickTrackSettings.js'
 import { formatViewerOneVersion } from '../shared/appVersion.js'
 import { listWindowsAudioDevices } from './listAudioDevices.js'
-import { relaunchFromGithubIfBehind } from './githubSync.js'
 
 // Must run before any MIDI/serial traffic — EPIPE on stdout used to kill the main process mid-gig.
 installProcessGuards()
@@ -3392,10 +3391,6 @@ if (!gotTheLock) {
   })
 
   app.whenReady().then(() => {
-    if (relaunchFromGithubIfBehind()) {
-      app.quit()
-      return
-    }
     ensureLoopMidiRunning()
     resetCountdownForSong(getState(store).currentSongId)
     startCountdownTicker()

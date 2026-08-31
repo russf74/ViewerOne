@@ -3,9 +3,9 @@ description: Vibe coding - fully autonomous, no techy prompts for the user
 alwaysApply: true
 ---
 
-- Commit and push directly to `main`. Do not create feature branches or ask the user about branches.
-- Never ask the user to run PowerShell, git, npm, or terminal commands. Handle everything autonomously.
+- Work in the **local** ViewerOne folder on the gig PC. Do not send ViewerOne work to Cursor Cloud Agents.
+- Commit and push to `main` as a **GitHub backup** after changes. Do not create feature branches or ask the user about branches.
+- Never ask the user to run PowerShell, git, npm, or terminal commands.
 - Do not show branch/checkout/commit dialogs or instructions to the user.
-- Keep ViewerOne launch fully automatic: shortcut click syncs, builds, and opens with no popups.
-- Every change that should appear in the app: bump `package.json` patch (6.0.1 shows as **6.00.01**), add a CHANGELOG line, and land it on `main` before telling the user it is ready. Desktop/taskbar shortcuts reset to `origin/main` — a side branch is invisible to those links.
-- You cannot click the user's Windows shortcut from the cloud. Push to `main` so their next shortcut click syncs and opens the new version. Do not use PowerShell to launch on their PC.
+- ViewerOne shortcut = local build and open. No GitHub script download, no `git reset`. Optional fast-forward pull from GitHub backup only.
+- Every change that should appear in the app: bump `package.json` patch (6.0.6 shows as **6.00.06**) and add a CHANGELOG line, then push `main` as backup.

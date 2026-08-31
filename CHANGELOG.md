@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.06
+
+- **Local again.** Shortcut builds and opens the folder on this PC. GitHub is backup only (fast-forward pull if this folder is a git clone). No script download, no `git reset`, no cloud updater.
+
 ## v6.00.05
 
 - Updater no longer flashes and dies: it shows a “updating” message, closes `ViewerOne.exe` and `electron.exe`, then **refuses to start** unless the tree is **6.0.5**. That stops the instant 6.00.00 reopen.
