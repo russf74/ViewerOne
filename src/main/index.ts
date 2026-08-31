@@ -3495,14 +3495,19 @@ if (!gotTheLock) {
     }
 
     const analyzeMaxArg = process.argv.find((a) => a.startsWith('--lighting-analyze-max='))
-    if (analyzeMaxArg) {
-      const n = Math.max(1, Math.round(Number(analyzeMaxArg.split('=')[1]) || 1))
+    const wantFullAnalyze = process.argv.includes('--lighting-analyze')
+    if (wantFullAnalyze || analyzeMaxArg) {
+      const n = analyzeMaxArg
+        ? Math.max(1, Math.round(Number(analyzeMaxArg.split('=')[1]) || 1))
+        : undefined
       setTimeout(() => {
         void (async () => {
-          console.log(`[ViewerOne] --lighting-analyze-max=${n}: starting Cubase lighting analyze`)
+          console.log(
+            `[ViewerOne] ${analyzeMaxArg ?? '--lighting-analyze'}: starting Cubase lighting analyze`
+          )
           await runLightingAnalyzeFromCubase(n)
           console.log(
-            `[ViewerOne] --lighting-analyze-max done: ${lightingAnalyze.phase} — ${lightingAnalyze.message}`
+            `[ViewerOne] lighting analyze done: ${lightingAnalyze.phase} — ${lightingAnalyze.message}`
           )
         })()
       }, 8000)

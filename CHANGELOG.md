@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.22
+
+- Full-setlist Analyze from Cubase walks every arranger song, writes a 48 kHz click WAV and lighting program, skips songs already done, and retries a failed capture.
+
 ## v6.00.21
 
 - ViewerOne opens again if the settings file has a UTF-8 BOM (that used to start the app with no window).
