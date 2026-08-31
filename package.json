@@ -99,6 +99,7 @@
       "createDesktopShortcut": true,
       "shortcutName": "ViewerOne",
       "uninstallDisplayName": "ViewerOne",
+      "include": "build/installer.nsh",
       "artifactName": "${productName}-${version}-Setup.${ext}",
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico"
