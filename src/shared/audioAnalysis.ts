@@ -456,8 +456,42 @@ function evenBeatGrid(offsetMs: number, bpm: number, untilMs: number): number[] 
   return beats
 }
 
+function kickOnBeatRatio(
+  kick: Float32Array,
+  sampleRate: number,
+  bpm: number,
+  offsetMs: number,
+  startMs: number,
+  endMs: number
+): number {
+  const period = 60000 / Math.max(60, bpm)
+  const win = Math.round(sampleRate * 0.03)
+  const env = (tMs: number) => {
+    const c = Math.round((tMs / 1000) * sampleRate)
+    let s = 0
+    let n = 0
+    for (let i = c - win; i <= c + win; i++) {
+      if (i < 0 || i >= kick.length) continue
+      s += kick[i]! * kick[i]!
+      n++
+    }
+    return n ? Math.sqrt(s / n) : 0
+  }
+  let on = 0
+  let off = 0
+  let n = 0
+  for (let t = offsetMs; t < endMs; t += period) {
+    if (t < startMs) continue
+    on += env(t)
+    off += env(t + period / 2)
+    n++
+    if (n > 800) break
+  }
+  return n ? on / Math.max(1e-9, off) : 0
+}
+
 /**
- * Steady click grid from the capture: kick-band tempo, first real kick, even spacing.
+ * Steady click grid from the capture: kick-band tempo, phase on the kick, even spacing.
  */
 export function trackClickBeats(
   samples: Float32Array,
@@ -484,14 +518,19 @@ export function trackClickBeats(
   const finer = refineBpm(gated, hopMs, refined.bpm, 0.12, 0.001, minBpm, maxBpm)
   const bpm = Math.round(finer.bpm * 1000) / 1000
   const period = 60000 / Math.max(60, bpm)
-  const phase = scoreAtBpm(gated, hopMs, bpm).offsetMs
-  let offsetMs = phase
-  while (offsetMs < bounds.startMs - period * 0.15) offsetMs += period
-  while (offsetMs - period >= bounds.startMs - period * 0.15) offsetMs -= period
-  const durationMs = Math.min(
-    (pcm.length / ANALYSIS_SAMPLE_RATE) * 1000,
-    bounds.endMs + 40
-  )
+  const durationMs = (pcm.length / ANALYSIS_SAMPLE_RATE) * 1000
+  let bestOff = scoreAtBpm(gated, hopMs, bpm).offsetMs
+  let bestRatio = -1
+  for (let s = 0; s < 48; s++) {
+    const off = (s * period) / 48
+    const ratio = kickOnBeatRatio(kick, ANALYSIS_SAMPLE_RATE, bpm, off, bounds.startMs, bounds.endMs)
+    if (ratio > bestRatio) {
+      bestRatio = ratio
+      bestOff = off
+    }
+  }
+  let offsetMs = bestOff
+  while (offsetMs < bounds.startMs - period * 0.05) offsetMs += period
   const beatsMs = evenBeatGrid(offsetMs, bpm, durationMs)
   return { bpm, offsetMs, beatsMs, durationMs }
 }

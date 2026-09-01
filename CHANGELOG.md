@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.34
+
+- Take On Me click is a steady 172.53 from the capture, with the grid sitting on the kick for the whole song (the last file was 141ms off the beat). Gaps at the ends are left in. File: `pc4-take-on-me-click-onbeat.wav`. Other songs not changed.
+
 ## v6.00.33
 
 - Take On Me click is a steady metronome from the capture again (the kick-follower wobbled). First beat is the first real kick, and the file ends with the music (3:34.41), not the silent capture pad. File: `pc4-take-on-me-click-even.wav`. Other songs not changed.

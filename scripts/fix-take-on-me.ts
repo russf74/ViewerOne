@@ -17,7 +17,7 @@ const ffmpeg = require('ffmpeg-static') as string
 const rendersDir = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'renders')
 const configPath = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'viewer-one-config.json')
 const srcPath = path.join(rendersDir, 'pc4-take-on-me.wav')
-const clickPath = path.join(rendersDir, 'pc4-take-on-me-click-even.wav')
+const clickPath = path.join(rendersDir, 'pc4-take-on-me-click-onbeat.wav')
 
 function runFfmpeg(args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -137,14 +137,14 @@ if (mid > 0 && (intervals[intervals.length - 1]! - intervals[0]!) > 0.05) {
   )
 }
 
-const exactMs = locked.durationMs
-const durationSamples = Math.round((exactMs / 1000) * 48000)
+const exactMs = header.durationSec * 1000
+const durationSamples = Math.round(header.frames * (48000 / header.sampleRate))
 const analysis = {
   ...named,
   durationMs: exactMs,
   bpm: locked.bpm,
   beatOffsetMs: locked.offsetMs,
-  clickBeatsMs: locked.beatsMs
+  clickBeatsMs: undefined
 }
 
 if (fs.existsSync(clickPath)) fs.unlinkSync(clickPath)
@@ -168,11 +168,10 @@ console.log('CLICK header', clickHeader)
 console.log('CLICK ffmpeg', await ffmpegDuration(clickPath))
 console.log('CLICK samples', synth.samples.length)
 
-const deltaMs = Math.abs(clickHeader.durationSec * 1000 - exactMs)
-console.log('CLICK vs music-end ms', deltaMs)
-console.log('CAPTURE file sec', header.durationSec, 'CLICK sec', clickHeader.durationSec)
+const deltaMs = Math.abs(clickHeader.durationSec - header.durationSec) * 1000
+console.log('DELTA ms', deltaMs)
 if (deltaMs > 2) {
-  throw new Error(`length mismatch: music ${exactMs}ms vs click ${clickHeader.durationSec * 1000}ms`)
+  throw new Error(`length mismatch: capture ${header.durationSec}s vs click ${clickHeader.durationSec}s`)
 }
 
 const lighting = buildLightingProgram(analysis)
@@ -192,9 +191,7 @@ if (fs.existsSync(configPath)) {
 console.log('OK Take On Me', {
   bpm: analysis.bpm,
   offsetMs: analysis.beatOffsetMs,
-  captureFileSec: header.durationSec,
-  musicEndSec: exactMs / 1000,
+  captureSec: header.durationSec,
   clickSec: clickHeader.durationSec,
-  beats: locked.beatsMs.length,
   clickFile: clickPath
 })
