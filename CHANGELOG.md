@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.25
+
+- Click files are named `…-click-48khz-beep.wav` so Cubase treats them as new clips (same filename was reusing the old audio).
+
 ## v6.00.24
 
 - Each click WAV starts with 4 count-in beeps, then song clicks (48 kHz). Slip the clip so the beeps sit before the audio.

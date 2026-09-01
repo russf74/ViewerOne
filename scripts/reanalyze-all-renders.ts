@@ -50,7 +50,7 @@ function isPerformance(title: string, program: number): boolean {
 
 function clickName(program: number, title: string): string {
   const slug = slugTitle(title)
-  return `pc${program}${slug ? `-${slug}` : ''}-click-48khz.wav`
+  return `pc${program}${slug ? `-${slug}` : ''}-click-48khz-beep.wav`
 }
 
 if (!fs.existsSync(configPath)) {
