@@ -2,7 +2,7 @@
 
 ## v6.00.23
 
-- Analyze capture length is capped to the setlist time so a bad Cubase locator cannot record a 12-minute click for a 3-minute song.
+- Analyze capture length is capped to the setlist time so a bad Cubase locator cannot record a 12-minute click for a 3-minute song. Setlist lengths stay as scanned, not the bad locator time.
 
 ## v6.00.22
 

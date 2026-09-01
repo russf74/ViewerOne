@@ -408,7 +408,7 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
         return
       }
 
-      persistAnalysis(row, renderPath, analyzed, prep.mmss || row.length)
+      persistAnalysis(row, renderPath, analyzed, row.length || prep.mmss)
     }
 
     for (let i = 0; i < planned.length && !deps.isCancelled(); i++) {
