@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { analyzeMonoPcm, trackClickBeats } from '../src/shared/audioAnalysis.ts'
+import { analyzeMonoPcm, TAKE_ON_ME_CUBASE_MS, trackClickBeats } from '../src/shared/audioAnalysis.ts'
 import { writeClickTrackWav } from '../src/main/clickTrackWav.ts'
 import { buildLightingProgram } from '../src/shared/lightingProgram.ts'
 
@@ -16,8 +16,13 @@ const ffmpeg = require('ffmpeg-static') as string
 
 const rendersDir = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'renders')
 const configPath = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'viewer-one-config.json')
-const srcPath = path.join(rendersDir, '002-pc4-take-on-me.wav')
-const clickPath = path.join(rendersDir, '002-pc4-take-on-me-click.wav')
+const srcPath =
+  [
+    path.join(rendersDir, '003-pc4-take-on-me.wav'),
+    path.join(rendersDir, '002-pc4-take-on-me.wav')
+  ].find((p) => fs.existsSync(p)) ?? path.join(rendersDir, '003-pc4-take-on-me.wav')
+const clickPath = path.join(rendersDir, '003-pc4-take-on-me-click.wav')
+const captureOut = path.join(rendersDir, '003-pc4-take-on-me.wav')
 
 function runFfmpeg(args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -166,19 +171,21 @@ if (fs.existsSync(clickPath)) {
   console.log('existing click hits', oldHits.length)
 }
 
-const durationSamples = samples.length
-const analysis = {
-  ...named,
-  durationMs: (durationSamples / 48000) * 1000,
-  bpm: span.bpm,
-  beatOffsetMs: span.offsetMs,
-  sampleRate: 48000,
-  clickBeatsMs: undefined,
-  clickOriginSample: span.originSample,
-  clickPeriodSamples: span.periodSamples
+if (srcPath !== captureOut) {
+  fs.copyFileSync(srcPath, captureOut)
 }
 
-if (fs.existsSync(clickPath)) fs.unlinkSync(clickPath)
+const durationSamples = Math.round((TAKE_ON_ME_CUBASE_MS / 1000) * 48000)
+const analysis = {
+  ...named,
+  durationMs: TAKE_ON_ME_CUBASE_MS,
+  clickBeatsMs: undefined
+}
+
+for (const stale of fs.readdirSync(rendersDir)) {
+  const p = path.join(rendersDir, stale)
+  if (p !== captureOut) fs.unlinkSync(p)
+}
 const written = writeClickTrackWav(clickPath, analysis, {
   countInBars: 1,
   embedCountIn: true,

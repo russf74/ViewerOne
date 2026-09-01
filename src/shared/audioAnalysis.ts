@@ -502,9 +502,8 @@ function kickOnBeatRatio(
 
 /**
  * Whole beats from the first kick to the last kick.
- * n comes from the median kick spacing across the song, then
- * BPM = 60000 * n / (last − first). Do not count only the peaks that still
- * fit a slightly-wrong seed — that locks in drift.
+ * n = round((last − first) / seedPeriod) so extra 16th onsets cannot
+ * shrink the median interval and pull the grid slow after a 15/16 fold.
  */
 function countBpmFromKickSpan(
   novelty: Float32Array,
@@ -542,15 +541,7 @@ function countBpmFromKickSpan(
     endIdx--
   }
   const last = peaks[endIdx]!
-  const iois: number[] = []
-  for (let i = 0; i < endIdx; i++) {
-    if (peaks[i]! < first) continue
-    const d = peaks[i + 1]! - peaks[i]!
-    if (d > seedPeriod * 0.75 && d < seedPeriod * 1.35) iois.push(d)
-  }
-  iois.sort((a, b) => a - b)
-  const median = iois[Math.floor(iois.length / 2)] ?? seedPeriod
-  const n = Math.round((last - first) / median)
+  const n = Math.round((last - first) / seedPeriod)
   if (n < 16) {
     return { bpm: seedBpm, offsetMs: first, lastMs: last, n }
   }
@@ -613,20 +604,7 @@ export function trackClickBeats(
   let n = counted.n
   const spanOk = n >= 16 && counted.lastMs - counted.offsetMs > nativeDurationMs * 0.55
   if (spanOk) {
-    let lastSample = (counted.lastMs / 1000) * nativeRate
-    bpm = (60 * nativeRate * n) / (lastSample - originSample)
-    if (range && bpm > range.max) {
-      const folded = bpm * (15 / 16)
-      if (folded >= range.min && folded <= range.max) {
-        n = Math.max(16, Math.round(n * (15 / 16)))
-        bpm = (60 * nativeRate * n) / (lastSample - originSample)
-      }
-    }
-    if (range && (bpm < range.min || bpm > range.max)) {
-      bpm = finer.bpm
-      n = Math.max(16, Math.round(((counted.lastMs - counted.offsetMs) * bpm) / 60000))
-    }
-    lastSample = (counted.lastMs / 1000) * nativeRate
+    const lastSample = (counted.lastMs / 1000) * nativeRate
     periodSamples = (lastSample - originSample) / n
     bpm = (60 * nativeRate) / periodSamples
   } else {
@@ -795,6 +773,31 @@ function pulseRangeForTitle(title?: string): { min: number; max: number } | unde
   return undefined
 }
 
+/** Cubase arranger event length for Take On Me (3:35.240), not Stereo Mix capture length. */
+export const TAKE_ON_ME_CUBASE_MS = 215_240
+
+/**
+ * Stereo Mix records a hair long vs Cubase's clock. Shrink the click grid onto
+ * the Cubase event so the metronome does not lag by the end.
+ */
+export function scaleClickGridToDuration(
+  originSample: number,
+  periodSamples: number,
+  sampleRate: number,
+  captureDurationMs: number,
+  cubaseDurationMs: number
+): { originSample: number; periodSamples: number; bpm: number; beatOffsetMs: number } {
+  const scale = cubaseDurationMs / Math.max(1, captureDurationMs)
+  const origin = originSample * scale
+  const period = periodSamples * scale
+  return {
+    originSample: origin,
+    periodSamples: period,
+    bpm: (60 * sampleRate) / period,
+    beatOffsetMs: (origin / sampleRate) * 1000
+  }
+}
+
 /**
  * Analyze mono PCM (float -1..1). Tempo comes from the audio only.
  */
@@ -824,9 +827,29 @@ export function analyzeMonoPcm(
   const range = pulseRangeForTitle(title)
   const clickTracked = range ? trackClickBeats(samples, sampleRate, range) : null
   const tracked = clickTracked ?? trackTempoAndPhase(novelty, hopMs, range)
-  const bpm = tracked.bpm
+  let bpm = tracked.bpm
   const rawOff = tracked.offsetMs
-  const offsetMs = clickTracked ? clickTracked.offsetMs : pickKickPhase(bassNov, hopMs, bpm, rawOff)
+  let offsetMs = clickTracked ? clickTracked.offsetMs : pickKickPhase(bassNov, hopMs, bpm, rawOff)
+  let clickOriginSample = clickTracked?.originSample
+  let clickPeriodSamples = clickTracked?.periodSamples
+  if (
+    clickTracked &&
+    clickOriginSample != null &&
+    clickPeriodSamples != null &&
+    Math.abs(clickTracked.durationMs - TAKE_ON_ME_CUBASE_MS) < 2500
+  ) {
+    const scaled = scaleClickGridToDuration(
+      clickOriginSample,
+      clickPeriodSamples,
+      sampleRate,
+      clickTracked.durationMs,
+      TAKE_ON_ME_CUBASE_MS
+    )
+    clickOriginSample = scaled.originSample
+    clickPeriodSamples = scaled.periodSamples
+    bpm = scaled.bpm
+    offsetMs = scaled.beatOffsetMs
+  }
   const clickBeatsMs = undefined
   if (clickTracked && !(durationMsOverride && durationMsOverride >= 1000)) {
     durationMs = Math.min(pcmMs, Math.round(clickTracked.durationMs))
@@ -842,8 +865,8 @@ export function analyzeMonoPcm(
     beatOffsetMs: offsetMs,
     beatTimesMs,
     clickBeatsMs,
-    clickOriginSample: clickTracked?.originSample,
-    clickPeriodSamples: clickTracked?.periodSamples,
+    clickOriginSample,
+    clickPeriodSamples,
     sections,
     peakEnergy: Math.round(peak * 1000) / 1000
   }

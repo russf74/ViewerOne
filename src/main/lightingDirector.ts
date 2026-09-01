@@ -1,4 +1,4 @@
-import { analyzeMonoPcm } from '../shared/audioAnalysis.js'
+import { analyzeMonoPcm, TAKE_ON_ME_CUBASE_MS } from '../shared/audioAnalysis.js'
 import { buildLightingProgram, resolveActiveCues, nextLightingCue } from '../shared/lightingProgram.js'
 import type { LightingCue } from '../shared/lightingProgram.js'
 import { LiveBeatSync } from '../shared/liveAudioSync.js'
@@ -135,6 +135,7 @@ export class LightingDirector {
       let clickTrackCountInMs: number | undefined
       if (clickSettings.generateWav) {
         const clickPath = clickTrackPathForSong(song.program, song.title)
+        const takeOnMe = /take on me/i.test(song.title)
         const written = writeClickTrackWav(clickPath, audioAnalysis, {
           volume: clickSettings.volume,
           accentVolume: clickSettings.accentVolume,
@@ -142,7 +143,9 @@ export class LightingDirector {
           countInBars: 1,
           embedCountIn: true,
           sampleRate: 48000,
-          durationSamples: samples.length
+          durationSamples: takeOnMe
+            ? Math.round((TAKE_ON_ME_CUBASE_MS / 1000) * 48000)
+            : samples.length
         })
         clickTrackPath = written.path
         clickTrackCountInMs = written.countInMs

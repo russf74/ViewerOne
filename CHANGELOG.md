@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.41
+
+- Take On Me click is sped to Cubase's clock (the Stereo Mix recording was a hair long, so the metronome lagged by the end). New file: `003-pc4-take-on-me-click.wav`. Same Cubase recording as before.
+
 ## v6.00.40
 
 - Wipe the renders folder and recapture Take On Me from Cubase at 48 kHz (what the timeline actually plays, not a pool WAV). Click is first-kick to last-kick on that recording. Files: `002-pc4-take-on-me.wav` and `002-pc4-take-on-me-click.wav`.
