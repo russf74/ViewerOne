@@ -128,7 +128,7 @@ export class LightingDirector {
     this.analyzingSongId = song.id
     this.analyzeError = null
     try {
-      const { samples, sampleRate, durationMs } = await decodeAudioFileToMonoPcm(wavPath)
+      const { samples, sampleRate, durationMs } = await decodeAudioFileToMonoPcm(wavPath, 48000)
       const audioAnalysis = analyzeMonoPcm(samples, sampleRate, durationMs, song.title)
       const lightingProgram = buildLightingProgram(audioAnalysis)
       let clickTrackPath: string | undefined
@@ -141,7 +141,8 @@ export class LightingDirector {
           accentEvery: clickSettings.accentEvery,
           countInBars: 1,
           embedCountIn: true,
-          sampleRate: 48000
+          sampleRate: 48000,
+          durationSamples: samples.length
         })
         clickTrackPath = written.path
         clickTrackCountInMs = written.countInMs

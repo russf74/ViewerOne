@@ -33,6 +33,13 @@ export type SongAudioAnalysis = {
    * click WAV uses these instead of a free-running metronome.
    */
   clickBeatsMs?: number[]
+  /**
+   * First click, in PCM frames at `sampleRate`. With `clickPeriodSamples`, the
+   * click WAV is an even grid on this recording — not a rounded BPM.
+   */
+  clickOriginSample?: number
+  /** Samples between clicks at `sampleRate` (float; do not round). */
+  clickPeriodSamples?: number
   sections: SongSection[]
   /** Peak loudness 0–1 — used for intensity scaling. */
   peakEnergy: number
@@ -494,8 +501,10 @@ function kickOnBeatRatio(
 }
 
 /**
- * Count whole beats from the first kick to the last kick.
- * BPM = 60000 * n / (last − first). That grid cannot lag by the end.
+ * Whole beats from the first kick to the last kick.
+ * n comes from the median kick spacing across the song, then
+ * BPM = 60000 * n / (last − first). Do not count only the peaks that still
+ * fit a slightly-wrong seed — that locks in drift.
  */
 function countBpmFromKickSpan(
   novelty: Float32Array,
@@ -505,13 +514,13 @@ function countBpmFromKickSpan(
   endMs: number,
   minBpm: number,
   maxBpm: number
-): { bpm: number; offsetMs: number } {
+): { bpm: number; offsetMs: number; lastMs: number; n: number } {
   const seedPeriod = 60000 / Math.max(60, seedBpm)
   const peaks = pickNoveltyPeaks(novelty, hopMs, seedPeriod * 0.85).filter(
     (t) => t >= startMs && t <= endMs
   )
   if (peaks.length < 16) {
-    return { bpm: Math.round(seedBpm * 1000) / 1000, offsetMs: startMs }
+    return { bpm: seedBpm, offsetMs: startMs, lastMs: endMs, n: 0 }
   }
   let first = peaks[0]!
   for (let i = 0; i < peaks.length - 8; i++) {
@@ -525,35 +534,52 @@ function countBpmFromKickSpan(
       break
     }
   }
-  const onGrid: number[] = []
-  for (const t of peaks) {
-    if (t < first) continue
-    const k = Math.round((t - first) / seedPeriod)
-    if (k < 0) continue
-    if (Math.abs(t - (first + k * seedPeriod)) > seedPeriod * 0.35) continue
-    if (onGrid.length > 0 && t - onGrid[onGrid.length - 1]! < seedPeriod * 0.6) continue
-    onGrid.push(t)
+  let endIdx = peaks.length - 1
+  while (endIdx > 0 && peaks[endIdx]! <= first) endIdx--
+  while (endIdx > 8) {
+    const d = peaks[endIdx]! - peaks[endIdx - 1]!
+    if (d >= seedPeriod * 0.65 && d <= seedPeriod * 1.5) break
+    endIdx--
   }
-  const last = onGrid[onGrid.length - 1] ?? first
-  const n = onGrid.length - 1
+  const last = peaks[endIdx]!
+  const iois: number[] = []
+  for (let i = 0; i < endIdx; i++) {
+    if (peaks[i]! < first) continue
+    const d = peaks[i + 1]! - peaks[i]!
+    if (d > seedPeriod * 0.75 && d < seedPeriod * 1.35) iois.push(d)
+  }
+  iois.sort((a, b) => a - b)
+  const median = iois[Math.floor(iois.length / 2)] ?? seedPeriod
+  const n = Math.round((last - first) / median)
   if (n < 16) {
-    return { bpm: Math.round(seedBpm * 1000) / 1000, offsetMs: first }
+    return { bpm: seedBpm, offsetMs: first, lastMs: last, n }
   }
   const bpm = (60000 * n) / (last - first)
   if (bpm < minBpm || bpm > maxBpm) {
-    return { bpm: Math.round(seedBpm * 1000) / 1000, offsetMs: first }
+    return { bpm: seedBpm, offsetMs: first, lastMs: last, n }
   }
-  return { bpm: Math.round(bpm * 1000) / 1000, offsetMs: first }
+  return { bpm, offsetMs: first, lastMs: last, n }
 }
 
 /**
- * Steady click grid from the capture: kick-band tempo, phase on the kick, even spacing.
+ * Detect tempo at 22 kHz, place the grid on the recording's own sample rate.
+ * Period = (lastKick − firstKick) / n in native samples — never a rounded BPM.
  */
 export function trackClickBeats(
   samples: Float32Array,
   sampleRate: number,
   range?: { min: number; max: number }
-): { bpm: number; offsetMs: number; beatsMs: number[]; durationMs: number } {
+): {
+  bpm: number
+  offsetMs: number
+  beatsMs: number[]
+  durationMs: number
+  originSample: number
+  periodSamples: number
+  n: number
+} {
+  const nativeRate = sampleRate
+  const nativeDurationMs = (samples.length / nativeRate) * 1000
   const resampled = resampleMonoPcm(samples, sampleRate, ANALYSIS_SAMPLE_RATE)
   const pcm = peakNormalize(resampled, peakOf(resampled))
   const bounds = pcmAudibleBounds(pcm, ANALYSIS_SAMPLE_RATE)
@@ -581,13 +607,48 @@ export function trackClickBeats(
     minBpm,
     maxBpm
   )
-  const bpm = counted.bpm
-  const durationMs = (pcm.length / ANALYSIS_SAMPLE_RATE) * 1000
-  let offsetMs = counted.offsetMs
+  let originSample = (counted.offsetMs / 1000) * nativeRate
+  let periodSamples: number
+  let bpm: number
+  let n = counted.n
+  const spanOk = n >= 16 && counted.lastMs - counted.offsetMs > nativeDurationMs * 0.55
+  if (spanOk) {
+    let lastSample = (counted.lastMs / 1000) * nativeRate
+    bpm = (60 * nativeRate * n) / (lastSample - originSample)
+    if (range && bpm > range.max) {
+      const folded = bpm * (15 / 16)
+      if (folded >= range.min && folded <= range.max) {
+        n = Math.max(16, Math.round(n * (15 / 16)))
+        bpm = (60 * nativeRate * n) / (lastSample - originSample)
+      }
+    }
+    if (range && (bpm < range.min || bpm > range.max)) {
+      bpm = finer.bpm
+      n = Math.max(16, Math.round(((counted.lastMs - counted.offsetMs) * bpm) / 60000))
+    }
+    lastSample = (counted.lastMs / 1000) * nativeRate
+    periodSamples = (lastSample - originSample) / n
+    bpm = (60 * nativeRate) / periodSamples
+  } else {
+    bpm = n >= 16 ? counted.bpm : finer.bpm
+    periodSamples = (60 * nativeRate) / Math.max(60, bpm)
+  }
+  let offsetMs = (originSample / nativeRate) * 1000
   const period = 60000 / Math.max(60, bpm)
-  while (offsetMs < bounds.startMs - period * 0.05) offsetMs += period
-  const beatsMs = evenBeatGrid(offsetMs, bpm, durationMs)
-  return { bpm, offsetMs, beatsMs, durationMs }
+  while (offsetMs < bounds.startMs - period * 0.05) {
+    offsetMs += period
+    originSample += periodSamples
+  }
+  const beatsMs = evenBeatGrid(offsetMs, bpm, nativeDurationMs)
+  return {
+    bpm,
+    offsetMs,
+    beatsMs,
+    durationMs: nativeDurationMs,
+    originSample,
+    periodSamples,
+    n: spanOk ? n : counted.n
+  }
 }
 
 /** Prefer kick phase over snare (half-beat) using low-frequency novelty. */
@@ -776,11 +837,13 @@ export function analyzeMonoPcm(
   return {
     analyzedAt: new Date().toISOString(),
     durationMs,
-    sampleRate: ANALYSIS_SAMPLE_RATE,
+    sampleRate: clickTracked ? sampleRate : ANALYSIS_SAMPLE_RATE,
     bpm,
     beatOffsetMs: offsetMs,
     beatTimesMs,
     clickBeatsMs,
+    clickOriginSample: clickTracked?.originSample,
+    clickPeriodSamples: clickTracked?.periodSamples,
     sections,
     peakEnergy: Math.round(peak * 1000) / 1000
   }

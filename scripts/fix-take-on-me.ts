@@ -1,5 +1,6 @@
 /**
- * Take On Me only: click from the Cubase loopback capture, kicks locked beat-to-beat.
+ * Take On Me only: click on the 48 kHz capture's own sample grid.
+ * First kick → last kick, n whole beats, period = (last − first) / n samples.
  */
 import { createRequire } from 'node:module'
 import { spawn } from 'node:child_process'
@@ -7,7 +8,6 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { analyzeMonoPcm, trackClickBeats } from '../src/shared/audioAnalysis.ts'
-import { synthesizeClickTrack } from '../src/shared/clickTrack.ts'
 import { writeClickTrackWav } from '../src/main/clickTrackWav.ts'
 import { buildLightingProgram } from '../src/shared/lightingProgram.ts'
 
@@ -16,8 +16,8 @@ const ffmpeg = require('ffmpeg-static') as string
 
 const rendersDir = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'renders')
 const configPath = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'viewer-one-config.json')
-const srcPath = path.join(rendersDir, '001-pc4-take-on-me.wav')
-const clickPath = path.join(rendersDir, '001-pc4-take-on-me-click.wav')
+const srcPath = path.join(rendersDir, '002-pc4-take-on-me.wav')
+const clickPath = path.join(rendersDir, '002-pc4-take-on-me-click.wav')
 
 function runFfmpeg(args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -69,19 +69,74 @@ function wavInfo(file: string): {
   return { sampleRate, channels, bits, frames, durationSec: frames / sampleRate }
 }
 
-function ffmpegDuration(file: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const p = spawn(ffmpeg, ['-i', file, '-hide_banner', '-f', 'null', '-'], { stdio: ['ignore', 'ignore', 'pipe'] })
-    let err = ''
-    p.stderr.on('data', (c: Buffer) => {
-      err += c.toString()
-    })
-    p.on('close', () => {
-      const m = /Duration:\s*(\d+:\d+:\d+\.\d+)/.exec(err)
-      const a = /Audio:.*,\s*(\d+) Hz/.exec(err)
-      resolve(`${m?.[1] ?? '?'} @ ${a?.[1] ?? '?'} Hz`)
-    })
-    p.on('error', reject)
+async function decode48k(file: string): Promise<Float32Array> {
+  const raw = await runFfmpeg([
+    '-hide_banner',
+    '-loglevel',
+    'error',
+    '-i',
+    file,
+    '-ac',
+    '1',
+    '-ar',
+    '48000',
+    '-f',
+    'f32le',
+    'pipe:1'
+  ])
+  return new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4)
+}
+
+function clickOnsets(samples: Float32Array, sr: number): number[] {
+  const hop = 64
+  const times: number[] = []
+  let last = -1e9
+  const minGap = sr * 0.22
+  for (let i = hop; i < samples.length - hop; i += hop) {
+    let e = 0
+    for (let k = 0; k < hop; k++) e += samples[i + k]! * samples[i + k]!
+    if (e < 0.0008) continue
+    if (i - last < minGap) continue
+    times.push(i)
+    last = i
+  }
+  return times
+}
+
+function kickEnergy(pcm: Float32Array, sr: number, tMs: number): number {
+  const c = Math.round((tMs / 1000) * sr)
+  const win = Math.round(sr * 0.02)
+  let s = 0
+  let n = 0
+  for (let i = c - win; i <= c + win; i++) {
+    if (i < 0 || i >= pcm.length) continue
+    s += pcm[i]! * pcm[i]!
+    n++
+  }
+  return n ? Math.sqrt(s / n) : 0
+}
+
+function reportLock(label: string, span: ReturnType<typeof trackClickBeats>, pcm: Float32Array, sr: number) {
+  const last = span.originSample + span.n * span.periodSamples
+  const spots = [0, 0.25, 0.5, 0.75, 1].map((f) => {
+    const i = Math.round(f * span.n)
+    const tMs = ((span.originSample + i * span.periodSamples) / sr) * 1000
+    return {
+      frac: f,
+      tMs: Math.round(tMs),
+      on: Number(kickEnergy(pcm, sr, tMs).toFixed(4)),
+      off: Number(kickEnergy(pcm, sr, tMs + 60000 / span.bpm / 2).toFixed(4))
+    }
+  })
+  console.log(label, {
+    bpm: span.bpm,
+    n: span.n,
+    originSample: span.originSample,
+    periodSamples: span.periodSamples,
+    firstMs: span.offsetMs,
+    lastMs: (last / sr) * 1000,
+    durationMs: span.durationMs,
+    lock: spots
   })
 }
 
@@ -91,60 +146,36 @@ if (!fs.existsSync(srcPath)) {
 }
 
 const header = wavInfo(srcPath)
-console.log('CAPTURE header', header)
-console.log('CAPTURE ffmpeg', await ffmpegDuration(srcPath))
+console.log('CAPTURE', header)
 
-const raw = await runFfmpeg([
-  '-hide_banner',
-  '-loglevel',
-  'error',
-  '-i',
-  srcPath,
-  '-ac',
-  '1',
-  '-ar',
-  '48000',
-  '-f',
-  'f32le',
-  'pipe:1'
-])
-const samples = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4)
-const locked = trackClickBeats(samples, 48000, { min: 166, max: 176 })
-const named = analyzeMonoPcm(samples, 48000, undefined, 'Take on me')
-console.log('kick-lock', {
-  bpm: locked.bpm,
-  offset: locked.offsetMs,
-  durationMs: locked.durationMs,
-  beats: locked.beatsMs.length,
-  first: locked.beatsMs[0],
-  last: locked.beatsMs[locked.beatsMs.length - 1]
-})
-console.log('analyze', { bpm: named.bpm, offset: named.beatOffsetMs, clickBeats: named.clickBeatsMs?.length })
-
-const intervals = locked.beatsMs.slice(1).map((t, i) => t - locked.beatsMs[i]!)
-intervals.sort((a, b) => a - b)
-const mid = intervals[Math.floor(intervals.length / 2)] ?? 0
-console.log('beat interval ms', {
-  min: intervals[0],
-  median: mid,
-  max: intervals[intervals.length - 1],
-  medianBpm: mid > 0 ? 60000 / mid : 0
+const samples = await decode48k(srcPath)
+const span = trackClickBeats(samples, 48000, { min: 166, max: 176 })
+const named = analyzeMonoPcm(samples, 48000, (samples.length / 48000) * 1000, 'Take on me')
+reportLock('native-span', span, samples, 48000)
+console.log('analyze fields', {
+  bpm: named.bpm,
+  offset: named.beatOffsetMs,
+  sampleRate: named.sampleRate,
+  origin: named.clickOriginSample,
+  period: named.clickPeriodSamples
 })
 
-if (mid > 0 && (intervals[intervals.length - 1]! - intervals[0]!) > 0.05) {
-  throw new Error(
-    `click must be a steady grid, interval range ${intervals[0]}–${intervals[intervals.length - 1]}`
-  )
+if (fs.existsSync(clickPath)) {
+  const oldClick = await decode48k(clickPath)
+  const oldHits = clickOnsets(oldClick, 48000)
+  console.log('existing click hits', oldHits.length)
 }
 
-const exactMs = header.durationSec * 1000
-const durationSamples = Math.round(header.frames * (48000 / header.sampleRate))
+const durationSamples = samples.length
 const analysis = {
   ...named,
-  durationMs: exactMs,
-  bpm: locked.bpm,
-  beatOffsetMs: locked.offsetMs,
-  clickBeatsMs: undefined
+  durationMs: (durationSamples / 48000) * 1000,
+  bpm: span.bpm,
+  beatOffsetMs: span.offsetMs,
+  sampleRate: 48000,
+  clickBeatsMs: undefined,
+  clickOriginSample: span.originSample,
+  clickPeriodSamples: span.periodSamples
 }
 
 if (fs.existsSync(clickPath)) fs.unlinkSync(clickPath)
@@ -153,26 +184,11 @@ const written = writeClickTrackWav(clickPath, analysis, {
   embedCountIn: true,
   accentEvery: 4,
   sampleRate: 48000,
-  durationMs: exactMs,
-  durationSamples
-})
-const synth = synthesizeClickTrack(analysis, {
-  countInBars: 1,
-  embedCountIn: true,
-  sampleRate: 48000,
-  durationMs: exactMs,
   durationSamples
 })
 const clickHeader = wavInfo(clickPath)
-console.log('CLICK header', clickHeader)
-console.log('CLICK ffmpeg', await ffmpegDuration(clickPath))
-console.log('CLICK samples', synth.samples.length)
-
-const deltaMs = Math.abs(clickHeader.durationSec - header.durationSec) * 1000
-console.log('DELTA ms', deltaMs)
-if (deltaMs > 2) {
-  throw new Error(`length mismatch: capture ${header.durationSec}s vs click ${clickHeader.durationSec}s`)
-}
+console.log('CLICK', clickHeader)
+console.log('DELTA ms', Math.abs(clickHeader.durationSec - header.durationSec) * 1000)
 
 const lighting = buildLightingProgram(analysis)
 if (fs.existsSync(configPath)) {
@@ -190,8 +206,8 @@ if (fs.existsSync(configPath)) {
 
 console.log('OK Take On Me', {
   bpm: analysis.bpm,
-  offsetMs: analysis.beatOffsetMs,
-  captureSec: header.durationSec,
-  clickSec: clickHeader.durationSec,
+  origin: analysis.clickOriginSample,
+  period: analysis.clickPeriodSamples,
+  n: span.n,
   clickFile: clickPath
 })

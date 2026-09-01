@@ -19,8 +19,12 @@ const DECODE_SAMPLE_RATE = 22050
 
 /**
  * Decode an audio file to mono float32 PCM via ffmpeg.
+ * Pass sampleRate 0 to keep the file rate (needed for click placement on Cubase 48 kHz captures).
  */
-export async function decodeAudioFileToMonoPcm(filePath: string): Promise<{
+export async function decodeAudioFileToMonoPcm(
+  filePath: string,
+  sampleRate = DECODE_SAMPLE_RATE
+): Promise<{
   samples: Float32Array
   sampleRate: number
   durationMs: number
@@ -37,13 +41,12 @@ export async function decodeAudioFileToMonoPcm(filePath: string): Promise<{
     '-i',
     filePath,
     '-ac',
-    '1',
-    '-ar',
-    String(DECODE_SAMPLE_RATE),
-    '-f',
-    'f32le',
-    'pipe:1'
+    '1'
   ]
+  if (sampleRate > 0) {
+    args.push('-ar', String(sampleRate))
+  }
+  args.push('-f', 'f32le', 'pipe:1')
 
   return new Promise((resolve, reject) => {
     const proc = spawn(ffmpeg, args, { stdio: ['ignore', 'pipe', 'pipe'] })
@@ -63,8 +66,9 @@ export async function decodeAudioFileToMonoPcm(filePath: string): Promise<{
       }
       const buf = Buffer.concat(chunks)
       const samples = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4)
-      const durationMs = Math.round((samples.length / DECODE_SAMPLE_RATE) * 1000)
-      resolve({ samples, sampleRate: DECODE_SAMPLE_RATE, durationMs })
+      const rate = sampleRate > 0 ? sampleRate : DECODE_SAMPLE_RATE
+      const durationMs = samples.length > 0 ? (samples.length / rate) * 1000 : 0
+      resolve({ samples, sampleRate: rate, durationMs })
     })
   })
 }

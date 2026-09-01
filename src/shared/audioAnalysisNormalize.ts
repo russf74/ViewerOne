@@ -52,7 +52,7 @@ export function normalizeSongAudioAnalysis(raw: unknown): SongAudioAnalysis | un
     analyzedAt: typeof r.analyzedAt === 'string' ? r.analyzedAt : new Date().toISOString(),
     durationMs: Math.round(durationMs),
     sampleRate: Number.isFinite(Number(r.sampleRate)) ? Math.round(Number(r.sampleRate)) : 22050,
-    bpm: Math.round(bpm * 1000) / 1000,
+    bpm: Number(bpm),
     beatOffsetMs: Number.isFinite(Number(r.beatOffsetMs)) ? Number(r.beatOffsetMs) : 0,
     beatTimesMs,
     clickBeatsMs: Array.isArray(r.clickBeatsMs)
@@ -61,6 +61,13 @@ export function normalizeSongAudioAnalysis(raw: unknown): SongAudioAnalysis | un
           .filter((t) => Number.isFinite(t) && t >= 0)
           .slice(0, 12000)
       : undefined,
+    clickOriginSample: Number.isFinite(Number(r.clickOriginSample))
+      ? Number(r.clickOriginSample)
+      : undefined,
+    clickPeriodSamples:
+      Number.isFinite(Number(r.clickPeriodSamples)) && Number(r.clickPeriodSamples) > 0
+        ? Number(r.clickPeriodSamples)
+        : undefined,
     sections: sections.length > 0 ? sections : [{ label: 'unknown', startMs: 0, energy: 0.5 }],
     peakEnergy: Number.isFinite(Number(r.peakEnergy))
       ? Math.max(0, Math.min(1, Number(r.peakEnergy)))

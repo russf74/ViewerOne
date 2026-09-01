@@ -178,8 +178,18 @@ export function synthesizeClickTrack(
   }
 
   if (useSampleGrid) {
-    const origin = (firstDownbeat / 1000) * sampleRate
-    const periodSamples = (60 * sampleRate) / Math.max(60, analysis.bpm)
+    const srcRate = Math.max(1, analysis.sampleRate || sampleRate)
+    const hasSpan =
+      analysis.clickPeriodSamples != null &&
+      analysis.clickPeriodSamples > 0 &&
+      analysis.clickOriginSample != null
+    const scale = sampleRate / srcRate
+    const origin = hasSpan
+      ? analysis.clickOriginSample! * scale
+      : (firstDownbeat / 1000) * sampleRate
+    const periodSamples = hasSpan
+      ? analysis.clickPeriodSamples! * scale
+      : (60 * sampleRate) / Math.max(60, analysis.bpm)
     for (let i = 0; ; i++) {
       const startSample = Math.round(origin + i * periodSamples)
       if (startSample >= mix.length) break

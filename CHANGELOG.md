@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.40
+
+- Wipe the renders folder and recapture Take On Me from Cubase at 48 kHz (what the timeline actually plays, not a pool WAV). Click is first-kick to last-kick on that recording. Files: `002-pc4-take-on-me.wav` and `002-pc4-take-on-me-click.wav`.
+
 ## v6.00.39
 
 - Wipe the renders folder and recapture Take On Me only. New files: `001-pc4-take-on-me.wav` and `001-pc4-take-on-me-click.wav`. Other songs not recaptured.
