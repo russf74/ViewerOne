@@ -2,10 +2,11 @@
  * Smoke test for offline audio analysis.
  */
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { analyzeMonoPcm, snapToBarMs, tempoHintForTitle } from '../src/shared/audioAnalysis.ts'
+import { analyzeMonoPcm, snapToBarMs } from '../src/shared/audioAnalysis.ts'
 import { buildLightingProgram } from '../src/shared/lightingProgram.ts'
 
 function clickTrackPcm(bpm: number, durationSec: number, sr = 22050): Float32Array {
@@ -71,9 +72,9 @@ if (lastPumpCue?.ledPatternId === 0) {
 }
 console.log('pumping tail', lastSec?.label, 'esp', lastPumpCue?.ledPatternId)
 
-function runFfmpeg(args: string[]): Promise<Buffer> {
+function runFfmpeg(args: string[], bin = 'ffmpeg'): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const p = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const p = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     const chunks: Buffer[] = []
     let err = ''
     p.stdout.on('data', (c: Buffer) => chunks.push(c))
@@ -91,10 +92,26 @@ const click169 = analyzeMonoPcm(clickTrackPcm(169, 20), 22050)
 assertBpmNear(click169.bpm, 169, 4)
 console.log('click 169 BPM:', click169.bpm, 'offset', click169.beatOffsetMs)
 
-if (tempoHintForTitle('Take On Me') !== 169) throw new Error('Take On Me hint')
-if (tempoHintForTitle('Jump') != null) throw new Error('Jump must not get a title BPM hint')
-const forced = analyzeMonoPcm(clickTrackPcm(129, 16), 22050, undefined, tempoHintForTitle('Take On Me'))
-if (forced.bpm !== 169) throw new Error(`override BPM ${forced.bpm} != 169`)
+const click128p4 = analyzeMonoPcm(clickTrackPcm(128.4, 24), 22050)
+assertBpmNear(click128p4.bpm, 128.4, 0.35)
+console.log('click 128.4 BPM:', click128p4.bpm)
+
+const withTail = clickTrackPcm(120, 10)
+const silentPad = new Float32Array(22050 * 3)
+const padded = new Float32Array(withTail.length + silentPad.length)
+padded.set(withTail)
+const trimmed = analyzeMonoPcm(padded, 22050)
+if (trimmed.durationMs > 10500) {
+  throw new Error(`expected silence trim ~10s, got ${trimmed.durationMs}`)
+}
+if (Math.abs(trimmed.bpm - 120) > 2) {
+  throw new Error(`trimmed 120 BPM click drifted to ${trimmed.bpm}`)
+}
+console.log('silence trim', trimmed.durationMs, 'bpm', trimmed.bpm)
+
+const click172 = analyzeMonoPcm(clickTrackPcm(172.55, 20), 22050)
+assertBpmNear(click172.bpm, 172.55, 1.5)
+console.log('click 172.55 BPM:', click172.bpm)
 
 const barMs = (60000 / Math.max(60, click128.bpm)) * 4
 for (const s of click128.sections) {
@@ -166,6 +183,72 @@ try {
   }
 } catch (err) {
   console.log('ffmpeg tone test skipped:', err instanceof Error ? err.message : err)
+}
+
+const require = createRequire(import.meta.url)
+const ffmpegStatic = require('ffmpeg-static') as string
+async function analyzeRender(name: string): Promise<ReturnType<typeof analyzeMonoPcm> | null> {
+  const wav = join(process.env.APPDATA ?? '', 'viewer-one', 'renders', name)
+  if (!existsSync(wav)) return null
+  const raw = await runFfmpeg(
+    [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-i',
+      wav,
+      '-ac',
+      '1',
+      '-ar',
+      '22050',
+      '-f',
+      'f32le',
+      'pipe:1'
+    ],
+    ffmpegStatic
+  )
+  const samples = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4)
+  return analyzeMonoPcm(samples, 22050, undefined, name.includes('take-on-me') ? 'Take on me' : undefined)
+}
+try {
+  const tom = await analyzeRender('pc4-take-on-me.wav')
+  if (tom) {
+    if (tom.bpm < 168 || tom.bpm > 176) {
+      throw new Error(`Take On Me audio pulse should be ~172, got ${tom.bpm}`)
+    }
+    console.log('Take On Me render BPM:', tom.bpm, 'durationMs', tom.durationMs)
+  }
+  const jce = await analyzeRender('pc18-just-can-t-get-enough.wav')
+  if (jce) {
+    if (jce.bpm < 125 || jce.bpm > 132) {
+      throw new Error(`Just Can't Get Enough should stay ~128, got ${jce.bpm}`)
+    }
+    console.log("Just Can't Get Enough render BPM:", jce.bpm)
+  }
+  const rio = await analyzeRender('pc14-rio.wav')
+  if (rio) {
+    if (rio.bpm < 136 || rio.bpm > 145) {
+      throw new Error(`Rio should stay ~140, got ${rio.bpm}`)
+    }
+    console.log('Rio render BPM:', rio.bpm)
+  }
+  const jump = await analyzeRender('pc33-jump.wav')
+  if (jump) {
+    if (jump.bpm < 126 || jump.bpm > 134) {
+      throw new Error(`Jump should stay ~130, got ${jump.bpm}`)
+    }
+    console.log('Jump render BPM:', jump.bpm)
+  }
+} catch (err) {
+  if (
+    String(err).includes('should') ||
+    String(err).includes('Take On Me') ||
+    String(err).includes('Jump') ||
+    String(err).includes('Rio')
+  ) {
+    throw err
+  }
+  console.log('render BPM check skipped:', err instanceof Error ? err.message : err)
 }
 
 console.log('audio-analysis: OK')

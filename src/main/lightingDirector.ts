@@ -1,4 +1,4 @@
-import { analyzeMonoPcm, tempoHintForTitle } from '../shared/audioAnalysis.js'
+import { analyzeMonoPcm } from '../shared/audioAnalysis.js'
 import { buildLightingProgram, resolveActiveCues, nextLightingCue } from '../shared/lightingProgram.js'
 import type { LightingCue } from '../shared/lightingProgram.js'
 import { LiveBeatSync } from '../shared/liveAudioSync.js'
@@ -129,12 +129,7 @@ export class LightingDirector {
     this.analyzeError = null
     try {
       const { samples, sampleRate, durationMs } = await decodeAudioFileToMonoPcm(wavPath)
-      const audioAnalysis = analyzeMonoPcm(
-        samples,
-        sampleRate,
-        durationMs,
-        tempoHintForTitle(song.title)
-      )
+      const audioAnalysis = analyzeMonoPcm(samples, sampleRate, durationMs, song.title)
       const lightingProgram = buildLightingProgram(audioAnalysis)
       let clickTrackPath: string | undefined
       let clickTrackCountInMs: number | undefined

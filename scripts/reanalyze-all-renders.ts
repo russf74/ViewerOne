@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { analyzeMonoPcm, tempoHintForTitle } from '../src/shared/audioAnalysis.ts'
+import { analyzeMonoPcm } from '../src/shared/audioAnalysis.ts'
 import { buildLightingProgram } from '../src/shared/lightingProgram.ts'
 import { writeClickTrackWav } from '../src/main/clickTrackWav.ts'
 
@@ -49,7 +49,7 @@ function isPerformance(title: string, program: number): boolean {
 
 function clickName(program: number, title: string): string {
   const slug = slugTitle(title)
-  return `pc${program}${slug ? `-${slug}` : ''}-click-48khz-beeps.wav`
+  return `pc${program}${slug ? `-${slug}` : ''}-click-48khz-pulse.wav`
 }
 
 if (!fs.existsSync(configPath)) {
@@ -96,7 +96,7 @@ for (const song of rows) {
     'pipe:1'
   ])
   const samples = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4)
-  const analysis = analyzeMonoPcm(samples, 22050, undefined, tempoHintForTitle(title))
+  const analysis = analyzeMonoPcm(samples, 22050, undefined, title)
   const programOut = buildLightingProgram(analysis)
   const clickPath = path.join(rendersDir, clickName(program, title))
   const written = writeClickTrackWav(clickPath, analysis, {

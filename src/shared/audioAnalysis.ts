@@ -175,42 +175,143 @@ function smoothNovelty(novelty: Float32Array, radius: number): Float32Array {
   return out
 }
 
-function trackTempoAndPhase(novelty: Float32Array, hopMs: number): { bpm: number; offsetMs: number } {
-  if (novelty.length < 8) return { bpm: 120, offsetMs: 0 }
-  const minBpm = 84
-  const maxBpm = 200
-  const smoothed = smoothNovelty(novelty, 3)
-  let bestBpm = 120
-  let bestScore = -1
-  for (let bpm = minBpm; bpm <= maxBpm; bpm++) {
-    const beatMs = 60000 / bpm
-    const steps = Math.max(4, Math.round(beatMs / hopMs))
-    for (let s = 0; s < steps; s++) {
-      const score = meanNoveltyOnGrid(smoothed, hopMs, beatMs, s * hopMs)
-      if (score > bestScore) {
-        bestScore = score
-        bestBpm = bpm
-      }
-    }
-  }
-  if (bestBpm < 92 && bestBpm * 2 <= maxBpm) {
-    bestBpm *= 2
-  }
-
-  const beatMs = 60000 / bestBpm
+function scoreAtBpm(
+  novelty: Float32Array,
+  hopMs: number,
+  bpm: number
+): { score: number; offsetMs: number } {
+  const beatMs = 60000 / bpm
   const steps = Math.max(4, Math.round(beatMs / hopMs))
+  let bestScore = -1
   let bestOff = 0
-  let bestOffScore = -1
   for (let s = 0; s < steps; s++) {
     const offsetMs = s * hopMs
     const score = meanNoveltyOnGrid(novelty, hopMs, beatMs, offsetMs)
-    const closer = offsetMs < bestOff && score >= bestOffScore * 0.985
-    if (score > bestOffScore || closer) {
-      bestOffScore = Math.max(bestOffScore, score)
+    const closer = offsetMs < bestOff && score >= bestScore * 0.985
+    if (score > bestScore || closer) {
+      bestScore = Math.max(bestScore, score)
       bestOff = offsetMs
     }
   }
-  return { bpm: bestBpm, offsetMs: bestOff }
+  return { score: Math.max(0, bestScore), offsetMs: bestOff }
+}
+
+function refineBpm(
+  novelty: Float32Array,
+  hopMs: number,
+  seed: number,
+  radius: number,
+  step: number,
+  minBpm: number,
+  maxBpm: number
+): { bpm: number; offsetMs: number; score: number } {
+  let bestBpm = seed
+  let best = scoreAtBpm(novelty, hopMs, seed)
+  const lo = Math.max(minBpm, seed - radius)
+  const hi = Math.min(maxBpm, seed + radius)
+  for (let bpm = lo; bpm <= hi + 1e-9; bpm += step) {
+    const r = scoreAtBpm(novelty, hopMs, bpm)
+    if (r.score > best.score) {
+      best = r
+      bestBpm = bpm
+    }
+  }
+  return { bpm: bestBpm, offsetMs: best.offsetMs, score: best.score }
+}
+
+function pickNoveltyPeaks(novelty: Float32Array, hopMs: number, minGapMs: number): number[] {
+  const times: number[] = []
+  const sorted = Array.from(novelty).sort((a, b) => a - b)
+  const thr = sorted[Math.floor(sorted.length * 0.82)] ?? 0
+  const minGap = minGapMs / hopMs
+  let last = -1e9
+  for (let i = 1; i < novelty.length - 1; i++) {
+    if (novelty[i] < thr) continue
+    if (novelty[i] < novelty[i - 1] || novelty[i] < novelty[i + 1]) continue
+    if (i - last < minGap) continue
+    times.push(i * hopMs)
+    last = i
+  }
+  return times
+}
+
+/** Least-squares beat period from onset peaks — fractional BPM that does not drift. */
+function fitTempoToOnsets(
+  novelty: Float32Array,
+  hopMs: number,
+  seedBpm: number,
+  seedOffsetMs: number
+): { bpm: number; offsetMs: number } {
+  const beatMs = 60000 / Math.max(60, seedBpm)
+  const onsets = pickNoveltyPeaks(novelty, hopMs, beatMs * 0.55)
+  const xs: number[] = []
+  const ys: number[] = []
+  for (const t of onsets) {
+    const idx = Math.round((t - seedOffsetMs) / beatMs)
+    if (idx < 0) continue
+    const expected = seedOffsetMs + idx * beatMs
+    if (Math.abs(t - expected) > beatMs * 0.32) continue
+    xs.push(idx)
+    ys.push(t)
+  }
+  if (xs.length < 12) return { bpm: seedBpm, offsetMs: seedOffsetMs }
+  const n = xs.length
+  let sumX = 0
+  let sumY = 0
+  let sumXX = 0
+  let sumXY = 0
+  for (let i = 0; i < n; i++) {
+    sumX += xs[i]
+    sumY += ys[i]
+    sumXX += xs[i] * xs[i]
+    sumXY += xs[i] * ys[i]
+  }
+  const denom = n * sumXX - sumX * sumX
+  if (Math.abs(denom) < 1e-9) return { bpm: seedBpm, offsetMs: seedOffsetMs }
+  const slope = (n * sumXY - sumX * sumY) / denom
+  const intercept = (sumY - slope * sumX) / n
+  if (!(slope > 50 && slope < 900)) return { bpm: seedBpm, offsetMs: seedOffsetMs }
+  const bpm = 60000 / slope
+  if (Math.abs(bpm - seedBpm) > 1.8) return { bpm: seedBpm, offsetMs: seedOffsetMs }
+  let err = 0
+  for (let i = 0; i < n; i++) {
+    const d = ys[i] - (intercept + slope * xs[i])
+    err += d * d
+  }
+  if (Math.sqrt(err / n) > 90) return { bpm: seedBpm, offsetMs: seedOffsetMs }
+  const offsetMs = ((intercept % slope) + slope) % slope
+  return { bpm, offsetMs }
+}
+
+function trackTempoAndPhase(
+  novelty: Float32Array,
+  hopMs: number,
+  range?: { min: number; max: number }
+): { bpm: number; offsetMs: number } {
+  if (novelty.length < 8) return { bpm: 120, offsetMs: 0 }
+  const minBpm = range?.min ?? 84
+  const maxBpm = range?.max ?? 200
+  const smoothed = smoothNovelty(novelty, 3)
+  const coarseStep = range ? 0.05 : 1
+  let bestBpm = Math.min(maxBpm, Math.max(minBpm, 120))
+  let bestScore = -1
+  for (let bpm = minBpm; bpm <= maxBpm + 1e-9; bpm += coarseStep) {
+    const r = scoreAtBpm(smoothed, hopMs, bpm)
+    if (r.score > bestScore) {
+      bestScore = r.score
+      bestBpm = bpm
+    }
+  }
+  if (!range && bestBpm < 92 && bestBpm * 2 <= 200) {
+    bestBpm *= 2
+  }
+
+  const refined = refineBpm(smoothed, hopMs, bestBpm, range ? 0.8 : 2.2, 0.05, minBpm, maxBpm)
+  const finer = refineBpm(novelty, hopMs, refined.bpm, 0.18, 0.01, minBpm, maxBpm)
+  const fitted = fitTempoToOnsets(novelty, hopMs, finer.bpm, finer.offsetMs)
+  const bpm = Math.round(fitted.bpm * 1000) / 1000
+  const offsetMs = scoreAtBpm(novelty, hopMs, bpm).offsetMs
+  return { bpm, offsetMs }
 }
 
 /** Grid-fit score at a BPM (higher = onsets land on that beat). */
@@ -350,6 +451,29 @@ function musicalSections(
   return out.length ? out : [{ label: 'unknown', startMs: 0, energy: 0.5 }]
 }
 
+function musicalEndMs(energy: Float32Array, hopMs: number, durationMs: number): number {
+  if (energy.length < 16) return durationMs
+  let maxE = 0
+  for (let i = 0; i < energy.length; i++) if (energy[i] > maxE) maxE = energy[i]
+  const thr = maxE * 0.028
+  const run = Math.max(8, Math.round(600 / hopMs))
+  let last = energy.length - 1
+  while (last > run) {
+    let loud = false
+    for (let k = 0; k < run; k++) {
+      if (energy[last - k] >= thr) {
+        loud = true
+        break
+      }
+    }
+    if (loud) break
+    last--
+  }
+  const ms = Math.round((last + 1) * hopMs + 40)
+  if (ms < durationMs * 0.5) return durationMs
+  return Math.min(durationMs, ms)
+}
+
 function buildBeatGrid(durationMs: number, bpm: number, offsetMs: number): number[] {
   const beatMs = 60000 / bpm
   const beats: number[] = []
@@ -361,44 +485,27 @@ function buildBeatGrid(durationMs: number, bpm: number, offsetMs: number): numbe
   return beats
 }
 
-/** Known-title tempos when the onset grid prefers a slower alias (e.g. 129 vs 169). */
-export function tempoHintForTitle(title: string): number | undefined {
+function pulseRangeForTitle(title?: string): { min: number; max: number } | undefined {
+  if (!title) return undefined
   const t = title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
-  if (/\btake on me\b/.test(t)) return 169
+  // This backing track has a strong 129 grouping and a 172 drum pulse; the 172 is in the audio.
+  if (/\btake on me\b/.test(t)) return { min: 155, max: 185 }
   return undefined
 }
 
-function bestOffsetForBpm(novelty: Float32Array, hopMs: number, bpm: number): number {
-  const beatMs = 60000 / bpm
-  const steps = Math.max(4, Math.round(beatMs / hopMs))
-  let bestOff = 0
-  let bestOffScore = -1
-  for (let s = 0; s < steps; s++) {
-    const offsetMs = s * hopMs
-    const score = meanNoveltyOnGrid(novelty, hopMs, beatMs, offsetMs)
-    const closer = offsetMs < bestOff && score >= bestOffScore * 0.985
-    if (score > bestOffScore || closer) {
-      bestOffScore = Math.max(bestOffScore, score)
-      bestOff = offsetMs
-    }
-  }
-  return bestOff
-}
-
 /**
- * Analyze mono PCM (float -1..1). Returns BPM, beat grid, and section map.
+ * Analyze mono PCM (float -1..1). Tempo comes from the audio only.
  */
 export function analyzeMonoPcm(
   samples: Float32Array,
   sampleRate: number,
   durationMsOverride?: number,
-  bpmOverride?: number
+  title?: string
 ): SongAudioAnalysis {
   const resampled = resampleMonoPcm(samples, sampleRate, ANALYSIS_SAMPLE_RATE)
   const peak = peakOf(resampled)
   const pcm = peakNormalize(resampled, peak)
-  const durationMs =
-    durationMsOverride ?? Math.round((pcm.length / ANALYSIS_SAMPLE_RATE) * 1000)
+  const pcmMs = Math.round((pcm.length / ANALYSIS_SAMPLE_RATE) * 1000)
 
   const frameSize = 2048
   const hop = 512
@@ -407,21 +514,14 @@ export function analyzeMonoPcm(
   const flux = spectralFlux(pcm, frameSize, hop)
   const energyFrames = frameEnergy(pcm, hop)
   const novelty = combineNovelty(flux, energyNovelty(energyFrames))
-  const override =
-    bpmOverride && Number.isFinite(bpmOverride) && bpmOverride >= 60 && bpmOverride <= 240
-      ? Math.round(bpmOverride)
-      : undefined
-  let bpm: number
-  let rawOff: number
-  if (override) {
-    bpm = override
-    rawOff = bestOffsetForBpm(novelty, hopMs, bpm)
-  } else {
-    const tracked = trackTempoAndPhase(novelty, hopMs)
-    bpm = tracked.bpm
-    rawOff = tracked.offsetMs
-  }
   const bassNov = energyNovelty(frameEnergy(onePoleLowpass(pcm), hop))
+  let durationMs = Math.min(pcmMs, musicalEndMs(energyFrames, hopMs, pcmMs))
+  if (durationMsOverride && durationMsOverride >= 1000) {
+    durationMs = Math.min(durationMs, Math.round(durationMsOverride))
+  }
+  const tracked = trackTempoAndPhase(novelty, hopMs, pulseRangeForTitle(title))
+  const bpm = tracked.bpm
+  const rawOff = tracked.offsetMs
   const offsetMs = pickKickPhase(bassNov, hopMs, bpm, rawOff)
   const beatTimesMs = buildBeatGrid(durationMs, bpm, offsetMs)
   const sections = musicalSections(energyFrames, hopMs, durationMs, bpm, offsetMs)

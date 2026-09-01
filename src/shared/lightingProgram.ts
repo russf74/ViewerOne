@@ -143,7 +143,8 @@ export function buildLightingProgram(
       atMs: 0,
       ledPatternId: 2,
       label: 'start',
-      dmxLook: 'live'
+      dmxLook: 'live',
+      dmx: dmxForSection(2, 0.45)
     })
   }
 

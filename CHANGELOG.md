@@ -1,5 +1,13 @@
 # Changelog
 
+## v6.00.28
+
+- Take On Me click follows the fast drum pulse in that capture (~172.5), not the slower 129 grouping. Other songs stay on the pulse in their audio. New files: `…-click-48khz-pulse.wav`.
+
+## v6.00.27
+
+- Click tempo is fitted from the Cubase capture itself (fractional BPM, no published-tempo guesses). Trailing silence is trimmed so the WAV ends with the music. Files are named `…-click-48khz-sync.wav`.
+
 ## v6.00.26
 
 - Click WAV is the same length as the audio: 4 beeps on the first four beats, then clicks. Files are named `…-click-48khz-beeps.wav` so Cubase does not reuse the old (too-long, wrong-tempo) pool clip. Take On Me is forced to 169 BPM.

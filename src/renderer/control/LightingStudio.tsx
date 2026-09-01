@@ -446,9 +446,9 @@ export function LightingStudio({ row, state, onSaveProgram, onPatchSettings, onP
 
       <h4 className="settings-subheading">IEM click track</h4>
       <p className="settings-hint">
-        Generates a 48 kHz WAV the same length as the audio: <strong>4 beeps on the first four
-        beats</strong>, then song clicks. Line the clip start up with Playback 1. File name ends
-        in <code>-click-48khz-beeps.wav</code>.
+        Generates a 48 kHz WAV fitted to the Cubase capture: <strong>4 beeps on the first four
+        beats</strong>, then clicks at the tempo in the audio. Line the clip start up with Playback
+        1. File name ends in <code>-click-48khz-pulse.wav</code>.
       </p>
       <label className="esp-enable">
         <input

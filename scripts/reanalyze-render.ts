@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { analyzeMonoPcm, tempoHintForTitle } from '../src/shared/audioAnalysis.ts'
+import { analyzeMonoPcm } from '../src/shared/audioAnalysis.ts'
 import { buildLightingProgram } from '../src/shared/lightingProgram.ts'
 import { synthesizeClickTrack } from '../src/shared/clickTrack.ts'
 import { writeClickTrackWav } from '../src/main/clickTrackWav.ts'
@@ -56,9 +56,9 @@ const raw = await runFfmpeg([
   'pipe:1'
 ])
 const samples = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4)
-const analysis = analyzeMonoPcm(samples, 22050, undefined, tempoHintForTitle(titleHint))
+const analysis = analyzeMonoPcm(samples, 22050, undefined, titleHint)
 const program = buildLightingProgram(analysis)
-const clickPath = wav.replace(/\.wav$/i, '-click-48khz-beeps.wav')
+const clickPath = wav.replace(/\.wav$/i, '-click-48khz-pulse.wav')
 if (fs.existsSync(clickPath)) fs.unlinkSync(clickPath)
 const written = writeClickTrackWav(clickPath, analysis, {
   countInBars: 1,
