@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.30
+
+- Take On Me click is rebuilt to the exact length of the capture (3:35.58). File: `pc4-take-on-me-click-match.wav`. Other songs not changed.
+
 ## v6.00.29
 
 - Click silence trim only removes a short capture tail (up to 6s), so a quiet ending like Rock DJ is not cut short.

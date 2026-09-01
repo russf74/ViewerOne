@@ -141,7 +141,7 @@ export function synthesizeClickTrack(
   const songMs = Math.max(analysis.durationMs, opts.durationMs ?? 0)
   const totalMs = countInMs + songMs
   const sampleRate = opts.sampleRate
-  const totalSamples = Math.ceil((totalMs / 1000) * sampleRate)
+  const totalSamples = Math.round((totalMs / 1000) * sampleRate)
   const mix = new Float32Array(totalSamples)
 
   const regular = synthesizeClickSample(sampleRate, opts.clickMs, 1800, opts.volume)
