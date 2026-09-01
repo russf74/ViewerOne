@@ -244,10 +244,12 @@ async function analyzeRender(name: string): Promise<ReturnType<typeof analyzeMon
   return analyzeMonoPcm(samples, 22050, undefined, name.includes('take-on-me') ? 'Take on me' : undefined)
 }
 try {
-  const tom = await analyzeRender('005-pc4-take-on-me.wav')
+  const tom =
+    (await analyzeRender('006-pc4-take-on-me.wav')) ??
+    (await analyzeRender('005-pc4-take-on-me.wav'))
   if (tom) {
-    if (tom.bpm < 166 || tom.bpm > 176) {
-      throw new Error(`Take On Me audio pulse should be ~172, got ${tom.bpm}`)
+    if (tom.bpm < 168 || tom.bpm > 171) {
+      throw new Error(`Take On Me audio pulse should be ~169.2, got ${tom.bpm}`)
     }
     console.log('Take On Me render BPM:', tom.bpm, 'durationMs', tom.durationMs)
   }

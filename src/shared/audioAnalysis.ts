@@ -29,8 +29,8 @@ export type SongAudioAnalysis = {
   /** Downsampled beat grid for sync (ms from start). Capped for storage. */
   beatTimesMs: number[]
   /**
-   * Full click beat times snapped to kicks in the audio (ms). When present, the
-   * click WAV uses these instead of a free-running metronome.
+   * Click beat times (ms). When present (≥8), the click WAV uses these instead
+   * of a single frozen period — used for a smooth tempo map from the audio.
    */
   clickBeatsMs?: number[]
   /**
@@ -392,88 +392,6 @@ function onePoleAlpha(hz: number, sampleRate: number): number {
   return 1 - Math.exp((-2 * Math.PI * hz) / Math.max(1, sampleRate))
 }
 
-/** Hats / attacks (~2 kHz up) — Take On Me's synth riff does not live here. */
-function treblePcm(samples: Float32Array, sampleRate: number): Float32Array {
-  const hpA = onePoleAlpha(2200, sampleRate)
-  const out = new Float32Array(samples.length)
-  let lp = 0
-  for (let i = 0; i < samples.length; i++) {
-    const x = samples[i] ?? 0
-    lp += hpA * (x - lp)
-    out[i] = x - lp
-  }
-  return out
-}
-
-function noveltyFromPcm(
-  pcm: Float32Array,
-  hop: number,
-  frameSize: number
-): Float32Array {
-  return combineNovelty(spectralFlux(pcm, frameSize, hop), energyNovelty(frameEnergy(pcm, hop)))
-}
-
-function followKickTimes(
-  peaksMs: number[],
-  novelty: Float32Array,
-  hopMs: number,
-  originMs: number,
-  seedPeriodMs: number,
-  untilMs: number
-): number[] {
-  const beats = [originMs]
-  let t = originMs
-  const p = seedPeriodMs
-  while (t + p * 0.75 < untilMs && beats.length < 12000) {
-    const lo = t + p * 0.85
-    const hi = t + p * 1.15
-    let best = t + p
-    let bestW = -1
-    for (const pk of peaksMs) {
-      if (pk <= t || pk < lo || pk > hi) continue
-      const i0 = Math.max(0, Math.min(novelty.length - 1, Math.round(pk / hopMs)))
-      const w = novelty[i0] ?? 0
-      if (w > bestW) {
-        bestW = w
-        best = pk
-      }
-    }
-    beats.push(best)
-    t = best
-  }
-  return beats
-}
-
-function weightedPeriodFromPeaks(
-  peaksMs: number[],
-  novelty: Float32Array,
-  hopMs: number,
-  originMs: number,
-  seedPeriodMs: number
-): number {
-  let period = seedPeriodMs
-  for (let iter = 0; iter < 5; iter++) {
-    let num = 0
-    let den = 0
-    for (const t of peaksMs) {
-      if (t < originMs) continue
-      const k = Math.round((t - originMs) / period)
-      if (k < 1) continue
-      if (Math.abs(t - (originMs + k * period)) > period * 0.3) continue
-      const fi = t / hopMs
-      const i0 = Math.max(0, Math.min(novelty.length - 1, Math.floor(fi)))
-      const w = Math.max(1e-6, novelty[i0] ?? 0)
-      num += w * k * (t - originMs)
-      den += w * k * k
-    }
-    if (den < 1e-9) break
-    const next = num / den
-    if (!(next > 50 && next < 900)) break
-    period = next
-  }
-  return period
-}
-
 function kickBandPcm(samples: Float32Array, sampleRate: number): Float32Array {
   const hpA = onePoleAlpha(40, sampleRate)
   const lpA = onePoleAlpha(180, sampleRate)
@@ -555,95 +473,47 @@ function evenBeatGrid(offsetMs: number, bpm: number, untilMs: number): number[] 
   return beats
 }
 
-function kickOnBeatRatio(
-  kick: Float32Array,
-  sampleRate: number,
-  bpm: number,
+function medianFilter(values: number[], radius = 2): number[] {
+  return values.map((_, i) => {
+    const slice = values.slice(Math.max(0, i - radius), Math.min(values.length, i + radius + 1))
+    const sorted = [...slice].sort((a, b) => a - b)
+    return sorted[Math.floor(sorted.length / 2)]!
+  })
+}
+
+function bpmAtTime(ms: number, points: { ms: number; bpm: number }[]): number {
+  if (points.length === 0) return 120
+  if (ms <= points[0]!.ms) return points[0]!.bpm
+  const last = points[points.length - 1]!
+  if (ms >= last.ms) return last.bpm
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i]!
+    const b = points[i + 1]!
+    if (ms > b.ms) continue
+    const u = (ms - a.ms) / Math.max(1e-6, b.ms - a.ms)
+    return a.bpm + u * (b.bpm - a.bpm)
+  }
+  return last.bpm
+}
+
+function integrateBeatTimes(
   offsetMs: number,
-  startMs: number,
-  endMs: number
-): number {
-  const period = 60000 / Math.max(60, bpm)
-  const win = Math.round(sampleRate * 0.03)
-  const env = (tMs: number) => {
-    const c = Math.round((tMs / 1000) * sampleRate)
-    let s = 0
-    let n = 0
-    for (let i = c - win; i <= c + win; i++) {
-      if (i < 0 || i >= kick.length) continue
-      s += kick[i]! * kick[i]!
-      n++
-    }
-    return n ? Math.sqrt(s / n) : 0
+  untilMs: number,
+  points: { ms: number; bpm: number }[]
+): number[] {
+  const beats: number[] = []
+  let t = Math.max(0, offsetMs)
+  while (t <= untilMs && beats.length < 12000) {
+    beats.push(t)
+    t += 60000 / Math.max(60, bpmAtTime(t, points))
   }
-  let on = 0
-  let off = 0
-  let n = 0
-  for (let t = offsetMs; t < endMs; t += period) {
-    if (t < startMs) continue
-    on += env(t)
-    off += env(t + period / 2)
-    n++
-    if (n > 800) break
-  }
-  return n ? on / Math.max(1e-9, off) : 0
+  return beats
 }
 
 /**
- * Whole beats from the first kick to the last kick.
- * n = round((last − first) / seedPeriod) so extra 16th onsets cannot
- * shrink the median interval and pull the grid slow after a 15/16 fold.
- */
-function countBpmFromKickSpan(
-  novelty: Float32Array,
-  hopMs: number,
-  seedBpm: number,
-  startMs: number,
-  endMs: number,
-  minBpm: number,
-  maxBpm: number
-): { bpm: number; offsetMs: number; lastMs: number; n: number } {
-  const seedPeriod = 60000 / Math.max(60, seedBpm)
-  const peaks = pickNoveltyPeaks(novelty, hopMs, seedPeriod * 0.85).filter(
-    (t) => t >= startMs && t <= endMs
-  )
-  if (peaks.length < 16) {
-    return { bpm: seedBpm, offsetMs: startMs, lastMs: endMs, n: 0 }
-  }
-  let first = peaks[0]!
-  for (let i = 0; i < peaks.length - 8; i++) {
-    let ok = 0
-    for (let k = 0; k < 8; k++) {
-      const d = peaks[i + k + 1]! - peaks[i + k]!
-      if (d > seedPeriod * 0.8 && d < seedPeriod * 1.2) ok++
-    }
-    if (ok >= 6) {
-      first = peaks[i]!
-      break
-    }
-  }
-  let endIdx = peaks.length - 1
-  while (endIdx > 0 && peaks[endIdx]! <= first) endIdx--
-  while (endIdx > 8) {
-    const d = peaks[endIdx]! - peaks[endIdx - 1]!
-    if (d >= seedPeriod * 0.65 && d <= seedPeriod * 1.5) break
-    endIdx--
-  }
-  const last = peaks[endIdx]!
-  const n = Math.round((last - first) / seedPeriod)
-  if (n < 16) {
-    return { bpm: seedBpm, offsetMs: first, lastMs: last, n }
-  }
-  const bpm = (60000 * n) / (last - first)
-  if (bpm < minBpm || bpm > maxBpm) {
-    return { bpm: seedBpm, offsetMs: first, lastMs: last, n }
-  }
-  return { bpm, offsetMs: first, lastMs: last, n }
-}
-
-/**
- * Detect tempo at 22 kHz, place the grid on the recording's own sample rate.
- * Period = (lastKick − firstKick) / n in native samples — never a rounded BPM.
+ * BPM from 16 s autocorrelation slices of the mix, then a smooth click grid.
+ * Does not snap to individual kicks (that wobbles). If the recording speeds
+ * up a hair, the period eases with it so the click does not lag by the end.
  */
 export function trackClickBeats(
   samples: Float32Array,
@@ -665,121 +535,55 @@ export function trackClickBeats(
   const pcm = peakNormalize(resampled, peakOf(resampled))
   const bounds = pcmAudibleBounds(pcm, ANALYSIS_SAMPLE_RATE)
   const kick = kickBandPcm(pcm, ANALYSIS_SAMPLE_RATE)
-  const treble = treblePcm(pcm, ANALYSIS_SAMPLE_RATE)
-  const hop = 128
+  const hop = 64
   const hopMs = (hop / ANALYSIS_SAMPLE_RATE) * 1000
-  const kickNov = noveltyFromPcm(kick, hop, 1024)
-  const trebleNov = noveltyFromPcm(treble, hop, 1024)
-  const startFrame = Math.max(0, Math.floor(bounds.startMs / hopMs))
-  const endFrame = Math.min(kickNov.length, Math.ceil(bounds.endMs / hopMs))
-  const gatedKick = new Float32Array(kickNov.length)
-  const gatedHats = new Float32Array(trebleNov.length)
-  for (let i = startFrame; i < endFrame; i++) {
-    gatedKick[i] = kickNov[i] ?? 0
-    gatedHats[i] = trebleNov[i] ?? 0
-  }
+  const mixNov = energyNovelty(frameEnergy(pcm, hop))
+  const kickNov = energyNovelty(frameEnergy(kick, hop))
   const minBpm = range?.min ?? 84
   const maxBpm = range?.max ?? 200
-  const acHats = autocorrBpm(gatedHats, hopMs, minBpm, maxBpm)
-  const acKick = autocorrBpm(gatedKick, hopMs, minBpm, maxBpm)
-  const ac = acHats.score >= acKick.score * 0.5 ? acHats : acKick
-  const refined = refineBpm(gatedHats, hopMs, ac.bpm, 0.6, 0.005, minBpm, maxBpm)
-  const finer = refineBpm(gatedHats, hopMs, refined.bpm, 0.12, 0.001, minBpm, maxBpm)
-  const seedPeriod = 60000 / Math.max(60, finer.bpm)
-  const kickPeaks = pickNoveltyPeaks(gatedKick, hopMs, seedPeriod * 0.85)
-  let originMs = kickPeaks[0] ?? finer.offsetMs
-  for (let i = 0; i < kickPeaks.length - 8; i++) {
-    let ok = 0
-    for (let k = 0; k < 8; k++) {
-      const d = kickPeaks[i + k + 1]! - kickPeaks[i + k]!
-      if (d > seedPeriod * 0.8 && d < seedPeriod * 1.2) ok++
-    }
-    if (ok >= 6) {
-      originMs = kickPeaks[i]!
-      break
-    }
+  const winMs = 16000
+  const hopWin = 4000
+  const rawPoints: { ms: number; bpm: number; score: number }[] = []
+  const startMs = Math.max(0, bounds.startMs)
+  const endMs = Math.min(nativeDurationMs, bounds.endMs)
+  const lastStart = Math.max(startMs, endMs - winMs)
+  for (let t0 = startMs; t0 <= lastStart + 1e-6; t0 += hopWin) {
+    const i0 = Math.max(0, Math.floor(t0 / hopMs))
+    const i1 = Math.min(mixNov.length, Math.floor((t0 + winMs) / hopMs))
+    if (i1 - i0 < 32) continue
+    const slice = mixNov.slice(i0, i1)
+    const ac = autocorrBpm(slice, hopMs, minBpm, maxBpm)
+    if (ac.score <= 0) continue
+    rawPoints.push({ ms: t0 + winMs / 2, bpm: ac.bpm, score: ac.score })
   }
-  const periodMs = weightedPeriodFromPeaks(
-    kickPeaks,
-    gatedKick,
-    hopMs,
-    originMs,
-    seedPeriod
-  )
-  const bpmFromHats = 60000 / periodMs
-  let bpm = bpmFromHats >= minBpm && bpmFromHats <= maxBpm ? bpmFromHats : finer.bpm
-  const usedPeriod = 60000 / bpm
-  let offsetMs = originMs
-  const onKick = kickOnBeatRatio(
-    kick,
-    ANALYSIS_SAMPLE_RATE,
-    bpm,
-    offsetMs,
-    bounds.startMs,
-    bounds.endMs
-  )
-  const onSnare = kickOnBeatRatio(
-    kick,
-    ANALYSIS_SAMPLE_RATE,
-    bpm,
-    offsetMs + usedPeriod / 2,
-    bounds.startMs,
-    bounds.endMs
-  )
-  if (onSnare > onKick * 1.08) offsetMs += usedPeriod / 2
-  const gridStart = Math.min(bounds.endMs - 30000, Math.max(bounds.startMs, 40000))
-  const gridEnd = Math.max(gridStart + 20000, bounds.endMs - 20000)
-  let bestBpm = bpm
-  let bestRatio = kickOnBeatRatio(
-    kick,
-    ANALYSIS_SAMPLE_RATE,
-    bpm,
-    offsetMs,
-    gridStart,
-    gridEnd
-  )
-  for (let b = minBpm; b <= maxBpm + 1e-9; b += 0.05) {
-    const r = kickOnBeatRatio(
-      kick,
-      ANALYSIS_SAMPLE_RATE,
-      b,
-      offsetMs,
-      gridStart,
-      gridEnd
-    )
-    if (r > bestRatio) {
-      bestRatio = r
-      bestBpm = b
-    }
-  }
-  for (let b = bestBpm - 0.08; b <= bestBpm + 0.08 + 1e-9; b += 0.005) {
-    if (b < minBpm || b > maxBpm) continue
-    const r = kickOnBeatRatio(
-      kick,
-      ANALYSIS_SAMPLE_RATE,
-      b,
-      offsetMs,
-      gridStart,
-      gridEnd
-    )
-    if (r > bestRatio) {
-      bestRatio = r
-      bestBpm = b
-    }
-  }
-  bpm = bestBpm
-  const periodSamples = (60 / bpm) * nativeRate
+  const global = autocorrBpm(mixNov, hopMs, minBpm, maxBpm)
+  const bpms = rawPoints.map((p) => p.bpm)
+  const smoothed = bpms.length ? medianFilter(bpms, 2) : []
+  const points =
+    smoothed.length > 0
+      ? rawPoints.map((p, i) => ({ ms: p.ms, bpm: smoothed[i]! }))
+      : [{ ms: startMs, bpm: global.bpm }]
+  const sortedBpm = [...points.map((p) => p.bpm)].sort((a, b) => a - b)
+  const bpm = sortedBpm[Math.floor(sortedBpm.length / 2)] ?? global.bpm
+  const spread = (sortedBpm[sortedBpm.length - 1] ?? bpm) - (sortedBpm[0] ?? bpm)
+  const phaseBpm = points[Math.min(points.length - 1, Math.floor(points.length * 0.25))]?.bpm ?? bpm
+  const gatedKick = new Float32Array(kickNov.length)
+  const gateLo = nativeDurationMs > 40000 ? Math.max(bounds.startMs, 25000) : bounds.startMs
+  const gateHi = nativeDurationMs > 40000 ? Math.min(bounds.endMs, 120000) : bounds.endMs
+  const g0 = Math.max(0, Math.floor(gateLo / hopMs))
+  const g1 = Math.min(kickNov.length, Math.ceil(gateHi / hopMs))
+  for (let i = g0; i < g1; i++) gatedKick[i] = kickNov[i] ?? 0
+  let offsetMs = scoreAtBpm(gatedKick, hopMs, phaseBpm).offsetMs
+  const period = 60000 / Math.max(60, phaseBpm)
+  const onKick = meanNoveltyOnGrid(gatedKick, hopMs, period, offsetMs)
+  const onOff = meanNoveltyOnGrid(gatedKick, hopMs, period, (offsetMs + period / 2) % period)
+  if (onOff > onKick * 1.08) offsetMs = (offsetMs + period / 2) % period
+  const beatsMs =
+    spread >= 0.3
+      ? integrateBeatTimes(offsetMs, nativeDurationMs, points)
+      : evenBeatGrid(offsetMs, bpm, nativeDurationMs)
+  const periodSamples = (60 * nativeRate) / bpm
   const originSample = (offsetMs / 1000) * nativeRate
-  const n = Math.max(1, Math.round(((nativeDurationMs - offsetMs) * bpm) / 60000))
-  const beatsMs = evenBeatGrid(offsetMs, bpm, nativeDurationMs)
-  const followedMs = followKickTimes(
-    kickPeaks,
-    gatedKick,
-    hopMs,
-    offsetMs,
-    60000 / bpm,
-    nativeDurationMs
-  )
   return {
     bpm,
     offsetMs,
@@ -787,8 +591,8 @@ export function trackClickBeats(
     durationMs: nativeDurationMs,
     originSample,
     periodSamples,
-    n,
-    followedMs
+    n: beatsMs.length,
+    followedMs: beatsMs
   }
 }
 
@@ -931,36 +735,9 @@ function buildBeatGrid(durationMs: number, bpm: number, offsetMs: number): numbe
 function pulseRangeForTitle(title?: string): { min: number; max: number } | undefined {
   if (!title) return undefined
   const t = title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
-  // Drum pulse is ~171; 129 is a 3/4 grouping and ~182 is a 16th-note alias.
+  // 129 is a 3/4 grouping of the real pulse; 182 is a 16th-note alias.
   if (/\btake on me\b/.test(t)) return { min: 166, max: 176 }
   return undefined
-}
-
-/** Cubase arranger event length for Take On Me (3:35.240). */
-export const TAKE_ON_ME_CUBASE_MS = 215_240
-/** Cubase transport tempo for this clip — 169-from-Stereo-Mix always lagged in the DAW. */
-export const TAKE_ON_ME_CUBASE_BPM = 171
-
-/**
- * Stereo Mix records a hair long vs Cubase's clock. Shrink the click grid onto
- * the Cubase event so the metronome does not lag by the end.
- */
-export function scaleClickGridToDuration(
-  originSample: number,
-  periodSamples: number,
-  sampleRate: number,
-  captureDurationMs: number,
-  cubaseDurationMs: number
-): { originSample: number; periodSamples: number; bpm: number; beatOffsetMs: number } {
-  const scale = cubaseDurationMs / Math.max(1, captureDurationMs)
-  const origin = originSample * scale
-  const period = periodSamples * scale
-  return {
-    originSample: origin,
-    periodSamples: period,
-    bpm: (60 * sampleRate) / period,
-    beatOffsetMs: (origin / sampleRate) * 1000
-  }
 }
 
 /**
@@ -997,8 +774,13 @@ export function analyzeMonoPcm(
   let offsetMs = clickTracked ? clickTracked.offsetMs : pickKickPhase(bassNov, hopMs, bpm, rawOff)
   let clickOriginSample = clickTracked?.originSample
   let clickPeriodSamples = clickTracked?.periodSamples
-  const clickBeatsMs =
-    clickTracked && clickTracked.followedMs.length >= 16 ? clickTracked.followedMs : undefined
+  let clickBeatsMs: number[] | undefined
+  if (clickTracked && clickTracked.followedMs.length >= 16) {
+    const b = clickTracked.followedMs
+    const iv = b.slice(1).map((t, i) => t - b[i]!)
+    const spreadMs = iv.length ? Math.max(...iv) - Math.min(...iv) : 0
+    if (spreadMs > 0.2) clickBeatsMs = b
+  }
   if (clickTracked && !(durationMsOverride && durationMsOverride >= 1000)) {
     durationMs = Math.min(pcmMs, Math.round(clickTracked.durationMs))
   }

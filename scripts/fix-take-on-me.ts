@@ -1,6 +1,5 @@
 /**
- * Take On Me only: click on the 48 kHz capture's own sample grid.
- * First kick → last kick, n whole beats, period = (last − first) / n samples.
+ * Take On Me only: click from measured audio tempo (16 s slices), same length as the capture.
  */
 import { createRequire } from 'node:module'
 import { spawn } from 'node:child_process'
@@ -19,12 +18,12 @@ const rendersDir = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 
 const configPath = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'viewer-one-config.json')
 const srcPath =
   [
-    path.join(rendersDir, '004-pc4-take-on-me.wav'),
     path.join(rendersDir, '005-pc4-take-on-me.wav'),
-    path.join(rendersDir, '003-pc4-take-on-me.wav')
-  ].find((p) => fs.existsSync(p)) ?? path.join(rendersDir, '005-pc4-take-on-me.wav')
-const clickPath = path.join(rendersDir, '005-pc4-take-on-me-click.wav')
-const captureOut = path.join(rendersDir, '005-pc4-take-on-me.wav')
+    path.join(rendersDir, '006-pc4-take-on-me.wav'),
+    path.join(rendersDir, '004-pc4-take-on-me.wav')
+  ].find((p) => fs.existsSync(p)) ?? path.join(rendersDir, '006-pc4-take-on-me.wav')
+const clickPath = path.join(rendersDir, '006-pc4-take-on-me-click.wav')
+const captureOut = path.join(rendersDir, '006-pc4-take-on-me.wav')
 
 function runFfmpeg(args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -110,6 +109,22 @@ function clickOnsets(samples: Float32Array, sr: number): number[] {
   return times
 }
 
+function kickBand(samples: Float32Array, sr: number): Float32Array {
+  const hpA = 1 - Math.exp((-2 * Math.PI * 40) / sr)
+  const lpA = 1 - Math.exp((-2 * Math.PI * 180) / sr)
+  const out = new Float32Array(samples.length)
+  let slow = 0
+  let fast = 0
+  for (let i = 0; i < samples.length; i++) {
+    const x = samples[i] ?? 0
+    slow += hpA * (x - slow)
+    const high = x - slow
+    fast += lpA * (high - fast)
+    out[i] = fast
+  }
+  return out
+}
+
 function kickEnergy(pcm: Float32Array, sr: number, tMs: number): number {
   const c = Math.round((tMs / 1000) * sr)
   const win = Math.round(sr * 0.02)
@@ -162,9 +177,10 @@ const header = wavInfo(captureOut)
 console.log('CAPTURE', header)
 
 const samples = await decode48k(captureOut)
+const kick = kickBand(samples, 48000)
 const span = trackClickBeats(samples, 48000, { min: 166, max: 176 })
 const named = analyzeMonoPcm(samples, 48000, (samples.length / 48000) * 1000, 'Take on me')
-reportLock('native-span', span, samples, 48000)
+reportLock('native-span', span, kick, 48000)
 console.log('analyze fields', {
   bpm: named.bpm,
   offset: named.beatOffsetMs,
@@ -178,7 +194,10 @@ const analysis = {
   ...named,
   durationMs: (samples.length / 48000) * 1000
 }
-console.log('followed kicks', named.clickBeatsMs?.length)
+console.log('followed beats', named.clickBeatsMs?.length ?? 0)
+const iv = span.beatsMs.slice(1).map((t, i) => t - span.beatsMs[i]!)
+iv.sort((a, b) => a - b)
+console.log('period ms', { min: iv[0], med: iv[Math.floor(iv.length / 2)], max: iv[iv.length - 1] })
 
 for (const stale of fs.readdirSync(rendersDir)) {
   const p = path.join(rendersDir, stale)

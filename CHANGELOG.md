@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.44
+
+- Take On Me click BPM is measured from the Cubase capture in 16-second slices (mix autocorrelation, ~169.2 and a hair faster at the end). Smooth metronome, not kick-chasing. File: `006-pc4-take-on-me-click.wav`.
+
 ## v6.00.43
 
 - Take On Me click is a least-squares fit to the kicks in the Cubase capture (same length as that WAV). No 171 guess and no stretching to the arranger length. File: `005-pc4-take-on-me-click.wav`.
