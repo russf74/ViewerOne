@@ -16,6 +16,7 @@ import type { ClickTrackSettings, LightingAnalyzeScanState, SetlistItem } from '
 import type { SongAudioAnalysis } from '../shared/audioAnalysis.js'
 import type { LightingProgram } from '../shared/lightingProgram.js'
 import { LoopbackRecorder } from './loopbackRecord.js'
+import { peakNormalizeWavFile } from './wavNormalize.js'
 import { songLengthSeconds } from '../shared/setlistTiming.js'
 import type { LightingDirector } from './lightingDirector.js'
 
@@ -208,13 +209,23 @@ async function captureRenderedPlayback(
       await recorder.stop()
       await deps.sleep(120)
       if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size <= 1000) return false
+      try {
+        const gained = await peakNormalizeWavFile(outputPath)
+        analyzeLog(
+          `gain ${gained.peakBefore.toFixed(4)} → ${gained.peakAfter.toFixed(4)} (peak-normalize, Cubase/Windows fader not used)`
+        )
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        analyzeLog(msg)
+        return false
+      }
       const peak = wavFilePeak(outputPath)
       const hdr = wavHeader(outputPath)
       analyzeLog(
         `capture peak ${peak.toFixed(4)} ${hdr.sampleRate}Hz ${hdr.durationSec.toFixed(3)}s (${outputPath})`
       )
-      if (peak < 0.004) {
-        analyzeLog('capture was silence — Cubase ALL/FX mute or Stereo Mix not hearing playback')
+      if (peak < 0.2) {
+        analyzeLog('capture still too quiet after gain')
         return false
       }
       return true

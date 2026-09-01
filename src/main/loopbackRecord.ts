@@ -47,7 +47,7 @@ export class LoopbackRecorder {
           '-ar',
           String(opts.sampleRate ?? this.sampleRate),
           '-c:a',
-          'pcm_s16le'
+          'pcm_f32le'
         ]
       : [
           '-hide_banner',
@@ -63,7 +63,7 @@ export class LoopbackRecorder {
           '-ar',
           String(opts.sampleRate ?? this.sampleRate),
           '-c:a',
-          'pcm_s16le'
+          'pcm_f32le'
         ]
     if (opts.durationSec && opts.durationSec > 0) {
       args.push('-t', String(opts.durationSec))

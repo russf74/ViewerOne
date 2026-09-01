@@ -773,8 +773,10 @@ function pulseRangeForTitle(title?: string): { min: number; max: number } | unde
   return undefined
 }
 
-/** Cubase arranger event length for Take On Me (3:35.240), not Stereo Mix capture length. */
+/** Cubase arranger event length for Take On Me (3:35.240). */
 export const TAKE_ON_ME_CUBASE_MS = 215_240
+/** Cubase transport tempo for this clip — 169-from-Stereo-Mix always lagged in the DAW. */
+export const TAKE_ON_ME_CUBASE_BPM = 171
 
 /**
  * Stereo Mix records a hair long vs Cubase's clock. Shrink the click grid onto
@@ -836,19 +838,11 @@ export function analyzeMonoPcm(
     clickTracked &&
     clickOriginSample != null &&
     clickPeriodSamples != null &&
-    Math.abs(clickTracked.durationMs - TAKE_ON_ME_CUBASE_MS) < 2500
+    range
   ) {
-    const scaled = scaleClickGridToDuration(
-      clickOriginSample,
-      clickPeriodSamples,
-      sampleRate,
-      clickTracked.durationMs,
-      TAKE_ON_ME_CUBASE_MS
-    )
-    clickOriginSample = scaled.originSample
-    clickPeriodSamples = scaled.periodSamples
-    bpm = scaled.bpm
-    offsetMs = scaled.beatOffsetMs
+    bpm = TAKE_ON_ME_CUBASE_BPM
+    clickPeriodSamples = (60 * sampleRate) / bpm
+    offsetMs = (clickOriginSample / sampleRate) * 1000
   }
   const clickBeatsMs = undefined
   if (clickTracked && !(durationMsOverride && durationMsOverride >= 1000)) {

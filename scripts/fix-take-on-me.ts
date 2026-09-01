@@ -9,6 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { analyzeMonoPcm, TAKE_ON_ME_CUBASE_MS, trackClickBeats } from '../src/shared/audioAnalysis.ts'
 import { writeClickTrackWav } from '../src/main/clickTrackWav.ts'
+import { peakNormalizeWavFile } from '../src/main/wavNormalize.ts'
 import { buildLightingProgram } from '../src/shared/lightingProgram.ts'
 
 const require = createRequire(import.meta.url)
@@ -19,10 +20,11 @@ const configPath = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 
 const srcPath =
   [
     path.join(rendersDir, '003-pc4-take-on-me.wav'),
+    path.join(rendersDir, '004-pc4-take-on-me.wav'),
     path.join(rendersDir, '002-pc4-take-on-me.wav')
-  ].find((p) => fs.existsSync(p)) ?? path.join(rendersDir, '003-pc4-take-on-me.wav')
-const clickPath = path.join(rendersDir, '003-pc4-take-on-me-click.wav')
-const captureOut = path.join(rendersDir, '003-pc4-take-on-me.wav')
+  ].find((p) => fs.existsSync(p)) ?? path.join(rendersDir, '004-pc4-take-on-me.wav')
+const clickPath = path.join(rendersDir, '004-pc4-take-on-me-click.wav')
+const captureOut = path.join(rendersDir, '004-pc4-take-on-me.wav')
 
 function runFfmpeg(args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -145,15 +147,21 @@ function reportLock(label: string, span: ReturnType<typeof trackClickBeats>, pcm
   })
 }
 
-if (!fs.existsSync(srcPath)) {
+if (!srcPath || !fs.existsSync(srcPath)) {
   console.error('missing capture', srcPath)
   process.exit(1)
 }
 
-const header = wavInfo(srcPath)
+if (srcPath !== captureOut) {
+  fs.copyFileSync(srcPath, captureOut)
+}
+const gained = await peakNormalizeWavFile(captureOut)
+console.log('GAIN', gained)
+
+const header = wavInfo(captureOut)
 console.log('CAPTURE', header)
 
-const samples = await decode48k(srcPath)
+const samples = await decode48k(captureOut)
 const span = trackClickBeats(samples, 48000, { min: 166, max: 176 })
 const named = analyzeMonoPcm(samples, 48000, (samples.length / 48000) * 1000, 'Take on me')
 reportLock('native-span', span, samples, 48000)
@@ -164,16 +172,6 @@ console.log('analyze fields', {
   origin: named.clickOriginSample,
   period: named.clickPeriodSamples
 })
-
-if (fs.existsSync(clickPath)) {
-  const oldClick = await decode48k(clickPath)
-  const oldHits = clickOnsets(oldClick, 48000)
-  console.log('existing click hits', oldHits.length)
-}
-
-if (srcPath !== captureOut) {
-  fs.copyFileSync(srcPath, captureOut)
-}
 
 const durationSamples = Math.round((TAKE_ON_ME_CUBASE_MS / 1000) * 48000)
 const analysis = {

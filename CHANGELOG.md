@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.42
+
+- Take On Me capture is peak-normalized so Cubase shows a full waveform (Stereo Mix was tiny; gain is digital, not the fader). Click is Cubase’s 171 BPM so it no longer lags. Files: `004-pc4-take-on-me.wav` and `004-pc4-take-on-me-click.wav`.
+
 ## v6.00.41
 
 - Take On Me click is sped to Cubase's clock (the Stereo Mix recording was a hair long, so the metronome lagged by the end). New file: `003-pc4-take-on-me-click.wav`. Same Cubase recording as before.
