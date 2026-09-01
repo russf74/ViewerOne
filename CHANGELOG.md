@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.35
+
+- Take On Me recaptured on its own (USB mixer unplugged so Cubase/Stereo Mix use the internal Realtek path). Fresh 48 kHz recording, click `pc4-take-on-me-click.wav` from that audio (~169.15). Other songs not recaptured.
+
 ## v6.00.34
 
 - Take On Me click is a steady 172.53 from the capture, with the grid sitting on the kick for the whole song (the last file was 141ms off the beat). Gaps at the ends are left in. File: `pc4-take-on-me-click-onbeat.wav`. Other songs not changed.

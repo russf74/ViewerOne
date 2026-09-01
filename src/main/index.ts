@@ -523,7 +523,11 @@ function sendAnalyzeStop(): void {
   sendCubaseTransportStop('lighting analyze capture')
 }
 
-async function runLightingAnalyzeFromCubase(maxCaptures?: number): Promise<void> {
+async function runLightingAnalyzeFromCubase(
+  maxCaptures?: number,
+  onlyTitle?: string,
+  onlyProgram?: number
+): Promise<void> {
   if (lightingAnalyzePromise) return
   if (arrangerScanPromise || arrangerScan.active) {
     setLightingAnalyze({
@@ -584,7 +588,9 @@ async function runLightingAnalyzeFromCubase(maxCaptures?: number): Promise<void>
     loopbackDevice,
     clickSettings: st.clickTrack,
     director: lightingDirector,
-    maxCaptures
+    maxCaptures,
+    onlyTitle,
+    onlyProgram
   })
     .catch((err) => {
       console.warn('[ViewerOne] Lighting analyze failed:', err)
@@ -3495,17 +3501,26 @@ if (!gotTheLock) {
     }
 
     const analyzeMaxArg = process.argv.find((a) => a.startsWith('--lighting-analyze-max='))
+    const analyzeTitleArg = process.argv.find((a) => a.startsWith('--lighting-analyze-title='))
+    const analyzeProgramArg = process.argv.find((a) => a.startsWith('--lighting-analyze-program='))
     const wantFullAnalyze = process.argv.includes('--lighting-analyze')
-    if (wantFullAnalyze || analyzeMaxArg) {
+    if (wantFullAnalyze || analyzeMaxArg || analyzeTitleArg || analyzeProgramArg) {
       const n = analyzeMaxArg
         ? Math.max(1, Math.round(Number(analyzeMaxArg.split('=')[1]) || 1))
         : undefined
+      const onlyTitle = analyzeTitleArg
+        ? analyzeTitleArg.slice('--lighting-analyze-title='.length).trim()
+        : undefined
+      const parsedProgram = analyzeProgramArg
+        ? Math.round(Number(analyzeProgramArg.slice('--lighting-analyze-program='.length)))
+        : 0
+      const onlyProgram = parsedProgram > 0 ? parsedProgram : undefined
       setTimeout(() => {
         void (async () => {
           console.log(
-            `[ViewerOne] ${analyzeMaxArg ?? '--lighting-analyze'}: starting Cubase lighting analyze`
+            `[ViewerOne] ${analyzeProgramArg ?? analyzeTitleArg ?? analyzeMaxArg ?? '--lighting-analyze'}: starting Cubase lighting analyze`
           )
-          await runLightingAnalyzeFromCubase(n)
+          await runLightingAnalyzeFromCubase(n, onlyTitle, onlyProgram)
           console.log(
             `[ViewerOne] lighting analyze done: ${lightingAnalyze.phase} — ${lightingAnalyze.message}`
           )

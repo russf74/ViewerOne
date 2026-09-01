@@ -43,6 +43,10 @@ export type LightingAnalyzeDeps = {
   director: LightingDirector
   /** Stop after this many successful captures (CLI `--lighting-analyze-max=N`). */
   maxCaptures?: number
+  /** Capture only this setlist title (CLI `--lighting-analyze-title=`). */
+  onlyTitle?: string
+  /** Capture only this program change (CLI `--lighting-analyze-program=`). */
+  onlyProgram?: number
 }
 
 const CAPTURE_PAD_MS = 600
@@ -101,17 +105,22 @@ function songAlreadyReady(row: SetlistItem): boolean {
   )
 }
 
-function wavDurationSec(filePath: string): number {
+function wavHeader(filePath: string): { sampleRate: number; durationSec: number } {
   try {
     const buf = fs.readFileSync(filePath, { encoding: null }).subarray(0, 44)
-    if (buf.length < 32) return 0
+    if (buf.length < 32) return { sampleRate: 0, durationSec: 0 }
+    const sampleRate = buf.readUInt32LE(24)
     const byteRate = buf.readUInt32LE(28)
     const size = fs.statSync(filePath).size
-    if (byteRate <= 0) return 0
-    return Math.max(0, (size - 44) / byteRate)
+    if (byteRate <= 0) return { sampleRate, durationSec: 0 }
+    return { sampleRate, durationSec: Math.max(0, (size - 44) / byteRate) }
   } catch {
-    return 0
+    return { sampleRate: 0, durationSec: 0 }
   }
+}
+
+function wavDurationSec(filePath: string): number {
+  return wavHeader(filePath).durationSec
 }
 
 function existingUsableRender(row: SetlistItem): string | null {
@@ -186,6 +195,7 @@ async function captureRenderedPlayback(
         outputPath,
         deviceName: deps.loopbackDevice,
         durationSec: durationMs / 1000,
+        sampleRate: 48000,
         onError: (msg) => console.warn('[ViewerOne] Loopback record:', msg)
       })
       await deps.sleep(250)
@@ -199,7 +209,10 @@ async function captureRenderedPlayback(
       await deps.sleep(120)
       if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size <= 1000) return false
       const peak = wavFilePeak(outputPath)
-      analyzeLog(`capture peak ${peak.toFixed(4)} (${outputPath})`)
+      const hdr = wavHeader(outputPath)
+      analyzeLog(
+        `capture peak ${peak.toFixed(4)} ${hdr.sampleRate}Hz ${hdr.durationSec.toFixed(3)}s (${outputPath})`
+      )
       if (peak < 0.004) {
         analyzeLog('capture was silence — Cubase ALL/FX mute or Stereo Mix not hearing playback')
         return false
@@ -263,9 +276,25 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
       return
     }
 
-    const targets = setlist
+    let targets = setlist
       .filter((r) => shouldCaptureSong(r) && r.arrangerIndex != null)
       .sort((a, b) => (a.arrangerIndex ?? 0) - (b.arrangerIndex ?? 0))
+    const onlyTitle = deps.onlyTitle?.trim()
+    const onlyProgram =
+      deps.onlyProgram && deps.onlyProgram > 0 ? Math.round(deps.onlyProgram) : undefined
+    if (onlyProgram) {
+      targets = targets.filter((r) => r.program === onlyProgram)
+    }
+    if (onlyTitle) {
+      const want = onlyTitle.toLowerCase().replace(/[^a-z0-9]+/g, '')
+      targets = targets.filter((r) => r.title.toLowerCase().replace(/[^a-z0-9]+/g, '') === want)
+    }
+    if ((onlyTitle || onlyProgram) && targets.length === 0) {
+      const msg = `No setlist song matches ${onlyProgram ? `PC ${onlyProgram}` : ''} ${onlyTitle ? `“${onlyTitle}”` : ''}`.trim()
+      analyzeLog(msg)
+      deps.setScan({ active: false, phase: 'error', message: msg })
+      return
+    }
     const limit = deps.maxCaptures && deps.maxCaptures > 0 ? deps.maxCaptures : targets.length
     const planned = targets.slice(0, limit)
     deps.setScan({ total: planned.length })
@@ -304,14 +333,15 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
       const title = row.title.trim()
       if (!title) return
 
-      if (songAlreadyReady(row)) {
+      const recapture = Boolean(onlyTitle || onlyProgram)
+      if (!recapture && songAlreadyReady(row)) {
         analyzeLog(`skip ready PC ${row.program} “${title}”`)
         captured++
         deps.setScan({ collected: captured, message: `Song ${index}: “${title}” — already ready.` })
         return
       }
 
-      const reused = existingUsableRender(row)
+      const reused = recapture ? null : existingUsableRender(row)
       if (reused) {
         deps.setScan({
           phase: 'analyzing',
