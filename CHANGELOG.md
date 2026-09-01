@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.39
+
+- Wipe the renders folder and recapture Take On Me only. New files: `001-pc4-take-on-me.wav` and `001-pc4-take-on-me-click.wav`. Other songs not recaptured.
+
 ## v6.00.38
 
 - Take On Me click is counted from the first kick to the last kick in the recording (not a guessed onset tempo), written sample-accurate at Cubase clip length 3:35.240 so it is not stretched slower on import. File: `pc4-take-on-me-click-span.wav`. Other songs not changed.
