@@ -109,6 +109,13 @@ if (Math.abs(trimmed.bpm - 120) > 2) {
 }
 console.log('silence trim', trimmed.durationMs, 'bpm', trimmed.bpm)
 
+const longPad = new Float32Array(withTail.length + 22050 * 12)
+longPad.set(withTail)
+const longTrim = analyzeMonoPcm(longPad, 22050)
+if (longTrim.durationMs < 18000) {
+  throw new Error(`quiet outro must not be chopped, got ${longTrim.durationMs}`)
+}
+
 const click172 = analyzeMonoPcm(clickTrackPcm(172.55, 20), 22050)
 assertBpmNear(click172.bpm, 172.55, 1.5)
 console.log('click 172.55 BPM:', click172.bpm)

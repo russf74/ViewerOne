@@ -471,6 +471,8 @@ function musicalEndMs(energy: Float32Array, hopMs: number, durationMs: number): 
   }
   const ms = Math.round((last + 1) * hopMs + 40)
   if (ms < durationMs * 0.5) return durationMs
+  // Capture locators leave a couple of seconds of silence — not a quiet outro.
+  if (durationMs - ms > 6000) return durationMs
   return Math.min(durationMs, ms)
 }
 

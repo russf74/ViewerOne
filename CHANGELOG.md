@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.29
+
+- Click silence trim only removes a short capture tail (up to 6s), so a quiet ending like Rock DJ is not cut short.
+
 ## v6.00.28
 
 - Take On Me click follows the fast drum pulse in that capture (~172.5), not the slower 129 grouping. Other songs stay on the pulse in their audio. New files: `…-click-48khz-pulse.wav`.
