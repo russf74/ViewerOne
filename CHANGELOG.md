@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.46
+
+- Take On Me click can be built from the Music AI / Moises Jobs API: upload the Cubase capture, read the beat map, write a bar-accent click (`007-pc4-take-on-me-click.wav`). API key lives in `%APPDATA%\viewer-one\music-ai-api-key.txt`. Same path can run the whole setlist overnight.
+
 ## v6.00.45
 
 - Take On Me click is rebuilt from a Moises metronome at the same hit times, with a higher/louder click on beat 1 of each bar. Drop the Moises WAV in renders as `006-pc4-take-on-me-metronome.wav`. File: `007-pc4-take-on-me-click.wav`.

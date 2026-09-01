@@ -5,6 +5,7 @@ import {
   metronomeOnsetsMs,
   pickDownbeatPhase
 } from '../src/shared/metronomeOnsets.ts'
+import { parseBeatMapJson } from '../src/shared/beatMapParse.ts'
 
 function clickTrackPcm(bpm: number, durationSec: number, sr = 22050): Float32Array {
   const n = Math.floor(durationSec * sr)
@@ -125,6 +126,22 @@ if (pickDownbeatPhase(onsets, undefined, 48000) !== 0) {
   throw new Error('no-song downbeat phase should be 0')
 }
 console.log('metronome resynth OK', { bpm: medianBpmFromOnsets(onsets), hits: onsets.length, down, two })
+
+const mapped = parseBeatMapJson({
+  bpm: 169.2,
+  beats: [
+    { start: 0.5, beat: 3 },
+    { start: 0.854, beat: 4 },
+    { start: 1.208, beat: 1 },
+    { start: 1.562, beat: 2 }
+  ]
+})
+if (Math.abs(mapped.timesMs[0]! - 500) > 1) throw new Error(`expected 500ms, got ${mapped.timesMs[0]}`)
+if (mapped.accentPhase !== 2) throw new Error(`downbeat should be 3rd click, got phase ${mapped.accentPhase}`)
+if (!mapped.fromBeatNumbers) throw new Error('expected beat numbers')
+const secondsList = parseBeatMapJson([0, 0.5, 1, 1.5, 2])
+if (Math.abs(secondsList.timesMs[1]! - 500) > 1) throw new Error('seconds list should scale to ms')
+console.log('beat-map parse OK', mapped)
 
 console.log('click-track: OK', {
   bpm: analysis.bpm,
