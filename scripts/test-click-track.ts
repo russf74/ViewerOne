@@ -18,30 +18,36 @@ function clickTrackPcm(bpm: number, durationSec: number, sr = 22050): Float32Arr
 const analysis = analyzeMonoPcm(clickTrackPcm(120, 10), 22050)
 const cubase = synthesizeClickTrack(analysis, { countInBars: 1, sampleRate: 48000 })
 if (cubase.sampleRate !== 48000) throw new Error(`expected 48 kHz click, got ${cubase.sampleRate}`)
-const beeps = beatTimesWithCountIn(analysis, 1, 4).filter((e) => e.countIn)
-if (beeps.length !== 4) throw new Error(`expected 4 count-in beeps, got ${beeps.length}`)
-const firstSong = beatTimesWithCountIn(analysis, 1, 4).find((e) => !e.countIn)
-if (!firstSong) throw new Error('missing first song click')
-const beepToDownbeat = firstSong.atMs - beeps[0].atMs
-const fourBeats = 4 * (60000 / Math.max(60, analysis.bpm))
-if (Math.abs(beepToDownbeat - fourBeats) > 40) {
-  throw new Error(`4 beeps should span ${fourBeats}ms before downbeat, got ${beepToDownbeat}`)
+if (cubase.countInMs !== 0) throw new Error(`embedded beeps must not extend the WAV, got ${cubase.countInMs}`)
+const wavMs = (cubase.samples.length / cubase.sampleRate) * 1000
+if (Math.abs(wavMs - analysis.durationMs) > 40) {
+  throw new Error(`WAV ${wavMs} != song ${analysis.durationMs}`)
 }
-if (cubase.countInMs <= 0) throw new Error('count-in missing from WAV')
-const songMs = (cubase.samples.length / cubase.sampleRate) * 1000 - cubase.countInMs
-if (Math.abs(songMs - analysis.durationMs) > 40) {
-  throw new Error(`song portion ${songMs} != ${analysis.durationMs}`)
+const events = beatTimesWithCountIn(analysis, 1, 4)
+const beeps = events.filter((e) => e.countIn)
+if (beeps.length !== 4) throw new Error(`expected 4 count-in beeps, got ${beeps.length}`)
+if (beeps.some((e) => e.atMs < 0)) throw new Error('embedded beeps must not start before t=0')
+const firstSong = events.find((e) => !e.countIn)
+if (!firstSong) throw new Error('missing first song click')
+const beepToClick = firstSong.atMs - beeps[0].atMs
+const fourBeats = 4 * (60000 / Math.max(60, analysis.bpm))
+if (Math.abs(beepToClick - fourBeats) > 40) {
+  throw new Error(`4 beeps should span ${fourBeats}ms, got ${beepToClick}`)
 }
 const stretched = synthesizeClickTrack(analysis, { countInBars: 1, durationMs: 226000 })
-const stretchedSong = Math.round((stretched.samples.length / stretched.sampleRate) * 1000 - stretched.countInMs)
-if (Math.abs(stretchedSong - 226000) > 40) throw new Error(`expected 226000 ms song, got ${stretchedSong}`)
-const withCount = synthesizeClickTrack(analysis, { countInBars: 2 })
-if (withCount.countInMs <= cubase.countInMs) throw new Error('2-bar count-in should be longer')
+const stretchedMs = Math.round((stretched.samples.length / stretched.sampleRate) * 1000)
+if (Math.abs(stretchedMs - 226000) > 40) throw new Error(`expected 226000 ms WAV, got ${stretchedMs}`)
+const prepended = synthesizeClickTrack(analysis, { countInBars: 1, embedCountIn: false })
+if (prepended.countInMs <= 0) throw new Error('prepended count-in missing from WAV')
+if (prepended.samples.length <= cubase.samples.length) {
+  throw new Error('prepended WAV should be longer than embedded')
+}
 console.log('click-track: OK', {
   bpm: analysis.bpm,
   songMs: analysis.durationMs,
+  wavMs: Math.round(wavMs),
   countInMs: cubase.countInMs,
   beeps: beeps.length,
-  cubaseSongMs: stretchedSong,
+  stretchedMs,
   sampleRate: cubase.sampleRate
 })

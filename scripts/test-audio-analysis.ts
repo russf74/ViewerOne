@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { analyzeMonoPcm, snapToBarMs } from '../src/shared/audioAnalysis.ts'
+import { analyzeMonoPcm, snapToBarMs, tempoHintForTitle } from '../src/shared/audioAnalysis.ts'
 import { buildLightingProgram } from '../src/shared/lightingProgram.ts'
 
 function clickTrackPcm(bpm: number, durationSec: number, sr = 22050): Float32Array {
@@ -90,6 +90,11 @@ function runFfmpeg(args: string[]): Promise<Buffer> {
 const click169 = analyzeMonoPcm(clickTrackPcm(169, 20), 22050)
 assertBpmNear(click169.bpm, 169, 4)
 console.log('click 169 BPM:', click169.bpm, 'offset', click169.beatOffsetMs)
+
+if (tempoHintForTitle('Take On Me') !== 169) throw new Error('Take On Me hint')
+if (tempoHintForTitle('Jump') != null) throw new Error('Jump must not get a title BPM hint')
+const forced = analyzeMonoPcm(clickTrackPcm(129, 16), 22050, undefined, tempoHintForTitle('Take On Me'))
+if (forced.bpm !== 169) throw new Error(`override BPM ${forced.bpm} != 169`)
 
 const barMs = (60000 / Math.max(60, click128.bpm)) * 4
 for (const s of click128.sections) {

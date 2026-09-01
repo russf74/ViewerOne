@@ -1,16 +1,15 @@
 /**
  * Delete all click WAVs and rebuild from existing Cubase renders
- * (48 kHz, 4 count-in beeps, bar-aligned lighting).
+ * (48 kHz, 4 in-song beeps, bar-aligned lighting).
  */
 import { createRequire } from 'node:module'
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { analyzeMonoPcm } from '../src/shared/audioAnalysis.ts'
+import { analyzeMonoPcm, tempoHintForTitle } from '../src/shared/audioAnalysis.ts'
 import { buildLightingProgram } from '../src/shared/lightingProgram.ts'
 import { writeClickTrackWav } from '../src/main/clickTrackWav.ts'
-import { songLengthSeconds } from '../src/shared/setlistTiming.ts'
 
 const require = createRequire(import.meta.url)
 const ffmpeg = require('ffmpeg-static') as string
@@ -50,7 +49,7 @@ function isPerformance(title: string, program: number): boolean {
 
 function clickName(program: number, title: string): string {
   const slug = slugTitle(title)
-  return `pc${program}${slug ? `-${slug}` : ''}-click-48khz-beep.wav`
+  return `pc${program}${slug ? `-${slug}` : ''}-click-48khz-beeps.wav`
 }
 
 if (!fs.existsSync(configPath)) {
@@ -97,16 +96,14 @@ for (const song of rows) {
     'pipe:1'
   ])
   const samples = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4)
-  const analysis = analyzeMonoPcm(samples, 22050)
+  const analysis = analyzeMonoPcm(samples, 22050, undefined, tempoHintForTitle(title))
   const programOut = buildLightingProgram(analysis)
-  const listedMs = song.length ? songLengthSeconds(song.length) * 1000 : 0
-  const durationMs = Math.max(analysis.durationMs, listedMs)
   const clickPath = path.join(rendersDir, clickName(program, title))
   const written = writeClickTrackWav(clickPath, analysis, {
     countInBars: 1,
+    embedCountIn: true,
     accentEvery: 4,
-    sampleRate: 48000,
-    durationMs
+    sampleRate: 48000
   })
   const bases = programOut.cues.filter((c) => !c.accentDurationMs)
   const barMs = (60000 / analysis.bpm) * 4
@@ -123,7 +120,7 @@ for (const song of rows) {
   song.cubaseRenderPath = wav
   const flag = offBar.length ? ' OFF-BAR' : ''
   results.push(
-    `OK PC${program} ${title} ${analysis.bpm}bpm ${written.countInMs}ms-beeps ${bases.length}cues ${Math.round(durationMs / 1000)}s${flag}`
+    `OK PC${program} ${title} ${analysis.bpm}bpm ${Math.round(analysis.durationMs / 1000)}s${flag}`
   )
   console.log(results[results.length - 1])
 }

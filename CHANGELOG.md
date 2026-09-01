@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.26
+
+- Click WAV is the same length as the audio: 4 beeps on the first four beats, then clicks. Files are named `…-click-48khz-beeps.wav` so Cubase does not reuse the old (too-long, wrong-tempo) pool clip. Take On Me is forced to 169 BPM.
+
 ## v6.00.25
 
 - Click files are named `…-click-48khz-beep.wav` so Cubase treats them as new clips (same filename was reusing the old audio).

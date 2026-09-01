@@ -20,6 +20,11 @@ export type ClickTrackOptions = {
   accentClickMs?: number
   /** If set, click WAV lasts this long (ms) instead of analysis.durationMs. */
   durationMs?: number
+  /**
+   * If true (default), the 4 count-in beeps replace the first 4 song beats so the
+   * WAV is the same length as the audio. If false, beeps are prepended (extra time).
+   */
+  embedCountIn?: boolean
 }
 
 const DEFAULT_OPTS: Required<ClickTrackOptions> = {
@@ -31,7 +36,8 @@ const DEFAULT_OPTS: Required<ClickTrackOptions> = {
   sampleRate: 48000,
   clickMs: 8,
   accentClickMs: 12,
-  durationMs: 0
+  durationMs: 0,
+  embedCountIn: true
 }
 
 /** Full beat grid for click generation (not storage-capped). */
@@ -47,18 +53,37 @@ export function buildFullBeatGrid(analysis: SongAudioAnalysis): number[] {
   return beats
 }
 
-/** Beat times including optional count-in (negative ms relative to song t=0). */
+/** Beat times including optional count-in. Embedded (default): first N song beats are beeps. */
 export function beatTimesWithCountIn(
   analysis: SongAudioAnalysis,
   countInBars: number,
   beatsPerBar = 4,
-  untilMs = 0
+  untilMs = 0,
+  embedCountIn = true
 ): { atMs: number; accent: boolean; beatIndex: number; countIn: boolean }[] {
-  const opts = { ...DEFAULT_OPTS, countInBars, beatsPerBar }
+  const opts = { ...DEFAULT_OPTS, countInBars, beatsPerBar, embedCountIn }
   const beatMs = 60000 / Math.max(60, analysis.bpm)
   const firstDownbeat = Math.max(0, analysis.beatOffsetMs)
   const countInBeats = countInBars * beatsPerBar
   const out: { atMs: number; accent: boolean; beatIndex: number; countIn: boolean }[] = []
+  const endMs = Math.max(analysis.durationMs, untilMs)
+
+  if (opts.embedCountIn) {
+    let beatIndex = 0
+    let t = firstDownbeat
+    while (t <= endMs && out.length < 12000) {
+      out.push({
+        atMs: Math.round(t),
+        accent: beatIndex % opts.accentEvery === 0,
+        beatIndex,
+        countIn: beatIndex < countInBeats
+      })
+      t += beatMs
+      beatIndex++
+    }
+    return out
+  }
+
   let beatIndex = -countInBeats
   for (let i = 0; i < countInBeats; i++) {
     const atMs = Math.round(firstDownbeat - (countInBeats - i) * beatMs)
@@ -71,7 +96,6 @@ export function beatTimesWithCountIn(
     beatIndex++
   }
   let t = firstDownbeat
-  const endMs = Math.max(analysis.durationMs, untilMs)
   while (t <= endMs && out.length < 12000) {
     out.push({
       atMs: Math.round(t),
@@ -111,7 +135,9 @@ export function synthesizeClickTrack(
   const firstDownbeat = Math.max(0, analysis.beatOffsetMs)
   const countInBeats = opts.countInBars * opts.beatsPerBar
   const firstBeepAt = firstDownbeat - countInBeats * beatMs
-  const countInMs = Math.max(0, Math.round(-Math.min(0, firstBeepAt)))
+  const countInMs = opts.embedCountIn
+    ? 0
+    : Math.max(0, Math.round(-Math.min(0, firstBeepAt)))
   const songMs = Math.max(analysis.durationMs, opts.durationMs ?? 0)
   const totalMs = countInMs + songMs
   const sampleRate = opts.sampleRate
@@ -123,7 +149,13 @@ export function synthesizeClickTrack(
   const beep = synthesizeClickSample(sampleRate, 45, 1000, Math.min(1, opts.accentVolume + 0.05))
   const beepDown = synthesizeClickSample(sampleRate, 55, 780, 1)
 
-  const events = beatTimesWithCountIn(analysis, opts.countInBars, opts.beatsPerBar, songMs)
+  const events = beatTimesWithCountIn(
+    analysis,
+    opts.countInBars,
+    opts.beatsPerBar,
+    songMs,
+    opts.embedCountIn
+  )
   for (const ev of events) {
     const offsetMs = ev.atMs + countInMs
     if (offsetMs < 0) continue

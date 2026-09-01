@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { analyzeMonoPcm } from '../src/shared/audioAnalysis.ts'
+import { analyzeMonoPcm, tempoHintForTitle } from '../src/shared/audioAnalysis.ts'
 import { buildLightingProgram } from '../src/shared/lightingProgram.ts'
 import { synthesizeClickTrack } from '../src/shared/clickTrack.ts'
 import { writeClickTrackWav } from '../src/main/clickTrackWav.ts'
@@ -56,22 +56,22 @@ const raw = await runFfmpeg([
   'pipe:1'
 ])
 const samples = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4)
-const analysis = analyzeMonoPcm(samples, 22050)
+const analysis = analyzeMonoPcm(samples, 22050, undefined, tempoHintForTitle(titleHint))
 const program = buildLightingProgram(analysis)
-const clickPath = wav.replace(/\.wav$/i, '-click-48khz-beep.wav')
+const clickPath = wav.replace(/\.wav$/i, '-click-48khz-beeps.wav')
 if (fs.existsSync(clickPath)) fs.unlinkSync(clickPath)
 const written = writeClickTrackWav(clickPath, analysis, {
-  countInBars: 0,
+  countInBars: 1,
+  embedCountIn: true,
   accentEvery: 4,
-  sampleRate: 48000,
-  durationMs: 226000
+  sampleRate: 48000
 })
 const st = fs.statSync(clickPath)
 console.log('click written', clickPath, 'bytes', st.size, 'mtime', st.mtime.toISOString())
 const clickSynth = synthesizeClickTrack(analysis, {
-  countInBars: 0,
-  sampleRate: 48000,
-  durationMs: 226000
+  countInBars: 1,
+  embedCountIn: true,
+  sampleRate: 48000
 })
 const clickDurMs = Math.round((clickSynth.samples.length / clickSynth.sampleRate) * 1000)
 
@@ -96,8 +96,8 @@ console.log(
   )
 )
 
-if (Math.abs(clickDurMs - 226000) > 50) {
-  throw new Error(`click duration ${clickDurMs} != 226000`)
+if (Math.abs(clickDurMs - analysis.durationMs) > 50) {
+  throw new Error(`click duration ${clickDurMs} != ${analysis.durationMs}`)
 }
 
 const configPath = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'viewer-one-config.json')
@@ -112,7 +112,7 @@ if (fs.existsSync(configPath)) {
     song.audioAnalysis = analysis
     song.lightingProgram = program
     song.clickTrackPath = clickPath
-    song.clickTrackCountInMs = 0
+    song.clickTrackCountInMs = written.countInMs
     song.audioSource = 'cubase-render'
     song.cubaseRenderPath = wav
     song.cubaseRenderCapturedAt = new Date().toISOString()

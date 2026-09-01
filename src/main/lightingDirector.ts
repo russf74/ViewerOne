@@ -1,4 +1,4 @@
-import { analyzeMonoPcm } from '../shared/audioAnalysis.js'
+import { analyzeMonoPcm, tempoHintForTitle } from '../shared/audioAnalysis.js'
 import { buildLightingProgram, resolveActiveCues, nextLightingCue } from '../shared/lightingProgram.js'
 import type { LightingCue } from '../shared/lightingProgram.js'
 import { LiveBeatSync } from '../shared/liveAudioSync.js'
@@ -7,7 +7,6 @@ import { decodeAudioFileToMonoPcm } from './audioDecode.js'
 import { writeClickTrackWav } from './clickTrackWav.js'
 import { clickTrackPathForSong } from './clickTrackPaths.js'
 import { LiveAudioCapture } from './liveAudioCapture.js'
-import { songLengthSeconds } from '../shared/setlistTiming.js'
 
 export type LightingDirectorSnapshot = {
   active: boolean
@@ -130,20 +129,24 @@ export class LightingDirector {
     this.analyzeError = null
     try {
       const { samples, sampleRate, durationMs } = await decodeAudioFileToMonoPcm(wavPath)
-      const audioAnalysis = analyzeMonoPcm(samples, sampleRate, durationMs)
+      const audioAnalysis = analyzeMonoPcm(
+        samples,
+        sampleRate,
+        durationMs,
+        tempoHintForTitle(song.title)
+      )
       const lightingProgram = buildLightingProgram(audioAnalysis)
       let clickTrackPath: string | undefined
       let clickTrackCountInMs: number | undefined
       if (clickSettings.generateWav) {
         const clickPath = clickTrackPathForSong(song.program, song.title)
-        const lengthMs = song.length ? songLengthSeconds(song.length) * 1000 : 0
         const written = writeClickTrackWav(clickPath, audioAnalysis, {
           volume: clickSettings.volume,
           accentVolume: clickSettings.accentVolume,
           accentEvery: clickSettings.accentEvery,
           countInBars: 1,
-          sampleRate: 48000,
-          durationMs: lengthMs
+          embedCountIn: true,
+          sampleRate: 48000
         })
         clickTrackPath = written.path
         clickTrackCountInMs = written.countInMs

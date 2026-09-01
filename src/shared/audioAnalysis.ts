@@ -361,13 +361,38 @@ function buildBeatGrid(durationMs: number, bpm: number, offsetMs: number): numbe
   return beats
 }
 
+/** Known-title tempos when the onset grid prefers a slower alias (e.g. 129 vs 169). */
+export function tempoHintForTitle(title: string): number | undefined {
+  const t = title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  if (/\btake on me\b/.test(t)) return 169
+  return undefined
+}
+
+function bestOffsetForBpm(novelty: Float32Array, hopMs: number, bpm: number): number {
+  const beatMs = 60000 / bpm
+  const steps = Math.max(4, Math.round(beatMs / hopMs))
+  let bestOff = 0
+  let bestOffScore = -1
+  for (let s = 0; s < steps; s++) {
+    const offsetMs = s * hopMs
+    const score = meanNoveltyOnGrid(novelty, hopMs, beatMs, offsetMs)
+    const closer = offsetMs < bestOff && score >= bestOffScore * 0.985
+    if (score > bestOffScore || closer) {
+      bestOffScore = Math.max(bestOffScore, score)
+      bestOff = offsetMs
+    }
+  }
+  return bestOff
+}
+
 /**
  * Analyze mono PCM (float -1..1). Returns BPM, beat grid, and section map.
  */
 export function analyzeMonoPcm(
   samples: Float32Array,
   sampleRate: number,
-  durationMsOverride?: number
+  durationMsOverride?: number,
+  bpmOverride?: number
 ): SongAudioAnalysis {
   const resampled = resampleMonoPcm(samples, sampleRate, ANALYSIS_SAMPLE_RATE)
   const peak = peakOf(resampled)
@@ -382,7 +407,20 @@ export function analyzeMonoPcm(
   const flux = spectralFlux(pcm, frameSize, hop)
   const energyFrames = frameEnergy(pcm, hop)
   const novelty = combineNovelty(flux, energyNovelty(energyFrames))
-  const { bpm, offsetMs: rawOff } = trackTempoAndPhase(novelty, hopMs)
+  const override =
+    bpmOverride && Number.isFinite(bpmOverride) && bpmOverride >= 60 && bpmOverride <= 240
+      ? Math.round(bpmOverride)
+      : undefined
+  let bpm: number
+  let rawOff: number
+  if (override) {
+    bpm = override
+    rawOff = bestOffsetForBpm(novelty, hopMs, bpm)
+  } else {
+    const tracked = trackTempoAndPhase(novelty, hopMs)
+    bpm = tracked.bpm
+    rawOff = tracked.offsetMs
+  }
   const bassNov = energyNovelty(frameEnergy(onePoleLowpass(pcm), hop))
   const offsetMs = pickKickPhase(bassNov, hopMs, bpm, rawOff)
   const beatTimesMs = buildBeatGrid(durationMs, bpm, offsetMs)
