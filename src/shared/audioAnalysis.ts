@@ -250,52 +250,60 @@ function pickNoveltyPeaks(novelty: Float32Array, hopMs: number, minGapMs: number
   return times
 }
 
-/** Least-squares beat period from onset peaks — fractional BPM that does not drift. */
+/** Least-squares even grid from onset peaks — period is a float, not a rounded BPM. */
 function fitTempoToOnsets(
   novelty: Float32Array,
   hopMs: number,
   seedBpm: number,
-  seedOffsetMs: number
-): { bpm: number; offsetMs: number } {
-  const beatMs = 60000 / Math.max(60, seedBpm)
-  const onsets = pickNoveltyPeaks(novelty, hopMs, beatMs * 0.55)
-  const xs: number[] = []
-  const ys: number[] = []
-  for (const t of onsets) {
-    const idx = Math.round((t - seedOffsetMs) / beatMs)
-    if (idx < 0) continue
-    const expected = seedOffsetMs + idx * beatMs
-    if (Math.abs(t - expected) > beatMs * 0.32) continue
-    xs.push(idx)
-    ys.push(t)
+  seedOffsetMs: number,
+  minBpm: number,
+  maxBpm: number
+): { bpm: number; offsetMs: number; periodMs: number } {
+  let beatMs = 60000 / Math.max(60, seedBpm)
+  let offsetMs = seedOffsetMs
+  let bpm = seedBpm
+  for (let iter = 0; iter < 4; iter++) {
+    const onsets = pickNoveltyPeaks(novelty, hopMs, beatMs * 0.72)
+    const xs: number[] = []
+    const ys: number[] = []
+    for (const t of onsets) {
+      const idx = Math.round((t - offsetMs) / beatMs)
+      if (idx < 0) continue
+      const expected = offsetMs + idx * beatMs
+      if (Math.abs(t - expected) > beatMs * 0.32) continue
+      xs.push(idx)
+      ys.push(t)
+    }
+    if (xs.length < 12) break
+    const n = xs.length
+    let sumX = 0
+    let sumY = 0
+    let sumXX = 0
+    let sumXY = 0
+    for (let i = 0; i < n; i++) {
+      sumX += xs[i]!
+      sumY += ys[i]!
+      sumXX += xs[i]! * xs[i]!
+      sumXY += xs[i]! * ys[i]!
+    }
+    const denom = n * sumXX - sumX * sumX
+    if (Math.abs(denom) < 1e-9) break
+    const slope = (n * sumXY - sumX * sumY) / denom
+    const intercept = (sumY - slope * sumX) / n
+    if (!(slope > 50 && slope < 900)) break
+    const nextBpm = 60000 / slope
+    if (nextBpm < minBpm || nextBpm > maxBpm) break
+    let err = 0
+    for (let i = 0; i < n; i++) {
+      const d = ys[i]! - (intercept + slope * xs[i]!)
+      err += d * d
+    }
+    if (Math.sqrt(err / n) > 90) break
+    bpm = nextBpm
+    beatMs = slope
+    offsetMs = ((intercept % slope) + slope) % slope
   }
-  if (xs.length < 12) return { bpm: seedBpm, offsetMs: seedOffsetMs }
-  const n = xs.length
-  let sumX = 0
-  let sumY = 0
-  let sumXX = 0
-  let sumXY = 0
-  for (let i = 0; i < n; i++) {
-    sumX += xs[i]
-    sumY += ys[i]
-    sumXX += xs[i] * xs[i]
-    sumXY += xs[i] * ys[i]
-  }
-  const denom = n * sumXX - sumX * sumX
-  if (Math.abs(denom) < 1e-9) return { bpm: seedBpm, offsetMs: seedOffsetMs }
-  const slope = (n * sumXY - sumX * sumY) / denom
-  const intercept = (sumY - slope * sumX) / n
-  if (!(slope > 50 && slope < 900)) return { bpm: seedBpm, offsetMs: seedOffsetMs }
-  const bpm = 60000 / slope
-  if (Math.abs(bpm - seedBpm) > 1.8) return { bpm: seedBpm, offsetMs: seedOffsetMs }
-  let err = 0
-  for (let i = 0; i < n; i++) {
-    const d = ys[i] - (intercept + slope * xs[i])
-    err += d * d
-  }
-  if (Math.sqrt(err / n) > 90) return { bpm: seedBpm, offsetMs: seedOffsetMs }
-  const offsetMs = ((intercept % slope) + slope) % slope
-  return { bpm, offsetMs }
+  return { bpm, offsetMs, periodMs: 60000 / Math.max(60, bpm) }
 }
 
 function trackTempoAndPhase(
@@ -323,7 +331,7 @@ function trackTempoAndPhase(
 
   const refined = refineBpm(smoothed, hopMs, bestBpm, range ? 0.8 : 2.2, 0.05, minBpm, maxBpm)
   const finer = refineBpm(novelty, hopMs, refined.bpm, 0.18, 0.01, minBpm, maxBpm)
-  const fitted = fitTempoToOnsets(novelty, hopMs, finer.bpm, finer.offsetMs)
+  const fitted = fitTempoToOnsets(novelty, hopMs, finer.bpm, finer.offsetMs, minBpm, maxBpm)
   let bpm = fitted.bpm
   let offsetMs = fitted.offsetMs
   // Synth 16ths can win ~15/16 above the drum pulse (Take On Me 182 vs 171).
@@ -384,7 +392,88 @@ function onePoleAlpha(hz: number, sampleRate: number): number {
   return 1 - Math.exp((-2 * Math.PI * hz) / Math.max(1, sampleRate))
 }
 
-/** Kick / bass band (~40–180 Hz) so the synth riff does not own the tempo. */
+/** Hats / attacks (~2 kHz up) — Take On Me's synth riff does not live here. */
+function treblePcm(samples: Float32Array, sampleRate: number): Float32Array {
+  const hpA = onePoleAlpha(2200, sampleRate)
+  const out = new Float32Array(samples.length)
+  let lp = 0
+  for (let i = 0; i < samples.length; i++) {
+    const x = samples[i] ?? 0
+    lp += hpA * (x - lp)
+    out[i] = x - lp
+  }
+  return out
+}
+
+function noveltyFromPcm(
+  pcm: Float32Array,
+  hop: number,
+  frameSize: number
+): Float32Array {
+  return combineNovelty(spectralFlux(pcm, frameSize, hop), energyNovelty(frameEnergy(pcm, hop)))
+}
+
+function followKickTimes(
+  peaksMs: number[],
+  novelty: Float32Array,
+  hopMs: number,
+  originMs: number,
+  seedPeriodMs: number,
+  untilMs: number
+): number[] {
+  const beats = [originMs]
+  let t = originMs
+  const p = seedPeriodMs
+  while (t + p * 0.75 < untilMs && beats.length < 12000) {
+    const lo = t + p * 0.85
+    const hi = t + p * 1.15
+    let best = t + p
+    let bestW = -1
+    for (const pk of peaksMs) {
+      if (pk <= t || pk < lo || pk > hi) continue
+      const i0 = Math.max(0, Math.min(novelty.length - 1, Math.round(pk / hopMs)))
+      const w = novelty[i0] ?? 0
+      if (w > bestW) {
+        bestW = w
+        best = pk
+      }
+    }
+    beats.push(best)
+    t = best
+  }
+  return beats
+}
+
+function weightedPeriodFromPeaks(
+  peaksMs: number[],
+  novelty: Float32Array,
+  hopMs: number,
+  originMs: number,
+  seedPeriodMs: number
+): number {
+  let period = seedPeriodMs
+  for (let iter = 0; iter < 5; iter++) {
+    let num = 0
+    let den = 0
+    for (const t of peaksMs) {
+      if (t < originMs) continue
+      const k = Math.round((t - originMs) / period)
+      if (k < 1) continue
+      if (Math.abs(t - (originMs + k * period)) > period * 0.3) continue
+      const fi = t / hopMs
+      const i0 = Math.max(0, Math.min(novelty.length - 1, Math.floor(fi)))
+      const w = Math.max(1e-6, novelty[i0] ?? 0)
+      num += w * k * (t - originMs)
+      den += w * k * k
+    }
+    if (den < 1e-9) break
+    const next = num / den
+    if (!(next > 50 && next < 900)) break
+    period = next
+  }
+  return period
+}
+
 function kickBandPcm(samples: Float32Array, sampleRate: number): Float32Array {
   const hpA = onePoleAlpha(40, sampleRate)
   const lpA = onePoleAlpha(180, sampleRate)
@@ -568,6 +657,7 @@ export function trackClickBeats(
   originSample: number
   periodSamples: number
   n: number
+  followedMs: number[]
 } {
   const nativeRate = sampleRate
   const nativeDurationMs = (samples.length / nativeRate) * 1000
@@ -575,49 +665,121 @@ export function trackClickBeats(
   const pcm = peakNormalize(resampled, peakOf(resampled))
   const bounds = pcmAudibleBounds(pcm, ANALYSIS_SAMPLE_RATE)
   const kick = kickBandPcm(pcm, ANALYSIS_SAMPLE_RATE)
+  const treble = treblePcm(pcm, ANALYSIS_SAMPLE_RATE)
   const hop = 128
   const hopMs = (hop / ANALYSIS_SAMPLE_RATE) * 1000
-  const flux = spectralFlux(kick, 1024, hop)
-  const energyNov = energyNovelty(frameEnergy(kick, hop))
-  const novelty = combineNovelty(flux, energyNov)
+  const kickNov = noveltyFromPcm(kick, hop, 1024)
+  const trebleNov = noveltyFromPcm(treble, hop, 1024)
   const startFrame = Math.max(0, Math.floor(bounds.startMs / hopMs))
-  const endFrame = Math.min(novelty.length, Math.ceil(bounds.endMs / hopMs))
-  const gated = new Float32Array(novelty.length)
-  for (let i = startFrame; i < endFrame; i++) gated[i] = novelty[i] ?? 0
+  const endFrame = Math.min(kickNov.length, Math.ceil(bounds.endMs / hopMs))
+  const gatedKick = new Float32Array(kickNov.length)
+  const gatedHats = new Float32Array(trebleNov.length)
+  for (let i = startFrame; i < endFrame; i++) {
+    gatedKick[i] = kickNov[i] ?? 0
+    gatedHats[i] = trebleNov[i] ?? 0
+  }
   const minBpm = range?.min ?? 84
   const maxBpm = range?.max ?? 200
-  const ac = autocorrBpm(gated, hopMs, minBpm, maxBpm)
-  const refined = refineBpm(gated, hopMs, ac.bpm, 0.6, 0.005, minBpm, maxBpm)
-  const finer = refineBpm(gated, hopMs, refined.bpm, 0.12, 0.001, minBpm, maxBpm)
-  const counted = countBpmFromKickSpan(
-    gated,
+  const acHats = autocorrBpm(gatedHats, hopMs, minBpm, maxBpm)
+  const acKick = autocorrBpm(gatedKick, hopMs, minBpm, maxBpm)
+  const ac = acHats.score >= acKick.score * 0.5 ? acHats : acKick
+  const refined = refineBpm(gatedHats, hopMs, ac.bpm, 0.6, 0.005, minBpm, maxBpm)
+  const finer = refineBpm(gatedHats, hopMs, refined.bpm, 0.12, 0.001, minBpm, maxBpm)
+  const seedPeriod = 60000 / Math.max(60, finer.bpm)
+  const kickPeaks = pickNoveltyPeaks(gatedKick, hopMs, seedPeriod * 0.85)
+  let originMs = kickPeaks[0] ?? finer.offsetMs
+  for (let i = 0; i < kickPeaks.length - 8; i++) {
+    let ok = 0
+    for (let k = 0; k < 8; k++) {
+      const d = kickPeaks[i + k + 1]! - kickPeaks[i + k]!
+      if (d > seedPeriod * 0.8 && d < seedPeriod * 1.2) ok++
+    }
+    if (ok >= 6) {
+      originMs = kickPeaks[i]!
+      break
+    }
+  }
+  const periodMs = weightedPeriodFromPeaks(
+    kickPeaks,
+    gatedKick,
     hopMs,
-    finer.bpm,
-    bounds.startMs,
-    bounds.endMs,
-    minBpm,
-    maxBpm
+    originMs,
+    seedPeriod
   )
-  let originSample = (counted.offsetMs / 1000) * nativeRate
-  let periodSamples: number
-  let bpm: number
-  let n = counted.n
-  const spanOk = n >= 16 && counted.lastMs - counted.offsetMs > nativeDurationMs * 0.55
-  if (spanOk) {
-    const lastSample = (counted.lastMs / 1000) * nativeRate
-    periodSamples = (lastSample - originSample) / n
-    bpm = (60 * nativeRate) / periodSamples
-  } else {
-    bpm = n >= 16 ? counted.bpm : finer.bpm
-    periodSamples = (60 * nativeRate) / Math.max(60, bpm)
+  const bpmFromHats = 60000 / periodMs
+  let bpm = bpmFromHats >= minBpm && bpmFromHats <= maxBpm ? bpmFromHats : finer.bpm
+  const usedPeriod = 60000 / bpm
+  let offsetMs = originMs
+  const onKick = kickOnBeatRatio(
+    kick,
+    ANALYSIS_SAMPLE_RATE,
+    bpm,
+    offsetMs,
+    bounds.startMs,
+    bounds.endMs
+  )
+  const onSnare = kickOnBeatRatio(
+    kick,
+    ANALYSIS_SAMPLE_RATE,
+    bpm,
+    offsetMs + usedPeriod / 2,
+    bounds.startMs,
+    bounds.endMs
+  )
+  if (onSnare > onKick * 1.08) offsetMs += usedPeriod / 2
+  const gridStart = Math.min(bounds.endMs - 30000, Math.max(bounds.startMs, 40000))
+  const gridEnd = Math.max(gridStart + 20000, bounds.endMs - 20000)
+  let bestBpm = bpm
+  let bestRatio = kickOnBeatRatio(
+    kick,
+    ANALYSIS_SAMPLE_RATE,
+    bpm,
+    offsetMs,
+    gridStart,
+    gridEnd
+  )
+  for (let b = minBpm; b <= maxBpm + 1e-9; b += 0.05) {
+    const r = kickOnBeatRatio(
+      kick,
+      ANALYSIS_SAMPLE_RATE,
+      b,
+      offsetMs,
+      gridStart,
+      gridEnd
+    )
+    if (r > bestRatio) {
+      bestRatio = r
+      bestBpm = b
+    }
   }
-  let offsetMs = (originSample / nativeRate) * 1000
-  const period = 60000 / Math.max(60, bpm)
-  while (offsetMs < bounds.startMs - period * 0.05) {
-    offsetMs += period
-    originSample += periodSamples
+  for (let b = bestBpm - 0.08; b <= bestBpm + 0.08 + 1e-9; b += 0.005) {
+    if (b < minBpm || b > maxBpm) continue
+    const r = kickOnBeatRatio(
+      kick,
+      ANALYSIS_SAMPLE_RATE,
+      b,
+      offsetMs,
+      gridStart,
+      gridEnd
+    )
+    if (r > bestRatio) {
+      bestRatio = r
+      bestBpm = b
+    }
   }
+  bpm = bestBpm
+  const periodSamples = (60 / bpm) * nativeRate
+  const originSample = (offsetMs / 1000) * nativeRate
+  const n = Math.max(1, Math.round(((nativeDurationMs - offsetMs) * bpm) / 60000))
   const beatsMs = evenBeatGrid(offsetMs, bpm, nativeDurationMs)
+  const followedMs = followKickTimes(
+    kickPeaks,
+    gatedKick,
+    hopMs,
+    offsetMs,
+    60000 / bpm,
+    nativeDurationMs
+  )
   return {
     bpm,
     offsetMs,
@@ -625,7 +787,8 @@ export function trackClickBeats(
     durationMs: nativeDurationMs,
     originSample,
     periodSamples,
-    n: spanOk ? n : counted.n
+    n,
+    followedMs
   }
 }
 
@@ -834,17 +997,8 @@ export function analyzeMonoPcm(
   let offsetMs = clickTracked ? clickTracked.offsetMs : pickKickPhase(bassNov, hopMs, bpm, rawOff)
   let clickOriginSample = clickTracked?.originSample
   let clickPeriodSamples = clickTracked?.periodSamples
-  if (
-    clickTracked &&
-    clickOriginSample != null &&
-    clickPeriodSamples != null &&
-    range
-  ) {
-    bpm = TAKE_ON_ME_CUBASE_BPM
-    clickPeriodSamples = (60 * sampleRate) / bpm
-    offsetMs = (clickOriginSample / sampleRate) * 1000
-  }
-  const clickBeatsMs = undefined
+  const clickBeatsMs =
+    clickTracked && clickTracked.followedMs.length >= 16 ? clickTracked.followedMs : undefined
   if (clickTracked && !(durationMsOverride && durationMsOverride >= 1000)) {
     durationMs = Math.min(pcmMs, Math.round(clickTracked.durationMs))
   }

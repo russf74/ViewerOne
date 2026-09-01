@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.43
+
+- Take On Me click is a least-squares fit to the kicks in the Cubase capture (same length as that WAV). No 171 guess and no stretching to the arranger length. File: `005-pc4-take-on-me-click.wav`.
+
 ## v6.00.42
 
 - Take On Me capture is peak-normalized so Cubase shows a full waveform (Stereo Mix was tiny; gain is digital, not the fader). Click is Cubase’s 171 BPM so it no longer lags. Files: `004-pc4-take-on-me.wav` and `004-pc4-take-on-me-click.wav`.

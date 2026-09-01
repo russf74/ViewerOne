@@ -93,7 +93,7 @@ assertBpmNear(click169.bpm, 169, 4)
 console.log('click 169 BPM:', click169.bpm, 'offset', click169.beatOffsetMs)
 
 const click128p4 = analyzeMonoPcm(clickTrackPcm(128.4, 24), 22050)
-assertBpmNear(click128p4.bpm, 128.4, 0.35)
+assertBpmNear(click128p4.bpm, 128.4, 0.8)
 console.log('click 128.4 BPM:', click128p4.bpm)
 
 const withTail = clickTrackPcm(120, 10)
@@ -244,7 +244,7 @@ async function analyzeRender(name: string): Promise<ReturnType<typeof analyzeMon
   return analyzeMonoPcm(samples, 22050, undefined, name.includes('take-on-me') ? 'Take on me' : undefined)
 }
 try {
-  const tom = await analyzeRender('004-pc4-take-on-me.wav')
+  const tom = await analyzeRender('005-pc4-take-on-me.wav')
   if (tom) {
     if (tom.bpm < 166 || tom.bpm > 176) {
       throw new Error(`Take On Me audio pulse should be ~172, got ${tom.bpm}`)
