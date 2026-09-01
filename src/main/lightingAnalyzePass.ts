@@ -1,16 +1,8 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import {
-  cubasePsStop,
-  cubasePsPlay,
-  cubaseRenderPrepare,
-  isKeepableLengthForTitle,
-  prepareCubaseWindowForCapture,
-  titlesFuzzyMatch,
-  type CubaseLengthRead
-} from './cubaseLengthCapture.js'
-import { cubaseRenderDir, cubaseRenderPathForSong } from './cubaseRenderPaths.js'
+import { cubasePsStop, cubasePsPlay, prepareCubaseWindowForCapture } from './cubaseLengthCapture.js'
+import { cubaseRenderPathForSong } from './cubaseRenderPaths.js'
 import type { LightingAnalyzeScanState, SetlistItem } from '../shared/types.js'
 import type { SongAudioAnalysis } from '../shared/audioAnalysis.js'
 import type { LightingProgram } from '../shared/lightingProgram.js'
@@ -72,27 +64,8 @@ function listedDurationSec(row: SetlistItem): number {
   return row.length ? songLengthSeconds(row.length) : 0
 }
 
-function analysisDurationPlausible(row: SetlistItem): boolean {
-  const listed = listedDurationSec(row)
-  const analyzed = row.audioAnalysis?.durationMs ? row.audioAnalysis.durationMs / 1000 : 0
-  if (listed < MIN_CAPTURE_SEC || analyzed <= 0) return true
-  return analyzed <= listed * 1.25 + 2
-}
-
-function lightingAlreadyReady(row: SetlistItem): boolean {
-  return Boolean(
-    row.lightingProgram?.cues?.length && row.audioAnalysis?.bpm && analysisDurationPlausible(row)
-  )
-}
-
-function captureDurationSec(prepMmss: string, row: SetlistItem): number {
-  const prep = prepMmss ? songLengthSeconds(prepMmss) : 0
-  const listed = listedDurationSec(row)
-  if (listed >= MIN_CAPTURE_SEC && prep > listed * 1.2) {
-    analyzeLog(`cap duration ${prep}s → ${listed}s (setlist ${row.length})`)
-    return listed
-  }
-  return prep >= MIN_CAPTURE_SEC ? prep : listed
+function captureDurationSec(row: SetlistItem): number {
+  return listedDurationSec(row)
 }
 
 function wavHeader(filePath: string): { sampleRate: number; durationSec: number } {
@@ -109,60 +82,11 @@ function wavHeader(filePath: string): { sampleRate: number; durationSec: number 
   }
 }
 
-function wavDurationSec(filePath: string): number {
-  return wavHeader(filePath).durationSec
-}
-
-function isCaptureWavName(name: string, program: number): boolean {
-  if (!/\.wav$/i.test(name)) return false
-  if (/-click/i.test(name) || /metronome/i.test(name)) return false
-  return new RegExp(`(?:^|[-])pc${program}(?:-|\\.wav$)`, 'i').test(name)
-}
-
-function existingUsableRender(row: SetlistItem): string | null {
-  const listed = listedDurationSec(row)
-  const dir = cubaseRenderDir()
-  const fromDir = fs.existsSync(dir)
-    ? fs
-        .readdirSync(dir)
-        .filter((n) => isCaptureWavName(n, row.program))
-        .map((n) => path.join(dir, n))
-    : []
-  const candidates = [
-    row.cubaseRenderPath,
-    cubaseRenderPathForSong(row.program, row.title),
-    ...fromDir
-  ].filter((p, i, all): p is string => Boolean(p) && all.indexOf(p) === i)
-
-  let best: string | null = null
-  let bestMtime = 0
-  for (const p of candidates) {
-    if (!fs.existsSync(p) || fs.statSync(p).size <= 10_000 || wavFilePeak(p) < 0.004) continue
-    const dur = wavDurationSec(p)
-    if (listed >= MIN_CAPTURE_SEC && dur > listed * 1.25 + 2) {
-      analyzeLog(`ignore overlong render ${p} (${dur.toFixed(1)}s vs setlist ${listed}s)`)
-      continue
-    }
-    const mtime = fs.statSync(p).mtimeMs
-    if (!best || mtime > bestMtime) {
-      best = p
-      bestMtime = mtime
-    }
-  }
-  return best
-}
-
 function shouldCaptureSong(row: SetlistItem): boolean {
   const t = row.title.toUpperCase()
   if (t.includes('SOUNDCHECK')) return false
   if (t.startsWith('INTRO') || t.startsWith('OUTRO')) return false
   return row.program >= 1 && row.program <= 119
-}
-
-function isUsablePrep(read: CubaseLengthRead, title: string): boolean {
-  return Boolean(
-    read.ok && read.nameMatched && read.mmss && isKeepableLengthForTitle(read.mmss, title)
-  )
 }
 
 function wavFilePeak(filePath: string): number {
@@ -309,37 +233,45 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
   })
 
   try {
+    await cubasePsStop()
     await prepareCubaseWindowForCapture()
     if (deps.isCancelled()) {
       deps.setScan({ active: false, phase: 'cancelled', message: 'Cancelled.' })
       return
     }
 
-    let targets = setlist
-      .filter((r) => shouldCaptureSong(r) && r.arrangerIndex != null)
-      .sort((a, b) => (a.arrangerIndex ?? 0) - (b.arrangerIndex ?? 0))
     const onlyTitle = deps.onlyTitle?.trim()
     const onlyProgram =
       deps.onlyProgram && deps.onlyProgram > 0 ? Math.round(deps.onlyProgram) : undefined
-    if (onlyProgram) {
-      targets = targets.filter((r) => r.program === onlyProgram)
+    const wantTitle = onlyTitle
+      ? onlyTitle.toLowerCase().replace(/[^a-z0-9]+/g, '')
+      : ''
+    const wantsCapture = (row: SetlistItem): boolean => {
+      if (!shouldCaptureSong(row) || row.arrangerIndex == null) return false
+      if (onlyProgram && row.program !== onlyProgram) return false
+      if (wantTitle && row.title.toLowerCase().replace(/[^a-z0-9]+/g, '') !== wantTitle) {
+        return false
+      }
+      return true
     }
-    if (onlyTitle) {
-      const want = onlyTitle.toLowerCase().replace(/[^a-z0-9]+/g, '')
-      targets = targets.filter((r) => r.title.toLowerCase().replace(/[^a-z0-9]+/g, '') === want)
-    }
-    if ((onlyTitle || onlyProgram) && targets.length === 0) {
+    const walkOrder = setlist
+      .filter((r) => r.arrangerIndex != null)
+      .sort((a, b) => (a.arrangerIndex ?? 0) - (b.arrangerIndex ?? 0))
+    const planned = walkOrder.filter(wantsCapture)
+    if ((onlyTitle || onlyProgram) && planned.length === 0) {
       const msg = `No setlist song matches ${onlyProgram ? `PC ${onlyProgram}` : ''} ${onlyTitle ? `“${onlyTitle}”` : ''}`.trim()
       analyzeLog(msg)
       deps.setScan({ active: false, phase: 'error', message: msg })
       return
     }
-    const limit = deps.maxCaptures && deps.maxCaptures > 0 ? deps.maxCaptures : targets.length
-    const planned = targets.slice(0, limit)
-    deps.setScan({ total: planned.length })
+    const limit = deps.maxCaptures && deps.maxCaptures > 0 ? deps.maxCaptures : planned.length
+    deps.setScan({ total: Math.min(limit, planned.length) })
     analyzeLog(
-      `start ${planned.length} song(s)` +
-        planned.map((r) => ` PC${r.program} ${r.title}`).join(';')
+      `walk ${walkOrder.length} arranger event(s) first→last: ` +
+        walkOrder.map((r) => `${r.arrangerIndex}. PC${r.program} ${r.title}`).join(' → ')
+    )
+    analyzeLog(
+      `capture ${Math.min(limit, planned.length)} song(s) (skip SOUNDCHECK/INTRO/OUTRO, no title-click)`
     )
 
     let captured = 0
@@ -366,104 +298,40 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
       )
     }
 
-    const processSong = async (row: SetlistItem, index: number): Promise<void> => {
+    const rowForProgram = (program: number): SetlistItem | undefined =>
+      setlist.find((r) => r.program === program)
+
+    const captureCurrentSong = async (row: SetlistItem, index: number): Promise<void> => {
       const title = row.title.trim()
-      if (!title) return
-
-      const recapture = Boolean(onlyTitle || onlyProgram)
-      const reused = recapture ? null : existingUsableRender(row)
-      const destWav = moisesWavPath(row.program, title)
-      const hasExport = moisesWavExists(destWav)
-
-      if (!recapture && reused && lightingAlreadyReady(row) && hasExport) {
-        analyzeLog(`skip ready PC ${row.program} “${title}” (lighting + wav)`)
-        captured++
-        deps.setScan({ collected: captured, message: `Song ${index}: “${title}” — already ready.` })
-        return
-      }
-
-      if (reused) {
-        if (!lightingAlreadyReady(row)) {
-          deps.setScan({
-            phase: 'analyzing',
-            collected: captured,
-            message: `Song ${index}: “${title}” — analyzing existing render…`
-          })
-          analyzeLog(`reuse render PC ${row.program} “${title}” (${reused})`)
-          const analyzedReuse = await analyzeRenderFile(deps, row, reused)
-          if (analyzedReuse) {
-            persistAnalysis(row, reused, analyzedReuse, row.length)
-          } else {
-            analyzeLog(`reuse analyze failed PC ${row.program} “${title}” — will recapture`)
-          }
-          if (analyzedReuse) {
-            exportMoisesWav(row, reused)
-            return
-          }
-        } else {
-          analyzeLog(`reuse wav PC ${row.program} “${title}” — lighting already ready`)
-          captured++
-          deps.setScan({ collected: captured })
-          exportMoisesWav(row, reused)
-          return
-        }
-      }
-
-      deps.setScan({
-        phase: 'capturing',
-        collected: captured,
-        message: `Song ${index}: “${title}” — selecting in Cubase…`
-      })
-      analyzeLog(`prep PC ${row.program} “${title}”`)
-
-      let prep: CubaseLengthRead = {
-        ok: false,
-        mmss: '',
-        seconds: 0,
-        rawLength: '',
-        rawStart: '',
-        rawEnd: '',
-        infoName: '',
-        nameMatched: false,
-        source: 'none',
-        error: 'not prepared'
-      }
-      for (let attempt = 1; attempt <= CAPTURE_ATTEMPTS && !deps.isCancelled(); attempt++) {
-        await deps.minimizeUi()
-        try {
-          prep = await cubaseRenderPrepare(title)
-        } finally {
-          await deps.restoreUi()
-        }
-        if (isUsablePrep(prep, title) || !prep.infoName || titlesFuzzyMatch(title, prep.infoName)) {
-          break
-        }
+      const livePc = deps.getLatestProgram()
+      if (livePc !== row.program) {
         analyzeLog(
-          `prep retry ${attempt}/${CAPTURE_ATTEMPTS} PC ${row.program} “${title}” — Cubase name “${prep.infoName}”`
+          `refuse play PC ${row.program} “${title}” — Cubase is PC ${livePc ?? 'none'} (would be the wrong song)`
         )
-        await deps.sleep(800)
-      }
-
-      if (deps.isCancelled()) return
-
-      if (!isUsablePrep(prep, title) && prep.infoName && !titlesFuzzyMatch(title, prep.infoName)) {
-        analyzeLog(`skip PC ${row.program} “${title}” — Cubase name mismatch (${prep.infoName})`)
         return
       }
 
-      const durationSec = captureDurationSec(prep.mmss, row)
+      const durationSec = captureDurationSec(row)
       if (durationSec < MIN_CAPTURE_SEC) {
-        analyzeLog(`skip “${title}” — length too short (${durationSec}s)`)
+        analyzeLog(`skip “${title}” — setlist length too short (${durationSec}s)`)
         return
       }
 
       const renderPath = cubaseRenderPathForSong(row.program, title)
       deps.setScan({
-        message: `Song ${index}: “${title}” — recording Cubase output (${prep.mmss || row.length})…`
+        phase: 'capturing',
+        collected: captured,
+        message: `Song ${index}: “${title}” — recording Cubase (${row.length || `${durationSec}s`})…`
       })
 
       let ok = false
       for (let attempt = 1; attempt <= CAPTURE_ATTEMPTS && !deps.isCancelled(); attempt++) {
+        if (deps.getLatestProgram() !== row.program) {
+          analyzeLog(
+            `abort capture “${title}” — Cubase moved to PC ${deps.getLatestProgram()}`
+          )
+          return
+        }
         analyzeLog(`capture ${attempt}/${CAPTURE_ATTEMPTS} PC ${row.program} “${title}” ${durationSec}s`)
         await deps.minimizeUi()
         try {
@@ -477,9 +345,8 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
         await deps.sleep(1000)
       }
 
-      if (deps.isCancelled()) return
-      if (!ok) {
-        analyzeLog(`FAILED capture “${title}”`)
+      if (deps.isCancelled() || !ok) {
+        if (!ok && !deps.isCancelled()) analyzeLog(`FAILED capture “${title}”`)
         return
       }
 
@@ -490,12 +357,46 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
         return
       }
 
-      persistAnalysis(row, renderPath, analyzed, row.length || prep.mmss)
+      persistAnalysis(row, renderPath, analyzed, row.length)
       exportMoisesWav(row, renderPath)
     }
 
-    for (let i = 0; i < planned.length && !deps.isCancelled(); i++) {
-      await processSong(planned[i], i + 1)
+    analyzeLog('rewind arranger to first event (no playback)')
+    await cubasePsStop()
+    await deps.rewindArranger()
+    await deps.sleep(600)
+    let pc = deps.getLatestProgram()
+    analyzeLog(`after rewind Cubase PC ${pc ?? 'none'}`)
+
+    const visited = new Set<number>()
+    let songNumber = 0
+    while (pc != null && !deps.isCancelled() && captured < limit) {
+      if (visited.has(pc)) {
+        analyzeLog(`arranger wrapped at PC ${pc} — done`)
+        break
+      }
+      visited.add(pc)
+      const row = rowForProgram(pc)
+      const label = row?.title ?? '?'
+      if (!row || !shouldCaptureSong(row)) {
+        analyzeLog(`skip PC ${pc} “${label}” — no playback (SOUNDCHECK/INTRO/OUTRO)`)
+      } else if (wantsCapture(row)) {
+        songNumber++
+        analyzeLog(`landed ${row.arrangerIndex}. PC ${pc} “${label}” — capture`)
+        await captureCurrentSong(row, songNumber)
+        await cubasePsStop()
+        await deps.sleep(400)
+      } else {
+        analyzeLog(`skip PC ${pc} “${label}” — filtered`)
+      }
+
+      const from = deps.getLatestProgram() ?? pc
+      const next = await deps.waitForProgramChange(from)
+      if (next == null) {
+        analyzeLog('end of arranger (Next did not change song)')
+        break
+      }
+      pc = next
     }
 
     const doneMsg =

@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.48
+
+- Overnight Cubase capture walks the arranger first-to-last with MIDI Next. SOUNDCHECK / INTRO / OUTRO are skipped (never played). Title-clicking is gone so it cannot jump back to soundcheck.
+
 ## v6.00.47
 
 - Dropped ViewerOne click generation and the Music AI / Moises API. Lighting/DMX analysis from Cubase captures stays. Overnight Analyze copies each song as a 48 kHz WAV (`04 Take on me.wav`) to `Desktop\Moises-upload` — same audio Cubase played, no MP3 encode.
