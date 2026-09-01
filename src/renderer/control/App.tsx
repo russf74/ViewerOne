@@ -981,9 +981,6 @@ export function App() {
                       void window.viewer.setLightingProgram(row.id, program).then(apply)
                     }}
                     onPatchSettings={(patch) => void patchSettings(patch)}
-                    onPatchClickTrack={(patch) =>
-                      void patchSettings({ clickTrack: { ...state.clickTrack, ...patch } })
-                    }
                   />
                 </div>
               </section>

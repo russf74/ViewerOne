@@ -104,27 +104,6 @@ export type SetlistItem = {
   /** WAV captured from Cubase arrangement playback during Lighting Analyze. */
   cubaseRenderPath?: string
   cubaseRenderCapturedAt?: string
-  /** Generated click WAV aligned to {@link audioAnalysis} beats (for IEM / Cubase import). */
-  clickTrackPath?: string
-  clickTrackCountInMs?: number
-}
-
-export type ClickTrackSettings = {
-  /** Auto-write click WAV when analyzing songs. */
-  generateWav: boolean
-  /** Live MIDI click to IEM during transport (dedicated channel recommended). */
-  liveMidiEnabled: boolean
-  midiChannel: number
-  /** Regular beat — e.g. 37 side stick. */
-  midiNote: number
-  /** Downbeat accent — e.g. 39 clap / 76 high wood. */
-  accentNote: number
-  accentEvery: number
-  velocity: number
-  accentVelocity: number
-  countInBars: number
-  volume: number
-  accentVolume: number
 }
 
 export type ArrangerMidiMapping = {
@@ -229,8 +208,6 @@ export type AppState = {
   liveAudioSyncEnabled: boolean
   /** Windows dshow loopback device for Cubase render capture + live sync. */
   lightingLoopbackDevice: string
-  /** IEM click track — WAV generation + live MIDI. */
-  clickTrack: ClickTrackSettings
   /** Cubase capture: playback loopback vs silent export (when configured). */
   lightingCaptureMode: 'playback' | 'export'
   /** Folder Cubase exports mixdown WAVs into (export capture mode). */
@@ -354,12 +331,6 @@ export type PublicState = AppState & {
   }
   /** Ephemeral Cubase render capture / analyze pass (sidecar — never auto-runs). */
   lightingAnalyze: LightingAnalyzeScanState
-  /** Pre-gig lighting + click readiness audit. */
+  /** Pre-gig lighting readiness audit. */
   lightingReadiness: LightingReadinessReport
-  /** Live click track runtime. */
-  clickTrackLive: {
-    enabled: boolean
-    lastBeatIndex: number | null
-    nextBeatMs: number | null
-  }
 }

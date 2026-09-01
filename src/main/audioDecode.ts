@@ -19,7 +19,7 @@ const DECODE_SAMPLE_RATE = 22050
 
 /**
  * Decode an audio file to mono float32 PCM via ffmpeg.
- * Pass sampleRate 0 to keep the file rate (needed for click placement on Cubase 48 kHz captures).
+ * Pass sampleRate 0 to keep the file rate (needed for Cubase 48 kHz captures).
  */
 export async function decodeAudioFileToMonoPcm(
   filePath: string,

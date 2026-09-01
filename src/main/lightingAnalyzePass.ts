@@ -10,15 +10,15 @@ import {
   titlesFuzzyMatch,
   type CubaseLengthRead
 } from './cubaseLengthCapture.js'
-import { cubaseRenderPathForSong } from './cubaseRenderPaths.js'
-import { clickTrackPathForSong } from './clickTrackPaths.js'
-import type { ClickTrackSettings, LightingAnalyzeScanState, SetlistItem } from '../shared/types.js'
+import { cubaseRenderDir, cubaseRenderPathForSong } from './cubaseRenderPaths.js'
+import type { LightingAnalyzeScanState, SetlistItem } from '../shared/types.js'
 import type { SongAudioAnalysis } from '../shared/audioAnalysis.js'
 import type { LightingProgram } from '../shared/lightingProgram.js'
 import { LoopbackRecorder } from './loopbackRecord.js'
 import { peakNormalizeWavFile } from './wavNormalize.js'
 import { songLengthSeconds } from '../shared/setlistTiming.js'
 import type { LightingDirector } from './lightingDirector.js'
+import { copyCaptureWavForMoises, moisesWavExists, moisesWavPath } from './moisesExport.js'
 
 export type LightingAnalyzeDeps = {
   getSetlist: () => SetlistItem[]
@@ -40,7 +40,6 @@ export type LightingAnalyzeDeps = {
   minimizeUi: () => Promise<void>
   restoreUi: () => Promise<void>
   loopbackDevice: string
-  clickSettings: ClickTrackSettings
   director: LightingDirector
   /** Stop after this many successful captures (CLI `--lighting-analyze-max=N`). */
   maxCaptures?: number
@@ -69,13 +68,6 @@ function analyzeLog(line: string): void {
   }
 }
 
-function clickFileExists(row: SetlistItem): boolean {
-  const candidates = [row.clickTrackPath, clickTrackPathForSong(row.program, row.title)].filter(
-    (p): p is string => Boolean(p)
-  )
-  return candidates.some((p) => fs.existsSync(p) && fs.statSync(p).size > 8000)
-}
-
 function listedDurationSec(row: SetlistItem): number {
   return row.length ? songLengthSeconds(row.length) : 0
 }
@@ -87,6 +79,12 @@ function analysisDurationPlausible(row: SetlistItem): boolean {
   return analyzed <= listed * 1.25 + 2
 }
 
+function lightingAlreadyReady(row: SetlistItem): boolean {
+  return Boolean(
+    row.lightingProgram?.cues?.length && row.audioAnalysis?.bpm && analysisDurationPlausible(row)
+  )
+}
+
 function captureDurationSec(prepMmss: string, row: SetlistItem): number {
   const prep = prepMmss ? songLengthSeconds(prepMmss) : 0
   const listed = listedDurationSec(row)
@@ -95,15 +93,6 @@ function captureDurationSec(prepMmss: string, row: SetlistItem): number {
     return listed
   }
   return prep >= MIN_CAPTURE_SEC ? prep : listed
-}
-
-function songAlreadyReady(row: SetlistItem): boolean {
-  return Boolean(
-    row.lightingProgram?.cues?.length &&
-      row.audioAnalysis?.bpm &&
-      clickFileExists(row) &&
-      analysisDurationPlausible(row)
-  )
 }
 
 function wavHeader(filePath: string): { sampleRate: number; durationSec: number } {
@@ -124,11 +113,29 @@ function wavDurationSec(filePath: string): number {
   return wavHeader(filePath).durationSec
 }
 
+function isCaptureWavName(name: string, program: number): boolean {
+  if (!/\.wav$/i.test(name)) return false
+  if (/-click/i.test(name) || /metronome/i.test(name)) return false
+  return new RegExp(`(?:^|[-])pc${program}(?:-|\\.wav$)`, 'i').test(name)
+}
+
 function existingUsableRender(row: SetlistItem): string | null {
-  const candidates = [row.cubaseRenderPath, cubaseRenderPathForSong(row.program, row.title)].filter(
-    (p): p is string => Boolean(p)
-  )
   const listed = listedDurationSec(row)
+  const dir = cubaseRenderDir()
+  const fromDir = fs.existsSync(dir)
+    ? fs
+        .readdirSync(dir)
+        .filter((n) => isCaptureWavName(n, row.program))
+        .map((n) => path.join(dir, n))
+    : []
+  const candidates = [
+    row.cubaseRenderPath,
+    cubaseRenderPathForSong(row.program, row.title),
+    ...fromDir
+  ].filter((p, i, all): p is string => Boolean(p) && all.indexOf(p) === i)
+
+  let best: string | null = null
+  let bestMtime = 0
   for (const p of candidates) {
     if (!fs.existsSync(p) || fs.statSync(p).size <= 10_000 || wavFilePeak(p) < 0.004) continue
     const dur = wavDurationSec(p)
@@ -136,9 +143,13 @@ function existingUsableRender(row: SetlistItem): string | null {
       analyzeLog(`ignore overlong render ${p} (${dur.toFixed(1)}s vs setlist ${listed}s)`)
       continue
     }
-    return p
+    const mtime = fs.statSync(p).mtimeMs
+    if (!best || mtime > bestMtime) {
+      best = p
+      bestMtime = mtime
+    }
   }
-  return null
+  return best
 }
 
 function shouldCaptureSong(row: SetlistItem): boolean {
@@ -150,10 +161,7 @@ function shouldCaptureSong(row: SetlistItem): boolean {
 
 function isUsablePrep(read: CubaseLengthRead, title: string): boolean {
   return Boolean(
-    read.ok &&
-      read.nameMatched &&
-      read.mmss &&
-      isKeepableLengthForTitle(read.mmss, title)
+    read.ok && read.nameMatched && read.mmss && isKeepableLengthForTitle(read.mmss, title)
   )
 }
 
@@ -246,20 +254,40 @@ async function analyzeRenderFile(
 ): Promise<{
   audioAnalysis: SongAudioAnalysis
   lightingProgram: LightingProgram
-  clickTrackPath?: string
-  clickTrackCountInMs?: number
 } | null> {
   try {
-    return await deps.director.analyzeFromRenderWav(song, filePath, deps.clickSettings)
+    return await deps.director.analyzeFromRenderWav(song, filePath)
   } catch (err) {
     console.warn('[ViewerOne] Render analyze failed:', err)
     return null
   }
 }
 
+function exportMoisesWav(row: SetlistItem, wavPath: string): void {
+  const dest = moisesWavPath(row.program, row.title)
+  if (moisesWavExists(dest) && path.resolve(wavPath) !== path.resolve(dest)) {
+    try {
+      if (fs.statSync(wavPath).size === fs.statSync(dest).size) {
+        analyzeLog(`wav already ${path.basename(dest)}`)
+        return
+      }
+    } catch {
+      /* rewrite */
+    }
+  }
+  try {
+    copyCaptureWavForMoises(wavPath, dest)
+    analyzeLog(`wav ${path.basename(dest)}`)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    analyzeLog(`wav FAILED ${path.basename(dest)} — ${msg}`)
+  }
+}
+
 /**
  * Walk Cubase arranger and capture REAL rendered audio per song (loopback during playback).
  * Sidecar-only — never runs automatically; does not modify arranger scan or gig countdown.
+ * After each capture (or reuse), copies the 48 kHz Cubase WAV to Desktop/Moises-upload.
  */
 export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise<void> {
   const setlist = deps.getSetlist().filter((r) => r.program >= 1 && r.program <= 119)
@@ -329,14 +357,12 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
         backingTrackPath: undefined,
         audioAnalysis: analyzed.audioAnalysis,
         lightingProgram: analyzed.lightingProgram,
-        clickTrackPath: analyzed.clickTrackPath,
-        clickTrackCountInMs: analyzed.clickTrackCountInMs,
         length: length || row.length
       })
       captured++
       deps.setScan({ collected: captured })
       analyzeLog(
-        `OK PC ${row.program} “${row.title}” → ${analyzed.audioAnalysis.bpm} BPM, ${analyzed.lightingProgram.cues.length} cues, click=${analyzed.clickTrackPath ?? 'none'}`
+        `OK PC ${row.program} “${row.title}” → ${analyzed.audioAnalysis.bpm} BPM, ${analyzed.lightingProgram.cues.length} cues`
       )
     }
 
@@ -345,27 +371,42 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
       if (!title) return
 
       const recapture = Boolean(onlyTitle || onlyProgram)
-      if (!recapture && songAlreadyReady(row)) {
-        analyzeLog(`skip ready PC ${row.program} “${title}”`)
+      const reused = recapture ? null : existingUsableRender(row)
+      const destWav = moisesWavPath(row.program, title)
+      const hasExport = moisesWavExists(destWav)
+
+      if (!recapture && reused && lightingAlreadyReady(row) && hasExport) {
+        analyzeLog(`skip ready PC ${row.program} “${title}” (lighting + wav)`)
         captured++
         deps.setScan({ collected: captured, message: `Song ${index}: “${title}” — already ready.` })
         return
       }
 
-      const reused = recapture ? null : existingUsableRender(row)
       if (reused) {
-        deps.setScan({
-          phase: 'analyzing',
-          collected: captured,
-          message: `Song ${index}: “${title}” — analyzing existing render…`
-        })
-        analyzeLog(`reuse render PC ${row.program} “${title}” (${reused})`)
-        const analyzedReuse = await analyzeRenderFile(deps, row, reused)
-        if (analyzedReuse) {
-          persistAnalysis(row, reused, analyzedReuse, row.length)
+        if (!lightingAlreadyReady(row)) {
+          deps.setScan({
+            phase: 'analyzing',
+            collected: captured,
+            message: `Song ${index}: “${title}” — analyzing existing render…`
+          })
+          analyzeLog(`reuse render PC ${row.program} “${title}” (${reused})`)
+          const analyzedReuse = await analyzeRenderFile(deps, row, reused)
+          if (analyzedReuse) {
+            persistAnalysis(row, reused, analyzedReuse, row.length)
+          } else {
+            analyzeLog(`reuse analyze failed PC ${row.program} “${title}” — will recapture`)
+          }
+          if (analyzedReuse) {
+            exportMoisesWav(row, reused)
+            return
+          }
+        } else {
+          analyzeLog(`reuse wav PC ${row.program} “${title}” — lighting already ready`)
+          captured++
+          deps.setScan({ collected: captured })
+          exportMoisesWav(row, reused)
           return
         }
-        analyzeLog(`reuse analyze failed PC ${row.program} “${title}” — will recapture`)
       }
 
       deps.setScan({
@@ -450,6 +491,7 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
       }
 
       persistAnalysis(row, renderPath, analyzed, row.length || prep.mmss)
+      exportMoisesWav(row, renderPath)
     }
 
     for (let i = 0; i < planned.length && !deps.isCancelled(); i++) {
@@ -458,7 +500,7 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
 
     const doneMsg =
       captured > 0
-        ? `Done — ${captured} song(s) analyzed from Cubase renders.`
+        ? `Done — ${captured} song(s) analyzed from Cubase renders. WAVs in Desktop\\Moises-upload.`
         : 'Finished — no songs captured (check Stereo Mix + Cubase output).'
     analyzeLog(doneMsg)
     deps.setScan({

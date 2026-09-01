@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.47
+
+- Dropped ViewerOne click generation and the Music AI / Moises API. Lighting/DMX analysis from Cubase captures stays. Overnight Analyze copies each song as a 48 kHz WAV (`04 Take on me.wav`) to `Desktop\Moises-upload` — same audio Cubase played, no MP3 encode.
+
 ## v6.00.46
 
 - Take On Me click can be built from the Music AI / Moises Jobs API: upload the Cubase capture, read the beat map, write a bar-accent click (`007-pc4-take-on-me-click.wav`). API key lives in `%APPDATA%\viewer-one\music-ai-api-key.txt`. Same path can run the whole setlist overnight.

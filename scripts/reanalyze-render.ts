@@ -1,5 +1,5 @@
 /**
- * Re-run analysis + click WAV + lighting program for an existing Cubase render.
+ * Re-run analysis + lighting program for an existing Cubase render.
  * Patches viewer-one-config.json (Electron must be closed).
  */
 import { createRequire } from 'node:module'
@@ -9,8 +9,6 @@ import os from 'node:os'
 import path from 'node:path'
 import { analyzeMonoPcm } from '../src/shared/audioAnalysis.ts'
 import { buildLightingProgram } from '../src/shared/lightingProgram.ts'
-import { synthesizeClickTrack } from '../src/shared/clickTrack.ts'
-import { writeClickTrackWav } from '../src/main/clickTrackWav.ts'
 
 const require = createRequire(import.meta.url)
 const ffmpeg = require('ffmpeg-static') as string
@@ -58,22 +56,6 @@ const raw = await runFfmpeg([
 const samples = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4)
 const analysis = analyzeMonoPcm(samples, 22050, undefined, titleHint)
 const program = buildLightingProgram(analysis)
-const clickPath = wav.replace(/\.wav$/i, '-click-48khz-pulse.wav')
-if (fs.existsSync(clickPath)) fs.unlinkSync(clickPath)
-const written = writeClickTrackWav(clickPath, analysis, {
-  countInBars: 1,
-  embedCountIn: true,
-  accentEvery: 4,
-  sampleRate: 48000
-})
-const st = fs.statSync(clickPath)
-console.log('click written', clickPath, 'bytes', st.size, 'mtime', st.mtime.toISOString())
-const clickSynth = synthesizeClickTrack(analysis, {
-  countInBars: 1,
-  embedCountIn: true,
-  sampleRate: 48000
-})
-const clickDurMs = Math.round((clickSynth.samples.length / clickSynth.sampleRate) * 1000)
 
 const bases = program.cues.filter((c) => !c.accentDurationMs)
 console.log(
@@ -82,8 +64,6 @@ console.log(
       bpm: analysis.bpm,
       offsetMs: Math.round(analysis.beatOffsetMs),
       durationMs: analysis.durationMs,
-      clickDurMs,
-      clickCountInMs: written.countInMs,
       peakEnergy: analysis.peakEnergy,
       sections: analysis.sections.map((s) => `${s.label}@${s.startMs}`),
       cues: bases.map(
@@ -96,10 +76,6 @@ console.log(
   )
 )
 
-if (Math.abs(clickDurMs - analysis.durationMs) > 50) {
-  throw new Error(`click duration ${clickDurMs} != ${analysis.durationMs}`)
-}
-
 const configPath = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'viewer-one-config.json')
 if (fs.existsSync(configPath)) {
   const j = JSON.parse(fs.readFileSync(configPath, 'utf8')) as {
@@ -111,8 +87,6 @@ if (fs.existsSync(configPath)) {
   } else {
     song.audioAnalysis = analysis
     song.lightingProgram = program
-    song.clickTrackPath = clickPath
-    song.clickTrackCountInMs = written.countInMs
     song.audioSource = 'cubase-render'
     song.cubaseRenderPath = wav
     song.cubaseRenderCapturedAt = new Date().toISOString()

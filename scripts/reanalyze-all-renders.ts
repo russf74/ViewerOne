@@ -1,6 +1,6 @@
 /**
- * Delete all click WAVs and rebuild from existing Cubase renders
- * (48 kHz, 4 in-song beeps, bar-aligned lighting).
+ * Rebuild lighting programs from existing Cubase renders.
+ * Patches viewer-one-config.json (Electron must be closed).
  */
 import { createRequire } from 'node:module'
 import { spawn } from 'node:child_process'
@@ -9,7 +9,6 @@ import os from 'node:os'
 import path from 'node:path'
 import { analyzeMonoPcm } from '../src/shared/audioAnalysis.ts'
 import { buildLightingProgram } from '../src/shared/lightingProgram.ts'
-import { writeClickTrackWav } from '../src/main/clickTrackWav.ts'
 
 const require = createRequire(import.meta.url)
 const ffmpeg = require('ffmpeg-static') as string
@@ -47,21 +46,9 @@ function isPerformance(title: string, program: number): boolean {
   return program >= 1 && program <= 119
 }
 
-function clickName(program: number, title: string): string {
-  const slug = slugTitle(title)
-  return `pc${program}${slug ? `-${slug}` : ''}-click-48khz-pulse.wav`
-}
-
 if (!fs.existsSync(configPath)) {
   console.error('missing config', configPath)
   process.exit(1)
-}
-
-for (const f of fs.readdirSync(rendersDir)) {
-  if (/-click/i.test(f) && f.toLowerCase().endsWith('.wav')) {
-    fs.unlinkSync(path.join(rendersDir, f))
-    console.log('deleted', f)
-  }
 }
 
 const j = JSON.parse(fs.readFileSync(configPath, 'utf8')) as {
@@ -98,13 +85,6 @@ for (const song of rows) {
   const samples = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4)
   const analysis = analyzeMonoPcm(samples, 22050, undefined, title)
   const programOut = buildLightingProgram(analysis)
-  const clickPath = path.join(rendersDir, clickName(program, title))
-  const written = writeClickTrackWav(clickPath, analysis, {
-    countInBars: 1,
-    embedCountIn: true,
-    accentEvery: 4,
-    sampleRate: 48000
-  })
   const bases = programOut.cues.filter((c) => !c.accentDurationMs)
   const barMs = (60000 / analysis.bpm) * 4
   const offBar = bases.filter((c) => {
@@ -114,8 +94,6 @@ for (const song of rows) {
   })
   song.audioAnalysis = analysis
   song.lightingProgram = programOut
-  song.clickTrackPath = clickPath
-  song.clickTrackCountInMs = written.countInMs
   song.audioSource = 'cubase-render'
   song.cubaseRenderPath = wav
   const flag = offBar.length ? ' OFF-BAR' : ''

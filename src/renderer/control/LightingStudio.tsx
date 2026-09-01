@@ -14,7 +14,6 @@ type Props = {
   state: PublicState
   onSaveProgram: (program: LightingProgram) => void
   onPatchSettings: (patch: Partial<AppState>) => void
-  onPatchClickTrack: (patch: Partial<AppState['clickTrack']>) => void
 }
 
 function songPlayheadMs(state: PublicState, row: SetlistItem): number {
@@ -284,9 +283,8 @@ function LoopbackSignalBar({
   )
 }
 
-export function LightingStudio({ row, state, onSaveProgram, onPatchSettings, onPatchClickTrack }: Props) {
+export function LightingStudio({ row, state, onSaveProgram, onPatchSettings }: Props) {
   const readiness = state.lightingReadiness
-  const ct = state.clickTrack
   const [devices, setDevices] = useState<string[]>([])
   const [listingDevices, setListingDevices] = useState(true)
   const autoMatched = useRef(false)
@@ -324,18 +322,13 @@ export function LightingStudio({ row, state, onSaveProgram, onPatchSettings, onP
     return sortAudioDevices([...devices, ...extra])
   }, [devices, state.lightingLoopbackDevice])
 
-  const clickHint = useMemo(() => {
-    if (!row?.clickTrackPath) return null
-    const parts = row.clickTrackPath.split(/[/\\]/)
-    return parts[parts.length - 1]
-  }, [row?.clickTrackPath])
-
   return (
     <div className="lighting-studio">
       <h3 className="settings-subheading">Lighting Studio</h3>
       <p className="settings-hint">
         Sidecar only — Cubase playback and ViewerOne gig flow stay unchanged until you opt in.
-        Analyze captures <strong>real Cubase output</strong> (tempo/key/cut/paste included).
+        Analyze captures <strong>real Cubase output</strong> (tempo/key/cut/paste included) and
+        copies those 48 kHz WAVs to <code>Desktop\Moises-upload</code> for metronome work outside ViewerOne.
       </p>
 
       <div className="lighting-readiness">
@@ -444,94 +437,8 @@ export function LightingStudio({ row, state, onSaveProgram, onPatchSettings, onP
         />
       )}
 
-      <h4 className="settings-subheading">IEM click track</h4>
-      <p className="settings-hint">
-        Generates a 48 kHz WAV fitted to the Cubase capture: <strong>4 beeps on the first four
-        beats</strong>, then clicks at the tempo in the audio. Line the clip start up with Playback
-        1. File name ends in <code>-click-48khz-pulse.wav</code>.
-      </p>
-      <label className="esp-enable">
-        <input
-          type="checkbox"
-          checked={ct.generateWav}
-          onChange={(e) => onPatchClickTrack({ generateWav: e.target.checked })}
-        />
-        <span>Auto-generate click WAV when analyzing</span>
-      </label>
-      <label className="esp-enable">
-        <input
-          type="checkbox"
-          checked={ct.liveMidiEnabled}
-          onChange={(e) => onPatchClickTrack({ liveMidiEnabled: e.target.checked })}
-        />
-        <span>Live MIDI click during transport (IEM)</span>
-      </label>
-      <div className="lighting-studio-grid">
-        <div className="field">
-          <label htmlFor="click-ch">MIDI channel</label>
-          <input
-            id="click-ch"
-            className="text-input"
-            type="number"
-            min={1}
-            max={16}
-            value={ct.midiChannel}
-            onChange={(e) => onPatchClickTrack({ midiChannel: Number(e.target.value) })}
-          />
-        </div>
-        <div className="field">
-          <label htmlFor="click-note">Beat note</label>
-          <input
-            id="click-note"
-            className="text-input"
-            type="number"
-            min={0}
-            max={127}
-            value={ct.midiNote}
-            onChange={(e) => onPatchClickTrack({ midiNote: Number(e.target.value) })}
-          />
-        </div>
-        <div className="field">
-          <label htmlFor="accent-note">Downbeat note</label>
-          <input
-            id="accent-note"
-            className="text-input"
-            type="number"
-            min={0}
-            max={127}
-            value={ct.accentNote}
-            onChange={(e) => onPatchClickTrack({ accentNote: Number(e.target.value) })}
-          />
-        </div>
-        <div className="field">
-          <label htmlFor="count-in">Count-in bars</label>
-          <input
-            id="count-in"
-            className="text-input"
-            type="number"
-            min={0}
-            max={4}
-            value={ct.countInBars}
-            onChange={(e) => onPatchClickTrack({ countInBars: Number(e.target.value) })}
-          />
-        </div>
-      </div>
       {row?.audioAnalysis ? (
-        <p className="settings-hint">
-          Current song: {row.audioAnalysis.bpm} BPM
-          {row.clickTrackCountInMs
-            ? ` · count-in ${Math.round(row.clickTrackCountInMs / 1000)}s (live MIDI)`
-            : ' · click WAV matches song length'}
-          {clickHint ? ` · click file ${clickHint}` : ''}
-        </p>
-      ) : null}
-      {state.clickTrackLive.enabled && state.transport.playing ? (
-        <p className="settings-hint lighting-director-live">
-          Live click active · beat {state.clickTrackLive.lastBeatIndex ?? '—'}
-          {state.clickTrackLive.nextBeatMs != null
-            ? ` · next @ ${formatMsToTimecode(state.clickTrackLive.nextBeatMs)}`
-            : ''}
-        </p>
+        <p className="settings-hint">Current song: {row.audioAnalysis.bpm} BPM</p>
       ) : null}
 
       {state.lightingDirector.active ? (

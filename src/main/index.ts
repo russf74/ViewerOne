@@ -38,7 +38,6 @@ import { mergeDmxCueOverrides } from '../shared/dmxCue.js'
 import type { DmxCueOverride, LightingCue } from '../shared/lightingProgram.js'
 import type { LightingReadinessReport } from '../shared/lightingReadiness.js'
 import { auditLightingReadiness } from '../shared/lightingReadiness.js'
-import { LiveClickTrack } from './liveClickTrack.js'
 import { buildEsp32DisplayPayload } from '../shared/esp32Payload.js'
 import {
   clampLedBrightness,
@@ -115,7 +114,6 @@ import {
 import { LightingDirector } from './lightingDirector.js'
 import { runLightingAnalyzePass } from './lightingAnalyzePass.js'
 import { normalizeSongAudioAnalysis } from '../shared/audioAnalysisNormalize.js'
-import { normalizeClickTrackSettings } from '../shared/clickTrackSettings.js'
 import { formatViewerOneVersion } from '../shared/appVersion.js'
 import { listWindowsAudioDevices } from './listAudioDevices.js'
 import { LoopbackMeter } from './loopbackMeter.js'
@@ -141,7 +139,6 @@ function preloadScriptPath(): string {
 let controlWindow: BrowserWindow | null = null
 const store = createAppStore()
 const lightingDirector = new LightingDirector()
-const liveClickTrack = new LiveClickTrack()
 const loopbackMeter = new LoopbackMeter((sample) => broadcastLoopbackMeter(sample))
 
 let dmxCueOverride: DmxCueOverride | undefined
@@ -202,22 +199,12 @@ function stopPerformanceSyncTicker(): void {
   lightingDirectorTimer = null
 }
 
-let clickTrackArmedSongId: string | null = null
-
 function tickPerformanceSync(now = Date.now()): void {
   const perf = songPerformanceMs(now)
   if (perf == null) return
   const st = getState(store)
   if (st.lightingDirectorEnabled) {
     lightingDirector.tick(perf)
-  }
-  if (st.clickTrack.liveMidiEnabled) {
-    const row = st.currentSongId ? st.setlist.find((r) => r.id === st.currentSongId) : null
-    if (row?.id !== clickTrackArmedSongId) {
-      clickTrackArmedSongId = row?.id ?? null
-      liveClickTrack.arm(row?.audioAnalysis ?? null, st.clickTrack)
-    }
-    liveClickTrack.tick(perf, transportPlaying)
   }
 }
 
@@ -586,7 +573,6 @@ async function runLightingAnalyzeFromCubase(
       }
     },
     loopbackDevice,
-    clickSettings: st.clickTrack,
     director: lightingDirector,
     maxCaptures,
     onlyTitle,
@@ -1015,15 +1001,7 @@ function buildPublicState(): PublicState {
     },
     lightingDirector: lightingDirector.snapshot(),
     lightingAnalyze,
-    lightingReadiness: auditLightingReadiness(base.setlist, base.clickTrack),
-    clickTrackLive: {
-      enabled: liveClickTrack.isEnabled(),
-      lastBeatIndex: liveClickTrack.getLastBeatIndex(),
-      nextBeatMs: (() => {
-        const perf = songPerformanceMs()
-        return perf != null ? liveClickTrack.nextBeatMs(perf) : null
-      })()
-    },
+    lightingReadiness: auditLightingReadiness(base.setlist),
     midi: {
       cubaseInputName,
       cubaseInputOpen,
@@ -1279,7 +1257,6 @@ function syncDmxFromStore(): void {
  */
 function applyLedBlackout(): void {
   lightingDirector.disarm()
-  liveClickTrack.disarm()
   noteLedMidiPulse(MIDI_PC_LED_BLACKOUT)
   const st = getState(store)
   ledIdleDimActive = false
@@ -1300,7 +1277,6 @@ function applyLedBlackout(): void {
  */
 function applyLedIdle(): void {
   lightingDirector.disarm()
-  liveClickTrack.disarm()
   noteLedMidiPulse(MIDI_PC_LED_IDLE)
   ledIdleDimActive = true
   dmxLook = 'idle'
@@ -2892,9 +2868,7 @@ function registerIpc(): void {
       audioAnalysis: normalizeSongAudioAnalysis(row.audioAnalysis),
       lightingProgram: normalizeLightingProgram(row.lightingProgram),
       audioSource: row.audioSource,
-      cubaseRenderPath: row.cubaseRenderPath,
-      clickTrackPath: row.clickTrackPath,
-      clickTrackCountInMs: row.clickTrackCountInMs
+      cubaseRenderPath: row.cubaseRenderPath
     }))
     const st = getState(store)
     const still =
@@ -2992,12 +2966,6 @@ function registerIpc(): void {
     if (patch.lightingLoopbackDevice !== undefined) {
       const dev = String(patch.lightingLoopbackDevice).trim()
       if (dev) allowed.lightingLoopbackDevice = dev
-    }
-    if (patch.clickTrack && typeof patch.clickTrack === 'object') {
-      allowed.clickTrack = normalizeClickTrackSettings({
-        ...st.clickTrack,
-        ...patch.clickTrack
-      })
     }
     if (patch.lightingCaptureMode === 'export' || patch.lightingCaptureMode === 'playback') {
       allowed.lightingCaptureMode = patch.lightingCaptureMode
@@ -3266,12 +3234,10 @@ function registerIpc(): void {
     const row = st.setlist.find((r) => r.id === songId)
     if (!row?.backingTrackPath) return buildPublicState()
     try {
-      const result = await lightingDirector.analyzeSongBackingTrack(row, st.clickTrack)
+      const result = await lightingDirector.analyzeSongBackingTrack(row)
       updateSetlistRow(songId, {
         audioAnalysis: result.audioAnalysis,
         lightingProgram: result.lightingProgram,
-        clickTrackPath: result.clickTrackPath,
-        clickTrackCountInMs: result.clickTrackCountInMs,
         audioSource: 'external-file'
       })
       console.log(
@@ -3289,12 +3255,10 @@ function registerIpc(): void {
     for (const row of st.setlist) {
       if (!row.backingTrackPath) continue
       try {
-        const result = await lightingDirector.analyzeSongBackingTrack(row, st.clickTrack)
+        const result = await lightingDirector.analyzeSongBackingTrack(row)
         updateSetlistRow(row.id, {
           audioAnalysis: result.audioAnalysis,
           lightingProgram: result.lightingProgram,
-          clickTrackPath: result.clickTrackPath,
-          clickTrackCountInMs: result.clickTrackCountInMs,
           audioSource: 'external-file'
         })
         console.log(
@@ -3460,10 +3424,6 @@ if (!gotTheLock) {
     resetCountdownForSong(getState(store).currentSongId)
     startCountdownTicker()
     startPerformanceSyncTicker()
-    liveClickTrack.setSendMidi((ch, note, vel, dur) => {
-      if (!cubaseOutputOpen) return
-      midi.sendNotePulse(ch, note, vel, dur ?? 30)
-    })
     setEsp32LineHandler(handleEsp32Line)
     setEsp32ConnectionHandler((connected) => {
       const enabled = getState(store).esp32Enabled

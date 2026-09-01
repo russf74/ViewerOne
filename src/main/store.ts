@@ -4,7 +4,6 @@ import Store from 'electron-store'
 import type { AppState, ArrangerMidiMapping, SetlistItem, TransportMidiMapping } from '../shared/types.js'
 import { normalizeSongAudioAnalysis } from '../shared/audioAnalysisNormalize.js'
 import { normalizeLightingProgram } from '../shared/lightingProgramNormalize.js'
-import { DEFAULT_CLICK_TRACK, normalizeClickTrackSettings } from '../shared/clickTrackSettings.js'
 import { clampDmxChannel, normalizeDmxFixtureMode } from '../shared/dmx.js'
 import {
   clampLedBrightness,
@@ -54,7 +53,6 @@ const defaults: AppState = {
   lightingDirectorEnabled: false,
   liveAudioSyncEnabled: false,
   lightingLoopbackDevice: 'Stereo Mix',
-  clickTrack: { ...DEFAULT_CLICK_TRACK },
   lightingCaptureMode: 'playback',
   cubaseExportFolder: undefined
 }
@@ -124,15 +122,7 @@ function normalizeSetlist(list: unknown): SetlistItem[] {
           ? r.cubaseRenderPath.trim()
           : undefined,
       cubaseRenderCapturedAt:
-        typeof r.cubaseRenderCapturedAt === 'string' ? r.cubaseRenderCapturedAt : undefined,
-      clickTrackPath:
-        typeof r.clickTrackPath === 'string' && r.clickTrackPath.trim()
-          ? r.clickTrackPath.trim()
-          : undefined,
-      clickTrackCountInMs:
-        r.clickTrackCountInMs !== undefined && Number.isFinite(Number(r.clickTrackCountInMs))
-          ? Math.round(Number(r.clickTrackCountInMs))
-          : undefined
+        typeof r.cubaseRenderCapturedAt === 'string' ? r.cubaseRenderCapturedAt : undefined
     }
   })
 }
@@ -206,7 +196,6 @@ export function getState(store: AppStore): AppState {
       String(store.get('lightingLoopbackDevice')).trim()
         ? String(store.get('lightingLoopbackDevice')).trim()
         : 'Stereo Mix',
-    clickTrack: normalizeClickTrackSettings(store.get('clickTrack')),
     lightingCaptureMode:
       store.get('lightingCaptureMode') === 'export' ? 'export' : 'playback',
     cubaseExportFolder:

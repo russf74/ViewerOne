@@ -2,15 +2,8 @@ import { analyzeMonoPcm } from '../shared/audioAnalysis.js'
 import { buildLightingProgram, resolveActiveCues, nextLightingCue } from '../shared/lightingProgram.js'
 import type { LightingCue } from '../shared/lightingProgram.js'
 import { LiveBeatSync } from '../shared/liveAudioSync.js'
-import {
-  medianBpmFromOnsets,
-  metronomeOnsetsMs,
-  pickDownbeatPhase
-} from '../shared/metronomeOnsets.js'
-import type { ClickTrackSettings, LightingProgram, SetlistItem, SongAudioAnalysis } from '../shared/types.js'
+import type { LightingProgram, SetlistItem, SongAudioAnalysis } from '../shared/types.js'
 import { decodeAudioFileToMonoPcm } from './audioDecode.js'
-import { writeClickTrackWav } from './clickTrackWav.js'
-import { clickTrackPathForSong, findMetronomeWavForCapture } from './clickTrackPaths.js'
 import { LiveAudioCapture } from './liveAudioCapture.js'
 
 export type LightingDirectorSnapshot = {
@@ -31,8 +24,6 @@ export type ApplyCueFn = (cue: LightingCue) => void
 export type AnalyzeSongResult = {
   audioAnalysis: SongAudioAnalysis
   lightingProgram: LightingProgram
-  clickTrackPath?: string
-  clickTrackCountInMs?: number
 }
 
 export class LightingDirector {
@@ -125,57 +116,14 @@ export class LightingDirector {
     this.disarm(true)
   }
 
-  async analyzeFromRenderWav(
-    song: SetlistItem,
-    wavPath: string,
-    clickSettings: ClickTrackSettings
-  ): Promise<AnalyzeSongResult> {
+  async analyzeFromRenderWav(song: SetlistItem, wavPath: string): Promise<AnalyzeSongResult> {
     this.analyzingSongId = song.id
     this.analyzeError = null
     try {
       const { samples, sampleRate, durationMs } = await decodeAudioFileToMonoPcm(wavPath, 48000)
-      let audioAnalysis = analyzeMonoPcm(samples, sampleRate, durationMs, song.title)
-      let accentPhase = 0
-      let clickDurationSamples = samples.length
-      let fromMetronome = false
-      const metroPath = findMetronomeWavForCapture(wavPath)
-      if (metroPath) {
-        const metro = await decodeAudioFileToMonoPcm(metroPath, 48000)
-        const onsets = metronomeOnsetsMs(metro.samples, metro.sampleRate)
-        if (onsets.length >= 8) {
-          fromMetronome = true
-          accentPhase = pickDownbeatPhase(onsets, samples, sampleRate)
-          clickDurationSamples = metro.samples.length
-          audioAnalysis = {
-            ...audioAnalysis,
-            durationMs: (metro.samples.length / metro.sampleRate) * 1000,
-            bpm: medianBpmFromOnsets(onsets),
-            beatOffsetMs: onsets[0] ?? 0,
-            clickBeatsMs: onsets,
-            clickOriginSample: undefined,
-            clickPeriodSamples: undefined
-          }
-        }
-      }
+      const audioAnalysis = analyzeMonoPcm(samples, sampleRate, durationMs, song.title)
       const lightingProgram = buildLightingProgram(audioAnalysis)
-      let clickTrackPath: string | undefined
-      let clickTrackCountInMs: number | undefined
-      if (clickSettings.generateWav) {
-        const clickPath = clickTrackPathForSong(song.program, song.title)
-        const written = writeClickTrackWav(clickPath, audioAnalysis, {
-          volume: clickSettings.volume,
-          accentVolume: clickSettings.accentVolume,
-          accentEvery: clickSettings.accentEvery,
-          accentPhase,
-          countInBars: fromMetronome ? 0 : 1,
-          embedCountIn: true,
-          sampleRate: 48000,
-          durationSamples: clickDurationSamples
-        })
-        clickTrackPath = written.path
-        clickTrackCountInMs = written.countInMs
-      }
-      return { audioAnalysis, lightingProgram, clickTrackPath, clickTrackCountInMs }
+      return { audioAnalysis, lightingProgram }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       this.analyzeError = msg
@@ -185,13 +133,10 @@ export class LightingDirector {
     }
   }
 
-  async analyzeSongBackingTrack(
-    song: SetlistItem,
-    clickSettings: ClickTrackSettings
-  ): Promise<AnalyzeSongResult> {
+  async analyzeSongBackingTrack(song: SetlistItem): Promise<AnalyzeSongResult> {
     if (!song.backingTrackPath) {
       throw new Error('No backing track path set for this song.')
     }
-    return this.analyzeFromRenderWav(song, song.backingTrackPath, clickSettings)
+    return this.analyzeFromRenderWav(song, song.backingTrackPath)
   }
 }

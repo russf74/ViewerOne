@@ -2,11 +2,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
 
-/** Fresh Take On Me capture/click names so Cubase does not reuse an old pool clip. */
-export const TAKE_ON_ME_FILE_PREFIX = '006-'
-/** New click name so Cubase does not reuse the old pool clip. */
-export const TAKE_ON_ME_CLICK_PREFIX = '007-'
-
 /** Persisted Cubase render captures — keyed by song program number. */
 export function cubaseRenderDir(): string {
   const dir = path.join(app.getPath('userData'), 'renders')
@@ -24,9 +19,6 @@ export function songTitleSlug(title: string): string {
 
 export function cubaseRenderPathForSong(program: number, title: string): string {
   const slug = songTitleSlug(title)
-  const name =
-    slug === 'take-on-me'
-      ? `${TAKE_ON_ME_FILE_PREFIX}pc${program}-${slug}.wav`
-      : `pc${program}${slug ? `-${slug}` : ''}.wav`
+  const name = `pc${program}${slug ? `-${slug}` : ''}.wav`
   return path.join(cubaseRenderDir(), name)
 }

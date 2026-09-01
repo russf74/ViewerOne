@@ -1,4 +1,4 @@
-import type { ClickTrackSettings, SetlistItem } from './types.js'
+import type { SetlistItem } from './types.js'
 
 export type LightingReadinessRow = {
   id: string
@@ -7,7 +7,6 @@ export type LightingReadinessRow = {
   hasCubaseRender: boolean
   hasAnalysis: boolean
   hasProgram: boolean
-  hasClickTrack: boolean
   cueCount: number
   bpm: number | null
   ready: boolean
@@ -28,10 +27,7 @@ function isPerformanceSong(row: SetlistItem): boolean {
   return row.program >= 1 && row.program <= 119
 }
 
-export function auditLightingReadiness(
-  setlist: SetlistItem[],
-  clickTrack?: ClickTrackSettings
-): LightingReadinessReport {
+export function auditLightingReadiness(setlist: SetlistItem[]): LightingReadinessReport {
   const rows: LightingReadinessRow[] = []
   let readyCount = 0
 
@@ -41,7 +37,6 @@ export function auditLightingReadiness(
     const hasCubaseRender = row.audioSource === 'cubase-render' && Boolean(row.cubaseRenderPath)
     const hasAnalysis = Boolean(row.audioAnalysis?.bpm)
     const hasProgram = Boolean(row.lightingProgram?.cues?.length)
-    const hasClickTrack = Boolean(row.clickTrackPath)
     const cueCount = row.lightingProgram?.cues.length ?? 0
     const bpm = row.audioAnalysis?.bpm ?? null
 
@@ -50,9 +45,6 @@ export function auditLightingReadiness(
     }
     if (!hasAnalysis) issues.push('Missing BPM/beat analysis')
     if (!hasProgram) issues.push('No lighting program')
-    if (clickTrack?.generateWav && !hasClickTrack) {
-      issues.push('No click track WAV — re-analyze with auto-generate enabled')
-    }
 
     const ready = issues.length === 0
     if (ready) readyCount++
@@ -63,7 +55,6 @@ export function auditLightingReadiness(
       hasCubaseRender,
       hasAnalysis,
       hasProgram,
-      hasClickTrack,
       cueCount,
       bpm,
       ready,
