@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.36
+
+- Take On Me click keeps the first beat and speeds the grid so the last kick is still on it (the last file drifted about a quarter-beat by the end). File: `pc4-take-on-me-click-tight.wav`. Other songs not changed.
+
 ## v6.00.35
 
 - Take On Me recaptured on its own (USB mixer unplugged so Cubase/Stereo Mix use the internal Realtek path). Fresh 48 kHz recording, click `pc4-take-on-me-click.wav` from that audio (~169.15). Other songs not recaptured.

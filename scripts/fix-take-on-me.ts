@@ -17,7 +17,7 @@ const ffmpeg = require('ffmpeg-static') as string
 const rendersDir = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'renders')
 const configPath = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'viewer-one-config.json')
 const srcPath = path.join(rendersDir, 'pc4-take-on-me.wav')
-const clickPath = path.join(rendersDir, 'pc4-take-on-me-click-onbeat.wav')
+const clickPath = path.join(rendersDir, 'pc4-take-on-me-click-tight.wav')
 
 function runFfmpeg(args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -103,14 +103,14 @@ const raw = await runFfmpeg([
   '-ac',
   '1',
   '-ar',
-  '22050',
+  '48000',
   '-f',
   'f32le',
   'pipe:1'
 ])
 const samples = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4)
-const locked = trackClickBeats(samples, 22050, { min: 166, max: 176 })
-const named = analyzeMonoPcm(samples, 22050, undefined, 'Take on me')
+const locked = trackClickBeats(samples, 48000, { min: 166, max: 176 })
+const named = analyzeMonoPcm(samples, 48000, undefined, 'Take on me')
 console.log('kick-lock', {
   bpm: locked.bpm,
   offset: locked.offsetMs,

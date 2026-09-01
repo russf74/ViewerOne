@@ -491,6 +491,30 @@ function kickOnBeatRatio(
 }
 
 /**
+ * Keep the first beat where it is and pick the BPM that still sits on the
+ * kick in the last 25s. Autocorr alone can leave a quarter-beat of drift by 3:35.
+ */
+function fitBpmToEndKicks(
+  kick: Float32Array,
+  sampleRate: number,
+  seedBpm: number,
+  originMs: number,
+  endMs: number
+): number {
+  const tailFrom = Math.max(0, endMs - 25000)
+  let bestBpm = seedBpm
+  let best = -1
+  for (let bpm = seedBpm - 0.18; bpm <= seedBpm + 0.18 + 1e-12; bpm += 0.005) {
+    const ratio = kickOnBeatRatio(kick, sampleRate, bpm, originMs, tailFrom, endMs)
+    if (ratio > best) {
+      best = ratio
+      bestBpm = bpm
+    }
+  }
+  return Math.round(bestBpm * 1000) / 1000
+}
+
+/**
  * Steady click grid from the capture: kick-band tempo, phase on the kick, even spacing.
  */
 export function trackClickBeats(
@@ -516,8 +540,8 @@ export function trackClickBeats(
   const ac = autocorrBpm(gated, hopMs, minBpm, maxBpm)
   const refined = refineBpm(gated, hopMs, ac.bpm, 0.6, 0.005, minBpm, maxBpm)
   const finer = refineBpm(gated, hopMs, refined.bpm, 0.12, 0.001, minBpm, maxBpm)
-  const bpm = Math.round(finer.bpm * 1000) / 1000
-  const period = 60000 / Math.max(60, bpm)
+  let bpm = Math.round(finer.bpm * 1000) / 1000
+  let period = 60000 / Math.max(60, bpm)
   const durationMs = (pcm.length / ANALYSIS_SAMPLE_RATE) * 1000
   let bestOff = scoreAtBpm(gated, hopMs, bpm).offsetMs
   let bestRatio = -1
@@ -531,6 +555,7 @@ export function trackClickBeats(
   }
   let offsetMs = bestOff
   while (offsetMs < bounds.startMs - period * 0.05) offsetMs += period
+  bpm = fitBpmToEndKicks(kick, ANALYSIS_SAMPLE_RATE, bpm, offsetMs, bounds.endMs)
   const beatsMs = evenBeatGrid(offsetMs, bpm, durationMs)
   return { bpm, offsetMs, beatsMs, durationMs }
 }
