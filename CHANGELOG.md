@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.31
+
+- Take On Me click is built from the Cubase Playback 1 file (same length, 3:34.90) with the drum pulse in that file (~171). File: `pc4-take-on-me-click-clip.wav`. Other songs not changed.
+
 ## v6.00.30
 
 - Take On Me click is rebuilt to the exact length of the capture (3:35.58). File: `pc4-take-on-me-click-match.wav`. Other songs not changed.

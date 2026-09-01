@@ -1,5 +1,5 @@
 /**
- * Take On Me only: deep analysis, write click, verify duration matches the capture.
+ * Take On Me only: click from the Cubase Playback 1 file, not the padded loopback.
  */
 import { createRequire } from 'node:module'
 import { spawn } from 'node:child_process'
@@ -14,10 +14,10 @@ import { buildLightingProgram } from '../src/shared/lightingProgram.ts'
 const require = createRequire(import.meta.url)
 const ffmpeg = require('ffmpeg-static') as string
 
+const cubaseSrc = String.raw`C:\Users\pc\Dropbox\My PC (LFRAY-PC)\Documents\Cubase\80s-00s\Audio\Playback 1_08-03.wav`
 const rendersDir = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'renders')
 const configPath = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'viewer-one-config.json')
-const srcPath = path.join(rendersDir, 'pc4-take-on-me.wav')
-const clickPath = path.join(rendersDir, 'pc4-take-on-me-click-match.wav')
+const clickPath = path.join(rendersDir, 'pc4-take-on-me-click-clip.wav')
 
 function runFfmpeg(args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -32,8 +32,17 @@ function runFfmpeg(args: string[]): Promise<Buffer> {
   })
 }
 
-function wavInfo(file: string): { sampleRate: number; channels: number; bits: number; dataBytes: number; samples: number; durationSec: number } {
-  const buf = fs.readFileSync(file)
+function wavInfo(file: string): {
+  sampleRate: number
+  channels: number
+  bits: number
+  frames: number
+  durationSec: number
+} {
+  const fd = fs.openSync(file, 'r')
+  const buf = Buffer.alloc(16384)
+  fs.readSync(fd, buf, 0, 16384, 0)
+  fs.closeSync(fd)
   let off = 12
   let sampleRate = 0
   let channels = 0
@@ -51,10 +60,13 @@ function wavInfo(file: string): { sampleRate: number; channels: number; bits: nu
       dataBytes = size
       break
     }
+    if (!/^[A-Za-z0-9 ]{4}$/.test(id)) break
     off += 8 + size + (size % 2)
+    if (off > 16000) break
   }
-  const samples = dataBytes / Math.max(1, channels * (bits / 8))
-  return { sampleRate, channels, bits, dataBytes, samples, durationSec: samples / sampleRate }
+  const frameBytes = Math.max(1, channels * (bits / 8))
+  const frames = dataBytes / frameBytes
+  return { sampleRate, channels, bits, frames, durationSec: frames / sampleRate }
 }
 
 function ffmpegDuration(file: string): Promise<string> {
@@ -73,21 +85,21 @@ function ffmpegDuration(file: string): Promise<string> {
   })
 }
 
-if (!fs.existsSync(srcPath)) {
-  console.error('missing', srcPath)
+if (!fs.existsSync(cubaseSrc)) {
+  console.error('missing Cubase file', cubaseSrc)
   process.exit(1)
 }
 
-const header = wavInfo(srcPath)
-console.log('SOURCE header', header)
-console.log('SOURCE ffmpeg', await ffmpegDuration(srcPath))
+const header = wavInfo(cubaseSrc)
+console.log('CUBASE Playback 1_08-03 header', header)
+console.log('CUBASE ffmpeg', await ffmpegDuration(cubaseSrc))
 
 const raw = await runFfmpeg([
   '-hide_banner',
   '-loglevel',
   'error',
   '-i',
-  srcPath,
+  cubaseSrc,
   '-ac',
   '1',
   '-ar',
@@ -97,42 +109,44 @@ const raw = await runFfmpeg([
   'pipe:1'
 ])
 const samples = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4)
-const decodeSec = samples.length / 22050
-console.log('decoded 22050 frames', samples.length, 'sec', decodeSec)
-
 const asIs = analyzeMonoPcm(samples, 22050)
-const fast = analyzeMonoPcm(samples, 22050, undefined, 'Take on me')
+const named = analyzeMonoPcm(samples, 22050, undefined, 'Take on me')
 console.log('scan full-range', { bpm: asIs.bpm, offset: asIs.beatOffsetMs, durationMs: asIs.durationMs })
-console.log('scan fast-band', { bpm: fast.bpm, offset: fast.beatOffsetMs, durationMs: fast.durationMs })
+console.log('scan take-on-me', { bpm: named.bpm, offset: named.beatOffsetMs, durationMs: named.durationMs })
 
 const exactMs = header.durationSec * 1000
-console.log('exact source ms', exactMs)
+const clickRate = 48000
+const durationSamples = Math.round(header.frames * (clickRate / header.sampleRate))
+const analysis = { ...named, durationMs: exactMs, bpm: named.bpm }
 
-const analysis = { ...fast, durationMs: exactMs }
 if (fs.existsSync(clickPath)) fs.unlinkSync(clickPath)
 const written = writeClickTrackWav(clickPath, analysis, {
   countInBars: 1,
   embedCountIn: true,
   accentEvery: 4,
-  sampleRate: 48000,
-  durationMs: exactMs
+  sampleRate: clickRate,
+  durationMs: exactMs,
+  durationSamples
 })
 const synth = synthesizeClickTrack(analysis, {
   countInBars: 1,
   embedCountIn: true,
-  sampleRate: 48000,
-  durationMs: exactMs
+  sampleRate: clickRate,
+  durationMs: exactMs,
+  durationSamples
 })
-const clickSec = synth.samples.length / synth.sampleRate
 const clickHeader = wavInfo(clickPath)
 console.log('CLICK header', clickHeader)
 console.log('CLICK ffmpeg', await ffmpegDuration(clickPath))
-console.log('CLICK samples', synth.samples.length, 'sec', clickSec)
+console.log('CLICK samples', synth.samples.length)
 
 const deltaMs = Math.abs(clickHeader.durationSec - header.durationSec) * 1000
 console.log('DELTA ms', deltaMs)
-if (deltaMs > 2) {
-  throw new Error(`length mismatch: source ${header.durationSec}s vs click ${clickHeader.durationSec}s`)
+if (clickHeader.frames !== durationSamples) {
+  throw new Error(`frame mismatch: cubase ${header.frames} → click ${clickHeader.frames} wanted ${durationSamples}`)
+}
+if (deltaMs > 0.05) {
+  throw new Error(`length mismatch: cubase ${header.durationSec}s vs click ${clickHeader.durationSec}s`)
 }
 
 const lighting = buildLightingProgram(analysis)
@@ -151,7 +165,8 @@ if (fs.existsSync(configPath)) {
 
 console.log('OK Take On Me', {
   bpm: analysis.bpm,
-  sourceSec: header.durationSec,
+  offsetMs: analysis.beatOffsetMs,
+  cubaseSec: header.durationSec,
   clickSec: clickHeader.durationSec,
   clickFile: clickPath
 })

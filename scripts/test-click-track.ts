@@ -34,6 +34,10 @@ const fourBeats = 4 * (60000 / Math.max(60, analysis.bpm))
 if (Math.abs(beepToClick - fourBeats) > 40) {
   throw new Error(`4 beeps should span ${fourBeats}ms, got ${beepToClick}`)
 }
+const exact = synthesizeClickTrack(analysis, { countInBars: 1, sampleRate: 48000, durationSamples: 123456 })
+if (exact.samples.length !== 123456) {
+  throw new Error(`durationSamples not honoured: ${exact.samples.length}`)
+}
 const stretched = synthesizeClickTrack(analysis, { countInBars: 1, durationMs: 226000 })
 const stretchedMs = Math.round((stretched.samples.length / stretched.sampleRate) * 1000)
 if (Math.abs(stretchedMs - 226000) > 40) throw new Error(`expected 226000 ms WAV, got ${stretchedMs}`)

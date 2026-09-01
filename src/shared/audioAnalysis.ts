@@ -309,8 +309,22 @@ function trackTempoAndPhase(
   const refined = refineBpm(smoothed, hopMs, bestBpm, range ? 0.8 : 2.2, 0.05, minBpm, maxBpm)
   const finer = refineBpm(novelty, hopMs, refined.bpm, 0.18, 0.01, minBpm, maxBpm)
   const fitted = fitTempoToOnsets(novelty, hopMs, finer.bpm, finer.offsetMs)
-  const bpm = Math.round(fitted.bpm * 1000) / 1000
-  const offsetMs = scoreAtBpm(novelty, hopMs, bpm).offsetMs
+  let bpm = fitted.bpm
+  let offsetMs = fitted.offsetMs
+  // Synth 16ths can win ~15/16 above the drum pulse (Take On Me 182 vs 171).
+  if (range && bpm > 176) {
+    const folded = bpm * (15 / 16)
+    if (folded >= range.min && folded <= range.max) {
+      const full = scoreAtBpm(novelty, hopMs, bpm)
+      const fold = scoreAtBpm(novelty, hopMs, folded)
+      if (fold.score >= full.score * 0.72) {
+        bpm = folded
+        offsetMs = fold.offsetMs
+      }
+    }
+  }
+  bpm = Math.round(bpm * 1000) / 1000
+  offsetMs = scoreAtBpm(novelty, hopMs, bpm).offsetMs
   return { bpm, offsetMs }
 }
 
@@ -490,8 +504,8 @@ function buildBeatGrid(durationMs: number, bpm: number, offsetMs: number): numbe
 function pulseRangeForTitle(title?: string): { min: number; max: number } | undefined {
   if (!title) return undefined
   const t = title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
-  // This backing track has a strong 129 grouping and a 172 drum pulse; the 172 is in the audio.
-  if (/\btake on me\b/.test(t)) return { min: 155, max: 185 }
+  // Drum pulse is ~171; 129 is a 3/4 grouping and ~182 is a 16th-note alias.
+  if (/\btake on me\b/.test(t)) return { min: 166, max: 176 }
   return undefined
 }
 
