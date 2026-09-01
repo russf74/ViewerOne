@@ -4,6 +4,8 @@ import { app } from 'electron'
 
 /** Fresh Take On Me capture/click names so Cubase does not reuse an old pool clip. */
 export const TAKE_ON_ME_FILE_PREFIX = '006-'
+/** New click name so Cubase does not reuse the old pool clip. */
+export const TAKE_ON_ME_CLICK_PREFIX = '007-'
 
 /** Persisted Cubase render captures — keyed by song program number. */
 export function cubaseRenderDir(): string {

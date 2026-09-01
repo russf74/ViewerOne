@@ -9,6 +9,11 @@ export type ClickTrackOptions = {
   accentVolume?: number
   /** Accent every N beats (4 = bar downbeat in 4/4). */
   accentEvery?: number
+  /**
+   * Which click in each bar is the downbeat (0 = first click).
+   * Use 1–3 when a Moises metronome starts on beat 2, 3, or 4.
+   */
+  accentPhase?: number
   /** Bars of count-in before t=0 (WAV only). */
   countInBars?: number
   /** Assumed 4/4 — beats per bar for count-in. */
@@ -33,6 +38,7 @@ const DEFAULT_OPTS: Required<ClickTrackOptions> = {
   volume: 0.55,
   accentVolume: 0.95,
   accentEvery: 4,
+  accentPhase: 0,
   countInBars: 1,
   beatsPerBar: 4,
   sampleRate: 48000,
@@ -56,15 +62,23 @@ export function buildFullBeatGrid(analysis: SongAudioAnalysis): number[] {
   return beats
 }
 
+function isDownbeat(beatIndex: number, every: number, phase: number): boolean {
+  if (every <= 0) return false
+  const n = Math.max(1, Math.round(every))
+  const p = ((Math.round(phase) % n) + n) % n
+  return beatIndex % n === p
+}
+
 /** Beat times including optional count-in. Embedded (default): first N song beats are beeps. */
 export function beatTimesWithCountIn(
   analysis: SongAudioAnalysis,
   countInBars: number,
   beatsPerBar = 4,
   untilMs = 0,
-  embedCountIn = true
+  embedCountIn = true,
+  accentPhase = 0
 ): { atMs: number; accent: boolean; beatIndex: number; countIn: boolean }[] {
-  const opts = { ...DEFAULT_OPTS, countInBars, beatsPerBar, embedCountIn }
+  const opts = { ...DEFAULT_OPTS, countInBars, beatsPerBar, embedCountIn, accentPhase }
   const beatMs = 60000 / Math.max(60, analysis.bpm)
   const firstDownbeat = Math.max(0, analysis.beatOffsetMs)
   const countInBeats = countInBars * beatsPerBar
@@ -76,7 +90,7 @@ export function beatTimesWithCountIn(
     const countInBeats = countInBars * beatsPerBar
     return tracked.map((atMs, beatIndex) => ({
       atMs,
-      accent: beatIndex % opts.accentEvery === 0,
+      accent: isDownbeat(beatIndex, opts.accentEvery, opts.accentPhase),
       beatIndex,
       countIn: opts.embedCountIn && beatIndex < countInBeats
     }))
@@ -89,7 +103,7 @@ export function beatTimesWithCountIn(
       if (t > endMs) break
       out.push({
         atMs: t,
-        accent: beatIndex % opts.accentEvery === 0,
+        accent: isDownbeat(beatIndex, opts.accentEvery, opts.accentPhase),
         beatIndex,
         countIn: beatIndex < countInBeats
       })
@@ -103,7 +117,7 @@ export function beatTimesWithCountIn(
     const atMs = firstDownbeat - (countInBeats - i) * beatMs
     out.push({
       atMs,
-      accent: i === 0 || beatIndex % opts.accentEvery === 0,
+      accent: i === 0 || isDownbeat(beatIndex, opts.accentEvery, opts.accentPhase),
       beatIndex,
       countIn: true
     })
@@ -115,7 +129,7 @@ export function beatTimesWithCountIn(
     if (t > endMs) break
     out.push({
       atMs: t,
-      accent: beatIndex % opts.accentEvery === 0,
+      accent: isDownbeat(beatIndex, opts.accentEvery, opts.accentPhase),
       beatIndex,
       countIn: false
     })
@@ -193,7 +207,11 @@ export function synthesizeClickTrack(
     for (let i = 0; ; i++) {
       const startSample = Math.round(origin + i * periodSamples)
       if (startSample >= mix.length) break
-      mixClick(startSample, opts.embedCountIn && i < countInBeats, i % opts.accentEvery === 0)
+      mixClick(
+        startSample,
+        opts.embedCountIn && i < countInBeats,
+        isDownbeat(i, opts.accentEvery, opts.accentPhase)
+      )
     }
   } else {
     const clipMs = (totalSamples / sampleRate) * 1000 - countInMs
@@ -202,7 +220,8 @@ export function synthesizeClickTrack(
       opts.countInBars,
       opts.beatsPerBar,
       Math.max(songMs, clipMs),
-      opts.embedCountIn
+      opts.embedCountIn,
+      opts.accentPhase
     )
     for (const ev of events) {
       const offsetMs = ev.atMs + countInMs

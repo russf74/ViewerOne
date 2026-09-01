@@ -1,5 +1,10 @@
 import { analyzeMonoPcm } from '../src/shared/audioAnalysis.ts'
 import { beatTimesWithCountIn, synthesizeClickTrack } from '../src/shared/clickTrack.ts'
+import {
+  medianBpmFromOnsets,
+  metronomeOnsetsMs,
+  pickDownbeatPhase
+} from '../src/shared/metronomeOnsets.ts'
 
 function clickTrackPcm(bpm: number, durationSec: number, sr = 22050): Float32Array {
   const n = Math.floor(durationSec * sr)
@@ -46,6 +51,81 @@ if (prepended.countInMs <= 0) throw new Error('prepended count-in missing from W
 if (prepended.samples.length <= cubase.samples.length) {
   throw new Error('prepended WAV should be longer than embedded')
 }
+
+function rmsAt(pcm: Float32Array, sr: number, tMs: number, winMs = 12): number {
+  const c = Math.round((tMs / 1000) * sr)
+  const w = Math.round((winMs / 1000) * sr)
+  let s = 0
+  let n = 0
+  for (let i = c; i < c + w && i < pcm.length; i++) {
+    s += pcm[i]! * pcm[i]!
+    n++
+  }
+  return n ? Math.sqrt(s / n) : 0
+}
+
+const metroTimes = Array.from({ length: 32 }, (_, i) => i * 500)
+const metroPcm = new Float32Array(48000 * 16)
+for (const t of metroTimes) {
+  const start = Math.round((t / 1000) * 48000)
+  for (let i = 0; i < 200 && start + i < metroPcm.length; i++) {
+    metroPcm[start + i] = Math.sin((2 * Math.PI * 1000 * i) / 48000) * Math.exp(-i / 40)
+  }
+}
+const onsets = metronomeOnsetsMs(metroPcm, 48000)
+if (onsets.length < 28) throw new Error(`expected ~32 metronome hits, got ${onsets.length}`)
+for (let i = 0; i < 16; i++) {
+  if (Math.abs(onsets[i]! - metroTimes[i]!) > 4) {
+    throw new Error(`onset ${i} ${onsets[i]} != ${metroTimes[i]}`)
+  }
+}
+if (Math.abs(medianBpmFromOnsets(onsets) - 120) > 1) {
+  throw new Error(`metronome BPM expected ~120, got ${medianBpmFromOnsets(onsets)}`)
+}
+
+const fromMetro = synthesizeClickTrack(
+  {
+    analyzedAt: '',
+    durationMs: 16000,
+    sampleRate: 48000,
+    bpm: 120,
+    beatOffsetMs: onsets[0]!,
+    beatTimesMs: onsets.map((t) => Math.round(t)),
+    clickBeatsMs: onsets,
+    sections: [],
+    peakEnergy: 0.5
+  },
+  { countInBars: 0, embedCountIn: false, accentEvery: 4, accentPhase: 0, sampleRate: 48000, durationSamples: metroPcm.length }
+)
+const down = rmsAt(fromMetro.samples, 48000, onsets[0]!)
+const two = rmsAt(fromMetro.samples, 48000, onsets[1]!)
+if (!(down > two * 1.2)) {
+  throw new Error(`downbeat should be louder than beat 2, got ${down} vs ${two}`)
+}
+const phase1 = synthesizeClickTrack(
+  {
+    analyzedAt: '',
+    durationMs: 16000,
+    sampleRate: 48000,
+    bpm: 120,
+    beatOffsetMs: onsets[0]!,
+    beatTimesMs: onsets.map((t) => Math.round(t)),
+    clickBeatsMs: onsets,
+    sections: [],
+    peakEnergy: 0.5
+  },
+  { countInBars: 0, embedCountIn: false, accentEvery: 4, accentPhase: 1, sampleRate: 48000, durationSamples: metroPcm.length }
+)
+const p1b1 = rmsAt(phase1.samples, 48000, onsets[0]!)
+const p1b2 = rmsAt(phase1.samples, 48000, onsets[1]!)
+if (!(p1b2 > p1b1 * 1.2)) {
+  throw new Error(`accentPhase 1 should accent the second click, got ${p1b1} vs ${p1b2}`)
+}
+if (pickDownbeatPhase(onsets, undefined, 48000) !== 0) {
+  throw new Error('no-song downbeat phase should be 0')
+}
+console.log('metronome resynth OK', { bpm: medianBpmFromOnsets(onsets), hits: onsets.length, down, two })
+
 console.log('click-track: OK', {
   bpm: analysis.bpm,
   songMs: analysis.durationMs,

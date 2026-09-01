@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.45
+
+- Take On Me click is rebuilt from a Moises metronome at the same hit times, with a higher/louder click on beat 1 of each bar. Drop the Moises WAV in renders as `006-pc4-take-on-me-metronome.wav`. File: `007-pc4-take-on-me-click.wav`.
+
 ## v6.00.44
 
 - Take On Me click BPM is measured from the Cubase capture in 16-second slices (mix autocorrelation, ~169.2 and a hair faster at the end). Smooth metronome, not kick-chasing. File: `006-pc4-take-on-me-click.wav`.
