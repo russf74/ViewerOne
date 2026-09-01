@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.23
+
+- Analyze capture length is capped to the setlist time so a bad Cubase locator cannot record a 12-minute click for a 3-minute song.
+
 ## v6.00.22
 
 - Full-setlist Analyze from Cubase walks every arranger song, writes a 48 kHz click WAV and lighting program, skips songs already done, and retries a failed capture.

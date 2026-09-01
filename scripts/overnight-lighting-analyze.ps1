@@ -53,7 +53,11 @@ const ready = [];
 for (const r of rows) {
   const click = r.clickTrackPath || '';
   const clickOk = click && fs.existsSync(click) && fs.statSync(click).size > 8000;
-  const ok = r.lightingProgram && r.lightingProgram.cues && r.lightingProgram.cues.length && r.audioAnalysis && r.audioAnalysis.bpm && clickOk;
+  const listed = String(r.length || '').split(':');
+  const listedSec = listed.length === 2 ? Number(listed[0]) * 60 + Number(listed[1]) : 0;
+  const analyzedSec = r.audioAnalysis && r.audioAnalysis.durationMs ? r.audioAnalysis.durationMs / 1000 : 0;
+  const durOk = listedSec < 5 || analyzedSec <= 0 || analyzedSec <= listedSec * 1.25 + 2;
+  const ok = r.lightingProgram && r.lightingProgram.cues && r.lightingProgram.cues.length && r.audioAnalysis && r.audioAnalysis.bpm && clickOk && durOk;
   const rec = { program: r.program, title: r.title, length: r.length || '', arrangerIndex: r.arrangerIndex, ready: !!ok };
   if (ok) ready.push(rec); else need.push(rec);
 }

@@ -71,16 +71,62 @@ function clickFileExists(row: SetlistItem): boolean {
   return candidates.some((p) => fs.existsSync(p) && fs.statSync(p).size > 8000)
 }
 
+function listedDurationSec(row: SetlistItem): number {
+  return row.length ? songLengthSeconds(row.length) : 0
+}
+
+function analysisDurationPlausible(row: SetlistItem): boolean {
+  const listed = listedDurationSec(row)
+  const analyzed = row.audioAnalysis?.durationMs ? row.audioAnalysis.durationMs / 1000 : 0
+  if (listed < MIN_CAPTURE_SEC || analyzed <= 0) return true
+  return analyzed <= listed * 1.25 + 2
+}
+
+function captureDurationSec(prepMmss: string, row: SetlistItem): number {
+  const prep = prepMmss ? songLengthSeconds(prepMmss) : 0
+  const listed = listedDurationSec(row)
+  if (listed >= MIN_CAPTURE_SEC && prep > listed * 1.2) {
+    analyzeLog(`cap duration ${prep}s → ${listed}s (setlist ${row.length})`)
+    return listed
+  }
+  return prep >= MIN_CAPTURE_SEC ? prep : listed
+}
+
 function songAlreadyReady(row: SetlistItem): boolean {
-  return Boolean(row.lightingProgram?.cues?.length && row.audioAnalysis?.bpm && clickFileExists(row))
+  return Boolean(
+    row.lightingProgram?.cues?.length &&
+      row.audioAnalysis?.bpm &&
+      clickFileExists(row) &&
+      analysisDurationPlausible(row)
+  )
+}
+
+function wavDurationSec(filePath: string): number {
+  try {
+    const buf = fs.readFileSync(filePath, { encoding: null }).subarray(0, 44)
+    if (buf.length < 32) return 0
+    const byteRate = buf.readUInt32LE(28)
+    const size = fs.statSync(filePath).size
+    if (byteRate <= 0) return 0
+    return Math.max(0, (size - 44) / byteRate)
+  } catch {
+    return 0
+  }
 }
 
 function existingUsableRender(row: SetlistItem): string | null {
   const candidates = [row.cubaseRenderPath, cubaseRenderPathForSong(row.program, row.title)].filter(
     (p): p is string => Boolean(p)
   )
+  const listed = listedDurationSec(row)
   for (const p of candidates) {
-    if (fs.existsSync(p) && fs.statSync(p).size > 10_000 && wavFilePeak(p) >= 0.004) return p
+    if (!fs.existsSync(p) || fs.statSync(p).size <= 10_000 || wavFilePeak(p) < 0.004) continue
+    const dur = wavDurationSec(p)
+    if (listed >= MIN_CAPTURE_SEC && dur > listed * 1.25 + 2) {
+      analyzeLog(`ignore overlong render ${p} (${dur.toFixed(1)}s vs setlist ${listed}s)`)
+      continue
+    }
+    return p
   }
   return null
 }
@@ -323,11 +369,7 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
         return
       }
 
-      const durationSec = prep.mmss
-        ? songLengthSeconds(prep.mmss)
-        : row.length
-          ? songLengthSeconds(row.length)
-          : 0
+      const durationSec = captureDurationSec(prep.mmss, row)
       if (durationSec < MIN_CAPTURE_SEC) {
         analyzeLog(`skip “${title}” — length too short (${durationSec}s)`)
         return
