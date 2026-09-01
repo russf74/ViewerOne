@@ -446,9 +446,9 @@ export function LightingStudio({ row, state, onSaveProgram, onPatchSettings, onP
 
       <h4 className="settings-subheading">IEM click track</h4>
       <p className="settings-hint">
-        Generates a WAV click aligned to analyzed beats (import into Cubase or IEM player). Live
-        MIDI click sends notes on each beat while transport plays — route to a dedicated channel
-        away from Cubase instruments.
+        Generates a 48 kHz WAV: <strong>4 count-in beeps</strong>, then song clicks. In Cubase,
+        slip the clip so those four beeps sit before the audio — first click after the beeps is
+        beat 1.
       </p>
       <label className="esp-enable">
         <input

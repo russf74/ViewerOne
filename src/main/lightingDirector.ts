@@ -141,7 +141,7 @@ export class LightingDirector {
           volume: clickSettings.volume,
           accentVolume: clickSettings.accentVolume,
           accentEvery: clickSettings.accentEvery,
-          countInBars: 0,
+          countInBars: 1,
           sampleRate: 48000,
           durationMs: lengthMs
         })

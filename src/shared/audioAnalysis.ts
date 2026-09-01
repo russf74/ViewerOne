@@ -146,28 +146,98 @@ function meanNoveltyOnGrid(
   return n > 0 ? sum / n : 0
 }
 
-/** Constant-tempo beat tracker: BPM + phase that best hit the onset envelope. */
+function noveltyAutocorr(novelty: Float32Array, lag: number): number {
+  if (lag < 1 || lag >= novelty.length) return 0
+  let sum = 0
+  let n = 0
+  const end = novelty.length - lag
+  for (let i = 0; i < end; i++) {
+    sum += novelty[i] * novelty[i + lag]
+    n++
+  }
+  return n > 0 ? sum / n : 0
+}
+
+function smoothNovelty(novelty: Float32Array, radius: number): Float32Array {
+  const out = new Float32Array(novelty.length)
+  for (let i = 0; i < novelty.length; i++) {
+    let sum = 0
+    let n = 0
+    for (let k = -radius; k <= radius; k++) {
+      const j = i + k
+      if (j >= 0 && j < novelty.length) {
+        sum += novelty[j]
+        n++
+      }
+    }
+    out[i] = n > 0 ? sum / n : 0
+  }
+  return out
+}
+
 function trackTempoAndPhase(novelty: Float32Array, hopMs: number): { bpm: number; offsetMs: number } {
   if (novelty.length < 8) return { bpm: 120, offsetMs: 0 }
   const minBpm = 84
-  const maxBpm = 168
+  const maxBpm = 200
+  const smoothed = smoothNovelty(novelty, 3)
   let bestBpm = 120
-  let bestOff = 0
   let bestScore = -1
   for (let bpm = minBpm; bpm <= maxBpm; bpm++) {
     const beatMs = 60000 / bpm
     const steps = Math.max(4, Math.round(beatMs / hopMs))
     for (let s = 0; s < steps; s++) {
-      const offsetMs = s * hopMs
-      const score = meanNoveltyOnGrid(novelty, hopMs, beatMs, offsetMs)
+      const score = meanNoveltyOnGrid(smoothed, hopMs, beatMs, s * hopMs)
       if (score > bestScore) {
         bestScore = score
         bestBpm = bpm
-        bestOff = offsetMs
       }
     }
   }
+  if (bestBpm < 92 && bestBpm * 2 <= maxBpm) {
+    bestBpm *= 2
+  }
+
+  const beatMs = 60000 / bestBpm
+  const steps = Math.max(4, Math.round(beatMs / hopMs))
+  let bestOff = 0
+  let bestOffScore = -1
+  for (let s = 0; s < steps; s++) {
+    const offsetMs = s * hopMs
+    const score = meanNoveltyOnGrid(novelty, hopMs, beatMs, offsetMs)
+    const closer = offsetMs < bestOff && score >= bestOffScore * 0.985
+    if (score > bestOffScore || closer) {
+      bestOffScore = Math.max(bestOffScore, score)
+      bestOff = offsetMs
+    }
+  }
   return { bpm: bestBpm, offsetMs: bestOff }
+}
+
+/** Grid-fit score at a BPM (higher = onsets land on that beat). */
+export function tempoGridScore(
+  samples: Float32Array,
+  sampleRate: number,
+  bpm: number
+): { onset: number; bass: number } {
+  const resampled = resampleMonoPcm(samples, sampleRate, ANALYSIS_SAMPLE_RATE)
+  const pcm = peakNormalize(resampled, peakOf(resampled))
+  const hop = 512
+  const hopMs = (hop / ANALYSIS_SAMPLE_RATE) * 1000
+  const flux = spectralFlux(pcm, 2048, hop)
+  const energyFrames = frameEnergy(pcm, hop)
+  const novelty = combineNovelty(flux, energyNovelty(energyFrames))
+  const bassNov = energyNovelty(frameEnergy(onePoleLowpass(pcm), hop))
+  const beatMs = 60000 / Math.max(60, bpm)
+  const steps = Math.max(4, Math.round(beatMs / hopMs))
+  let best = 0
+  let bestBass = 0
+  for (let s = 0; s < steps; s++) {
+    const score = meanNoveltyOnGrid(novelty, hopMs, beatMs, s * hopMs)
+    const bass = meanNoveltyOnGrid(bassNov, hopMs, beatMs, s * hopMs)
+    if (score > best) best = score
+    if (bass > bestBass) bestBass = bass
+  }
+  return { onset: best, bass: bestBass }
 }
 
 function onePoleLowpass(samples: Float32Array, alpha = 0.045): Float32Array {
@@ -195,6 +265,10 @@ function pickKickPhase(
   const sb = meanNoveltyOnGrid(bassNovelty, hopMs, beatMs, b)
   let chosen = sa >= sb ? a : b
   const best = Math.max(sa, sb)
+  const worst = Math.min(sa, sb)
+  if (worst >= best * 0.92) {
+    chosen = a <= b ? a : b
+  }
   const nearZero = a <= hopMs * 2 ? a : b <= hopMs * 2 ? b : chosen
   if (nearZero !== chosen) {
     const s0 = meanNoveltyOnGrid(bassNovelty, hopMs, beatMs, nearZero)
@@ -203,27 +277,47 @@ function pickKickPhase(
   return chosen
 }
 
+/** Snap to a bar downbeat on the click grid (not mid-beat / mid-bar). */
+export function snapToBarMs(
+  ms: number,
+  bpm: number,
+  offsetMs: number,
+  beatsPerBar = 4
+): number {
+  const beatMs = 60000 / Math.max(60, bpm)
+  const barMs = beatMs * beatsPerBar
+  const origin = Math.max(0, offsetMs)
+  if (ms <= origin) return Math.round(origin)
+  const n = Math.round((ms - origin) / barMs)
+  return Math.round(origin + Math.max(0, n) * barMs)
+}
+
 function musicalSections(
   energyFrames: Float32Array,
   hopMs: number,
   durationMs: number,
-  bpm: number
+  bpm: number,
+  offsetMs: number
 ): SongSection[] {
   if (energyFrames.length === 0) {
     return [{ label: 'unknown', startMs: 0, energy: 0.5 }]
   }
-  const barMs = (60000 / Math.max(60, bpm)) * 4
-  const blockMs = Math.max(barMs * 4, 8000)
-  const blockFrames = Math.max(1, Math.round(blockMs / hopMs))
+  const beatMs = 60000 / Math.max(60, bpm)
+  const barMs = beatMs * 4
+  const phraseMs = barMs * 8
+  const origin = Math.max(0, offsetMs)
   const maxE = Math.max(...energyFrames, 0.001)
   const chunks: { startMs: number; energy: number }[] = []
-  for (let i = 0; i < energyFrames.length; i += blockFrames) {
-    const end = Math.min(energyFrames.length, i + blockFrames)
+  for (let t = origin; t < durationMs; t += phraseMs) {
+    if (durationMs - t < barMs * 2 && chunks.length > 0) break
+    const startFrame = Math.max(0, Math.round(t / hopMs))
+    const endFrame = Math.min(energyFrames.length, Math.round((t + phraseMs) / hopMs))
+    if (endFrame <= startFrame) break
     let sum = 0
-    for (let j = i; j < end; j++) sum += energyFrames[j]
+    for (let j = startFrame; j < endFrame; j++) sum += energyFrames[j]
     chunks.push({
-      startMs: Math.round(i * hopMs),
-      energy: sum / Math.max(1, end - i) / maxE
+      startMs: Math.round(t),
+      energy: sum / Math.max(1, endFrame - startFrame) / maxE
     })
   }
   const sorted = chunks.map((c) => c.energy).sort((a, b) => a - b)
@@ -245,6 +339,7 @@ function musicalSections(
     } else if (c.energy <= p33) label = tail ? 'outro' : 'verse'
     else label = c.energy >= p50 ? 'prechorus' : 'bridge'
     const prev = out[out.length - 1]
+    if (prev && prev.label === label) continue
     if (prev && prev.label === 'outro' && label === 'outro') continue
     out.push({
       label,
@@ -291,7 +386,7 @@ export function analyzeMonoPcm(
   const bassNov = energyNovelty(frameEnergy(onePoleLowpass(pcm), hop))
   const offsetMs = pickKickPhase(bassNov, hopMs, bpm, rawOff)
   const beatTimesMs = buildBeatGrid(durationMs, bpm, offsetMs)
-  const sections = musicalSections(energyFrames, hopMs, durationMs, bpm)
+  const sections = musicalSections(energyFrames, hopMs, durationMs, bpm, offsetMs)
 
   return {
     analyzedAt: new Date().toISOString(),

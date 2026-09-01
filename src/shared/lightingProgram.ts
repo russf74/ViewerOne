@@ -1,6 +1,7 @@
 import type { DmxFixtureMode } from './dmx.js'
 import { complementaryDomePatternId, complementaryStickPatternId } from './dmx.js'
 import type { SongAudioAnalysis } from './audioAnalysis.js'
+import { snapToBarMs } from './audioAnalysis.js'
 import { clampLedPatternId } from './ledPatterns.js'
 
 export type DmxCueOverride = {
@@ -60,19 +61,8 @@ const SECTION_PATTERN: Record<string, number> = {
   build: 13
 }
 
-function snapToBeat(ms: number, analysis: SongAudioAnalysis): number {
-  if (!analysis.beatTimesMs.length) return ms
-  let best = analysis.beatTimesMs[0]
-  let bestDist = Math.abs(ms - best)
-  for (const b of analysis.beatTimesMs) {
-    const d = Math.abs(ms - b)
-    if (d < bestDist) {
-      best = b
-      bestDist = d
-    }
-    if (b > ms + 500) break
-  }
-  return bestDist < 180 ? best : ms
+function snapToBar(ms: number, analysis: SongAudioAnalysis, beatsPerBar = 4): number {
+  return snapToBarMs(ms, analysis.bpm, analysis.beatOffsetMs, beatsPerBar)
 }
 
 const HIGH_ENERGY_CYCLE = [16, 18, 11, 10, 14, 15, 13, 19, 7, 4] as const
@@ -120,38 +110,22 @@ function uniqueEspPattern(label: string, energy: number, used: Set<number>, inde
   return clampLedPatternId(p)
 }
 
-/** Detect short energy spikes between sections → fill cues. */
-function findEnergySpikes(analysis: SongAudioAnalysis): { atMs: number; strength: number }[] {
-  const spikes: { atMs: number; strength: number }[] = []
-  const sections = analysis.sections
-  for (let i = 1; i < sections.length; i++) {
-    const prev = sections[i - 1]
-    const cur = sections[i]
-    const jump = cur.energy - prev.energy
-    if (jump > 0.35 && cur.label !== 'intro') {
-      spikes.push({ atMs: cur.startMs, strength: jump })
-    }
-  }
-  return spikes
-}
-
 /**
  * Build a professional timed lighting program from analysis.
- * Snaps to beats, adds bar accents, section DMX, and fill hits.
+ * Section changes snap to bar downbeats (same grid as the click).
  */
 export function buildLightingProgram(
   analysis: SongAudioAnalysis,
   options: BuildProgramOptions = {}
 ): LightingProgram {
   const beatsPerBar = options.beatsPerBar ?? 4
-  const beatMs = 60000 / Math.max(60, analysis.bpm)
   const cues: LightingCue[] = []
   const usedEsp = new Set<number>()
 
   for (let i = 0; i < analysis.sections.length; i++) {
     const section = analysis.sections[i]
     const label = section.label
-    const atMs = snapToBeat(section.startMs, analysis)
+    const atMs = snapToBar(section.startMs, analysis, beatsPerBar)
     const patternId = uniqueEspPattern(label, section.energy, usedEsp, i)
     cues.push({
       id: crypto.randomUUID(),
@@ -160,29 +134,6 @@ export function buildLightingProgram(
       label,
       dmxLook: dmxLookForSection(label, section.energy),
       dmx: dmxForSection(patternId, section.energy)
-    })
-
-    if (section.energy > 0.75 && (label === 'chorus' || label === 'drop')) {
-      const hitPattern = clampLedPatternId(18)
-      cues.push({
-        id: crypto.randomUUID(),
-        atMs: snapToBeat(Math.round(atMs + beatMs), analysis),
-        ledPatternId: hitPattern,
-        label: `${label} hit`,
-        accentDurationMs: Math.round(beatMs * 0.75),
-        dmx: dmxForSection(hitPattern, 1)
-      })
-    }
-  }
-
-  for (const spike of findEnergySpikes(analysis)) {
-    cues.push({
-      id: crypto.randomUUID(),
-      atMs: snapToBeat(spike.atMs, analysis),
-      ledPatternId: clampLedPatternId(14),
-      label: 'fill',
-      accentDurationMs: Math.round(beatMs),
-      dmxLook: 'live'
     })
   }
 

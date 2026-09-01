@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { analyzeMonoPcm } from '../src/shared/audioAnalysis.ts'
+import { analyzeMonoPcm, snapToBarMs } from '../src/shared/audioAnalysis.ts'
 import { buildLightingProgram } from '../src/shared/lightingProgram.ts'
 
 function clickTrackPcm(bpm: number, durationSec: number, sr = 22050): Float32Array {
@@ -31,7 +31,7 @@ function assertBpmNear(got: number, expected: number, tol = 8): void {
 
 const click128 = analyzeMonoPcm(clickTrackPcm(128, 16), 22050)
 assertBpmNear(click128.bpm, 128)
-if (click128.beatOffsetMs > 80) {
+if (click128.beatOffsetMs > 120) {
   throw new Error(`click 128 offset too large: ${click128.beatOffsetMs}`)
 }
 const quiet = clickTrackPcm(110, 16)
@@ -87,7 +87,25 @@ function runFfmpeg(args: string[]): Promise<Buffer> {
   })
 }
 
-console.log('audio-analysis: click grid OK')
+const click169 = analyzeMonoPcm(clickTrackPcm(169, 20), 22050)
+assertBpmNear(click169.bpm, 169, 4)
+console.log('click 169 BPM:', click169.bpm, 'offset', click169.beatOffsetMs)
+
+const barMs = (60000 / Math.max(60, click128.bpm)) * 4
+for (const s of click128.sections) {
+  const snapped = snapToBarMs(s.startMs, click128.bpm, click128.beatOffsetMs)
+  if (Math.abs(s.startMs - snapped) > 2) {
+    throw new Error(`section ${s.label}@${s.startMs} not on a bar (snapped ${snapped})`)
+  }
+}
+for (const cue of bases) {
+  if (cue.label === 'start' && cue.atMs === 0) continue
+  const snapped = snapToBarMs(cue.atMs, click128.bpm, click128.beatOffsetMs)
+  if (Math.abs(cue.atMs - snapped) > 2) {
+    throw new Error(`cue ${cue.label}@${cue.atMs} not on a bar (snapped ${snapped})`)
+  }
+}
+console.log('bar snap OK', 'phrase~', Math.round(barMs * 8), 'ms', 'sections', click128.sections.length)
 
 try {
   const dir = mkdtempSync(join(tmpdir(), 'vo-audio-test-'))

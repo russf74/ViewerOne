@@ -1,5 +1,10 @@
 # Changelog
 
+## v6.00.24
+
+- Each click WAV starts with 4 count-in beeps, then song clicks (48 kHz). Slip the clip so the beeps sit before the audio.
+- Tempo tracker searches up to 200 BPM and doubles half-time reads (I’m Still Standing 178, not 89). Lighting changes snap to 8-bar downbeats, not mid-beat.
+
 ## v6.00.23
 
 - Analyze capture length is capped to the setlist time so a bad Cubase locator cannot record a 12-minute click for a 3-minute song. Setlist lengths stay as scanned, not the bad locator time.
