@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.33
+
+- Take On Me click is a steady metronome from the capture again (the kick-follower wobbled). First beat is the first real kick, and the file ends with the music (3:34.41), not the silent capture pad. File: `pc4-take-on-me-click-even.wav`. Other songs not changed.
+
 ## v6.00.32
 
 - Take On Me click is rebuilt from the Cubase capture. Each beat is locked to the kick in that recording (not a free metronome). File: `pc4-take-on-me-click-lock.wav`. Other songs not changed.

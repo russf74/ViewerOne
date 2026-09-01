@@ -17,7 +17,7 @@ const ffmpeg = require('ffmpeg-static') as string
 const rendersDir = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'renders')
 const configPath = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'viewer-one-config.json')
 const srcPath = path.join(rendersDir, 'pc4-take-on-me.wav')
-const clickPath = path.join(rendersDir, 'pc4-take-on-me-click-lock.wav')
+const clickPath = path.join(rendersDir, 'pc4-take-on-me-click-even.wav')
 
 function runFfmpeg(args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -114,6 +114,7 @@ const named = analyzeMonoPcm(samples, 22050, undefined, 'Take on me')
 console.log('kick-lock', {
   bpm: locked.bpm,
   offset: locked.offsetMs,
+  durationMs: locked.durationMs,
   beats: locked.beatsMs.length,
   first: locked.beatsMs[0],
   last: locked.beatsMs[locked.beatsMs.length - 1]
@@ -130,8 +131,14 @@ console.log('beat interval ms', {
   medianBpm: mid > 0 ? 60000 / mid : 0
 })
 
-const exactMs = header.durationSec * 1000
-const durationSamples = Math.round(header.durationSec * 48000)
+if (mid > 0 && (intervals[intervals.length - 1]! - intervals[0]!) > 0.05) {
+  throw new Error(
+    `click must be a steady grid, interval range ${intervals[0]}–${intervals[intervals.length - 1]}`
+  )
+}
+
+const exactMs = locked.durationMs
+const durationSamples = Math.round((exactMs / 1000) * 48000)
 const analysis = {
   ...named,
   durationMs: exactMs,
@@ -161,10 +168,11 @@ console.log('CLICK header', clickHeader)
 console.log('CLICK ffmpeg', await ffmpegDuration(clickPath))
 console.log('CLICK samples', synth.samples.length)
 
-const deltaMs = Math.abs(clickHeader.durationSec - header.durationSec) * 1000
-console.log('DELTA ms', deltaMs)
+const deltaMs = Math.abs(clickHeader.durationSec * 1000 - exactMs)
+console.log('CLICK vs music-end ms', deltaMs)
+console.log('CAPTURE file sec', header.durationSec, 'CLICK sec', clickHeader.durationSec)
 if (deltaMs > 2) {
-  throw new Error(`length mismatch: capture ${header.durationSec}s vs click ${clickHeader.durationSec}s`)
+  throw new Error(`length mismatch: music ${exactMs}ms vs click ${clickHeader.durationSec * 1000}ms`)
 }
 
 const lighting = buildLightingProgram(analysis)
@@ -183,7 +191,9 @@ if (fs.existsSync(configPath)) {
 
 console.log('OK Take On Me', {
   bpm: analysis.bpm,
-  captureSec: header.durationSec,
+  offsetMs: analysis.beatOffsetMs,
+  captureFileSec: header.durationSec,
+  musicEndSec: exactMs / 1000,
   clickSec: clickHeader.durationSec,
   beats: locked.beatsMs.length,
   clickFile: clickPath

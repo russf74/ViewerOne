@@ -139,6 +139,11 @@ assertBpmNear(locked.bpm, 172.55, 0.4)
 if (locked.beatsMs.length < 60) {
   throw new Error(`kick-lock should follow the whole click, got ${locked.beatsMs.length} beats`)
 }
+const lockIv = locked.beatsMs.slice(1).map((t, i) => t - locked.beatsMs[i]!)
+lockIv.sort((a, b) => a - b)
+if (lockIv[lockIv.length - 1]! - lockIv[0]! > 0.05) {
+  throw new Error(`kick-lock must be a steady grid, got ${lockIv[0]}–${lockIv[lockIv.length - 1]}`)
+}
 console.log('kick-lock 172.55 BPM:', locked.bpm, 'beats', locked.beatsMs.length)
 
 const barMs = (60000 / Math.max(60, click128.bpm)) * 4

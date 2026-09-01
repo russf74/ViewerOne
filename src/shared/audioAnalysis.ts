@@ -428,103 +428,72 @@ function autocorrBpm(
   return { bpm: 60000 / (lagF * hopMs), score: best }
 }
 
-/**
- * Walk the kick envelope at ~one beat, snapping each step to the local peak.
- * A free metronome drifts; this stays locked to the capture.
- */
-function followKickBeats(
-  novelty: Float32Array,
-  hopMs: number,
-  bpm: number,
-  firstMs: number,
-  untilMs: number
-): number[] {
+function pcmAudibleBounds(
+  samples: Float32Array,
+  sampleRate: number
+): { startMs: number; endMs: number } {
+  const peak = peakOf(samples)
+  const startThr = Math.max(peak * 0.08, 0.0008)
+  const endThr = Math.max(peak * 0.025, 0.00025)
+  let start = 0
+  let end = samples.length
+  while (start < samples.length && Math.abs(samples[start] ?? 0) < startThr) start++
+  while (end > start && Math.abs(samples[end - 1] ?? 0) < endThr) end--
+  return {
+    startMs: (start / sampleRate) * 1000,
+    endMs: (end / sampleRate) * 1000
+  }
+}
+
+function evenBeatGrid(offsetMs: number, bpm: number, untilMs: number): number[] {
   const period = 60000 / Math.max(60, bpm)
-  const win = period * 0.12
-  const lastMs = Math.min(untilMs, novelty.length * hopMs)
   const beats: number[] = []
-  let t = Math.max(0, firstMs)
-  while (t <= lastMs && beats.length < 12000) {
-    const lo = Math.max(0, Math.floor((t - win) / hopMs))
-    const hi = Math.min(novelty.length - 1, Math.ceil((t + win) / hopMs))
-    let bestI = Math.round(t / hopMs)
-    let bestV = -1
-    for (let i = lo; i <= hi; i++) {
-      const v = novelty[i] ?? 0
-      if (v > bestV) {
-        bestV = v
-        bestI = i
-      }
-    }
-    t = bestI * hopMs
-    if (beats.length > 0 && t - beats[beats.length - 1]! < period * 0.55) {
-      t = beats[beats.length - 1]! + period
-      continue
-    }
+  let t = Math.max(0, offsetMs)
+  while (t <= untilMs && beats.length < 12000) {
     beats.push(t)
     t += period
   }
   return beats
 }
 
-function firstKickMs(novelty: Float32Array, hopMs: number, bpm: number, searchMs: number): number {
-  const period = 60000 / Math.max(60, bpm)
-  const scored = scoreAtBpm(novelty, hopMs, bpm)
-  let chosen = scored.offsetMs
-  const searchFrames = Math.min(novelty.length - 1, Math.round(searchMs / hopMs))
-  let best = -1
-  let bestI = Math.round(chosen / hopMs)
-  const minGap = Math.max(2, Math.round((period * 0.55) / hopMs))
-  let last = -1e9
-  for (let i = 1; i < searchFrames; i++) {
-    const v = novelty[i] ?? 0
-    if (v < (novelty[i - 1] ?? 0) || v < (novelty[i + 1] ?? 0)) continue
-    if (i - last < minGap) continue
-    if (v > best) {
-      best = v
-      bestI = i
-    }
-    last = i
-  }
-  if (best > 0) {
-    const peakMs = bestI * hopMs
-    const k = Math.round((peakMs - chosen) / period)
-    const snapped = chosen + k * period
-    if (Math.abs(peakMs - snapped) < period * 0.25) chosen = ((peakMs % period) + period) % period
-  }
-  return chosen
-}
-
 /**
- * Kick-locked tempo + beat times from captured audio (not a published BPM).
+ * Steady click grid from the capture: kick-band tempo, first real kick, even spacing.
  */
 export function trackClickBeats(
   samples: Float32Array,
   sampleRate: number,
   range?: { min: number; max: number }
-): { bpm: number; offsetMs: number; beatsMs: number[] } {
+): { bpm: number; offsetMs: number; beatsMs: number[]; durationMs: number } {
   const resampled = resampleMonoPcm(samples, sampleRate, ANALYSIS_SAMPLE_RATE)
   const pcm = peakNormalize(resampled, peakOf(resampled))
+  const bounds = pcmAudibleBounds(pcm, ANALYSIS_SAMPLE_RATE)
   const kick = kickBandPcm(pcm, ANALYSIS_SAMPLE_RATE)
   const hop = 256
   const hopMs = (hop / ANALYSIS_SAMPLE_RATE) * 1000
   const flux = spectralFlux(kick, 1024, hop)
   const energyNov = energyNovelty(frameEnergy(kick, hop))
   const novelty = combineNovelty(flux, energyNov)
+  const startFrame = Math.max(0, Math.floor(bounds.startMs / hopMs))
+  const endFrame = Math.min(novelty.length, Math.ceil(bounds.endMs / hopMs))
+  const gated = new Float32Array(novelty.length)
+  for (let i = startFrame; i < endFrame; i++) gated[i] = novelty[i] ?? 0
   const minBpm = range?.min ?? 84
   const maxBpm = range?.max ?? 200
-  const ac = autocorrBpm(novelty, hopMs, minBpm, maxBpm)
-  const refined = refineBpm(novelty, hopMs, ac.bpm, 0.6, 0.005, minBpm, maxBpm)
-  const finer = refineBpm(novelty, hopMs, refined.bpm, 0.12, 0.001, minBpm, maxBpm)
-  const durationMs = novelty.length * hopMs
-  const offsetMs = firstKickMs(novelty, hopMs, finer.bpm, Math.min(8000, durationMs * 0.15))
-  const beatsMs = followKickBeats(novelty, hopMs, finer.bpm, offsetMs, durationMs)
-  if (beatsMs.length >= 8) {
-    const span = beatsMs[beatsMs.length - 1]! - beatsMs[0]!
-    const bpm = Math.round((((beatsMs.length - 1) * 60000) / span) * 1000) / 1000
-    return { bpm, offsetMs: beatsMs[0]!, beatsMs }
-  }
-  return { bpm: Math.round(finer.bpm * 1000) / 1000, offsetMs, beatsMs }
+  const ac = autocorrBpm(gated, hopMs, minBpm, maxBpm)
+  const refined = refineBpm(gated, hopMs, ac.bpm, 0.6, 0.005, minBpm, maxBpm)
+  const finer = refineBpm(gated, hopMs, refined.bpm, 0.12, 0.001, minBpm, maxBpm)
+  const bpm = Math.round(finer.bpm * 1000) / 1000
+  const period = 60000 / Math.max(60, bpm)
+  const phase = scoreAtBpm(gated, hopMs, bpm).offsetMs
+  let offsetMs = phase
+  while (offsetMs < bounds.startMs - period * 0.15) offsetMs += period
+  while (offsetMs - period >= bounds.startMs - period * 0.15) offsetMs -= period
+  const durationMs = Math.min(
+    (pcm.length / ANALYSIS_SAMPLE_RATE) * 1000,
+    bounds.endMs + 40
+  )
+  const beatsMs = evenBeatGrid(offsetMs, bpm, durationMs)
+  return { bpm, offsetMs, beatsMs, durationMs }
 }
 
 /** Prefer kick phase over snare (half-beat) using low-frequency novelty. */
@@ -704,6 +673,9 @@ export function analyzeMonoPcm(
   const rawOff = tracked.offsetMs
   const offsetMs = clickTracked ? clickTracked.offsetMs : pickKickPhase(bassNov, hopMs, bpm, rawOff)
   const clickBeatsMs = clickTracked?.beatsMs
+  if (clickTracked && !(durationMsOverride && durationMsOverride >= 1000)) {
+    durationMs = Math.min(pcmMs, Math.round(clickTracked.durationMs))
+  }
   const beatTimesMs = buildBeatGrid(durationMs, bpm, offsetMs)
   const sections = musicalSections(energyFrames, hopMs, durationMs, bpm, offsetMs)
 
