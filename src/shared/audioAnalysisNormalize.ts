@@ -52,9 +52,15 @@ export function normalizeSongAudioAnalysis(raw: unknown): SongAudioAnalysis | un
     analyzedAt: typeof r.analyzedAt === 'string' ? r.analyzedAt : new Date().toISOString(),
     durationMs: Math.round(durationMs),
     sampleRate: Number.isFinite(Number(r.sampleRate)) ? Math.round(Number(r.sampleRate)) : 22050,
-    bpm: Math.round(bpm),
-    beatOffsetMs: Number.isFinite(Number(r.beatOffsetMs)) ? Math.round(Number(r.beatOffsetMs)) : 0,
+    bpm: Math.round(bpm * 1000) / 1000,
+    beatOffsetMs: Number.isFinite(Number(r.beatOffsetMs)) ? Number(r.beatOffsetMs) : 0,
     beatTimesMs,
+    clickBeatsMs: Array.isArray(r.clickBeatsMs)
+      ? r.clickBeatsMs
+          .map((t) => Number(t))
+          .filter((t) => Number.isFinite(t) && t >= 0)
+          .slice(0, 12000)
+      : undefined,
     sections: sections.length > 0 ? sections : [{ label: 'unknown', startMs: 0, energy: 0.5 }],
     peakEnergy: Number.isFinite(Number(r.peakEnergy))
       ? Math.max(0, Math.min(1, Number(r.peakEnergy)))

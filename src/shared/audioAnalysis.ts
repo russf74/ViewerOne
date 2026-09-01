@@ -28,6 +28,11 @@ export type SongAudioAnalysis = {
   beatOffsetMs: number
   /** Downsampled beat grid for sync (ms from start). Capped for storage. */
   beatTimesMs: number[]
+  /**
+   * Full click beat times snapped to kicks in the audio (ms). When present, the
+   * click WAV uses these instead of a free-running metronome.
+   */
+  clickBeatsMs?: number[]
   sections: SongSection[]
   /** Peak loudness 0–1 — used for intensity scaling. */
   peakEnergy: number
@@ -365,6 +370,163 @@ function onePoleLowpass(samples: Float32Array, alpha = 0.045): Float32Array {
   return out
 }
 
+function onePoleAlpha(hz: number, sampleRate: number): number {
+  return 1 - Math.exp((-2 * Math.PI * hz) / Math.max(1, sampleRate))
+}
+
+/** Kick / bass band (~40–180 Hz) so the synth riff does not own the tempo. */
+function kickBandPcm(samples: Float32Array, sampleRate: number): Float32Array {
+  const hpA = onePoleAlpha(40, sampleRate)
+  const lpA = onePoleAlpha(180, sampleRate)
+  const out = new Float32Array(samples.length)
+  let lpSlow = 0
+  let lpFast = 0
+  for (let i = 0; i < samples.length; i++) {
+    const x = samples[i] ?? 0
+    lpSlow += hpA * (x - lpSlow)
+    const high = x - lpSlow
+    lpFast += lpA * (high - lpFast)
+    out[i] = lpFast
+  }
+  return out
+}
+
+function parabolicLag(prev: number, peak: number, next: number, lag: number): number {
+  const denom = prev - 2 * peak + next
+  if (Math.abs(denom) < 1e-12) return lag
+  const delta = (0.5 * (prev - next)) / denom
+  if (delta <= -1 || delta >= 1) return lag
+  return lag + delta
+}
+
+function autocorrBpm(
+  novelty: Float32Array,
+  hopMs: number,
+  minBpm: number,
+  maxBpm: number
+): { bpm: number; score: number } {
+  const minLag = Math.max(2, Math.floor(60000 / maxBpm / hopMs))
+  const maxLag = Math.min(novelty.length - 3, Math.ceil(60000 / minBpm / hopMs))
+  if (maxLag <= minLag + 2) return { bpm: (minBpm + maxBpm) / 2, score: 0 }
+  let bestLag = minLag
+  let best = -1
+  const scores: number[] = []
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    const s = noveltyAutocorr(novelty, lag)
+    scores[lag] = s
+    if (s > best) {
+      best = s
+      bestLag = lag
+    }
+  }
+  const lagF = parabolicLag(
+    scores[bestLag - 1] ?? best,
+    scores[bestLag] ?? best,
+    scores[bestLag + 1] ?? best,
+    bestLag
+  )
+  return { bpm: 60000 / (lagF * hopMs), score: best }
+}
+
+/**
+ * Walk the kick envelope at ~one beat, snapping each step to the local peak.
+ * A free metronome drifts; this stays locked to the capture.
+ */
+function followKickBeats(
+  novelty: Float32Array,
+  hopMs: number,
+  bpm: number,
+  firstMs: number,
+  untilMs: number
+): number[] {
+  const period = 60000 / Math.max(60, bpm)
+  const win = period * 0.12
+  const lastMs = Math.min(untilMs, novelty.length * hopMs)
+  const beats: number[] = []
+  let t = Math.max(0, firstMs)
+  while (t <= lastMs && beats.length < 12000) {
+    const lo = Math.max(0, Math.floor((t - win) / hopMs))
+    const hi = Math.min(novelty.length - 1, Math.ceil((t + win) / hopMs))
+    let bestI = Math.round(t / hopMs)
+    let bestV = -1
+    for (let i = lo; i <= hi; i++) {
+      const v = novelty[i] ?? 0
+      if (v > bestV) {
+        bestV = v
+        bestI = i
+      }
+    }
+    t = bestI * hopMs
+    if (beats.length > 0 && t - beats[beats.length - 1]! < period * 0.55) {
+      t = beats[beats.length - 1]! + period
+      continue
+    }
+    beats.push(t)
+    t += period
+  }
+  return beats
+}
+
+function firstKickMs(novelty: Float32Array, hopMs: number, bpm: number, searchMs: number): number {
+  const period = 60000 / Math.max(60, bpm)
+  const scored = scoreAtBpm(novelty, hopMs, bpm)
+  let chosen = scored.offsetMs
+  const searchFrames = Math.min(novelty.length - 1, Math.round(searchMs / hopMs))
+  let best = -1
+  let bestI = Math.round(chosen / hopMs)
+  const minGap = Math.max(2, Math.round((period * 0.55) / hopMs))
+  let last = -1e9
+  for (let i = 1; i < searchFrames; i++) {
+    const v = novelty[i] ?? 0
+    if (v < (novelty[i - 1] ?? 0) || v < (novelty[i + 1] ?? 0)) continue
+    if (i - last < minGap) continue
+    if (v > best) {
+      best = v
+      bestI = i
+    }
+    last = i
+  }
+  if (best > 0) {
+    const peakMs = bestI * hopMs
+    const k = Math.round((peakMs - chosen) / period)
+    const snapped = chosen + k * period
+    if (Math.abs(peakMs - snapped) < period * 0.25) chosen = ((peakMs % period) + period) % period
+  }
+  return chosen
+}
+
+/**
+ * Kick-locked tempo + beat times from captured audio (not a published BPM).
+ */
+export function trackClickBeats(
+  samples: Float32Array,
+  sampleRate: number,
+  range?: { min: number; max: number }
+): { bpm: number; offsetMs: number; beatsMs: number[] } {
+  const resampled = resampleMonoPcm(samples, sampleRate, ANALYSIS_SAMPLE_RATE)
+  const pcm = peakNormalize(resampled, peakOf(resampled))
+  const kick = kickBandPcm(pcm, ANALYSIS_SAMPLE_RATE)
+  const hop = 256
+  const hopMs = (hop / ANALYSIS_SAMPLE_RATE) * 1000
+  const flux = spectralFlux(kick, 1024, hop)
+  const energyNov = energyNovelty(frameEnergy(kick, hop))
+  const novelty = combineNovelty(flux, energyNov)
+  const minBpm = range?.min ?? 84
+  const maxBpm = range?.max ?? 200
+  const ac = autocorrBpm(novelty, hopMs, minBpm, maxBpm)
+  const refined = refineBpm(novelty, hopMs, ac.bpm, 0.6, 0.005, minBpm, maxBpm)
+  const finer = refineBpm(novelty, hopMs, refined.bpm, 0.12, 0.001, minBpm, maxBpm)
+  const durationMs = novelty.length * hopMs
+  const offsetMs = firstKickMs(novelty, hopMs, finer.bpm, Math.min(8000, durationMs * 0.15))
+  const beatsMs = followKickBeats(novelty, hopMs, finer.bpm, offsetMs, durationMs)
+  if (beatsMs.length >= 8) {
+    const span = beatsMs[beatsMs.length - 1]! - beatsMs[0]!
+    const bpm = Math.round((((beatsMs.length - 1) * 60000) / span) * 1000) / 1000
+    return { bpm, offsetMs: beatsMs[0]!, beatsMs }
+  }
+  return { bpm: Math.round(finer.bpm * 1000) / 1000, offsetMs, beatsMs }
+}
+
 /** Prefer kick phase over snare (half-beat) using low-frequency novelty. */
 function pickKickPhase(
   bassNovelty: Float32Array,
@@ -535,10 +697,13 @@ export function analyzeMonoPcm(
   if (durationMsOverride && durationMsOverride >= 1000) {
     durationMs = Math.min(durationMs, Math.round(durationMsOverride))
   }
-  const tracked = trackTempoAndPhase(novelty, hopMs, pulseRangeForTitle(title))
+  const range = pulseRangeForTitle(title)
+  const clickTracked = range ? trackClickBeats(samples, sampleRate, range) : null
+  const tracked = clickTracked ?? trackTempoAndPhase(novelty, hopMs, range)
   const bpm = tracked.bpm
   const rawOff = tracked.offsetMs
-  const offsetMs = pickKickPhase(bassNov, hopMs, bpm, rawOff)
+  const offsetMs = clickTracked ? clickTracked.offsetMs : pickKickPhase(bassNov, hopMs, bpm, rawOff)
+  const clickBeatsMs = clickTracked?.beatsMs
   const beatTimesMs = buildBeatGrid(durationMs, bpm, offsetMs)
   const sections = musicalSections(energyFrames, hopMs, durationMs, bpm, offsetMs)
 
@@ -549,6 +714,7 @@ export function analyzeMonoPcm(
     bpm,
     beatOffsetMs: offsetMs,
     beatTimesMs,
+    clickBeatsMs,
     sections,
     peakEnergy: Math.round(peak * 1000) / 1000
   }

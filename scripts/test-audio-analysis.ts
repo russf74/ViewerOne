@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { analyzeMonoPcm, snapToBarMs } from '../src/shared/audioAnalysis.ts'
+import { analyzeMonoPcm, snapToBarMs, trackClickBeats } from '../src/shared/audioAnalysis.ts'
 import { buildLightingProgram } from '../src/shared/lightingProgram.ts'
 
 function clickTrackPcm(bpm: number, durationSec: number, sr = 22050): Float32Array {
@@ -119,6 +119,27 @@ if (longTrim.durationMs < 18000) {
 const click172 = analyzeMonoPcm(clickTrackPcm(172.55, 20), 22050)
 assertBpmNear(click172.bpm, 172.55, 1.5)
 console.log('click 172.55 BPM:', click172.bpm)
+
+function kickClickPcm(bpm: number, durationSec: number, sr = 22050): Float32Array {
+  const n = Math.floor(durationSec * sr)
+  const out = new Float32Array(n)
+  const beatSec = 60 / bpm
+  const clickLen = Math.floor(sr * 0.04)
+  for (let b = 0; b * beatSec < durationSec; b++) {
+    const start = Math.floor(b * beatSec * sr)
+    for (let i = 0; i < clickLen && start + i < n; i++) {
+      const env = Math.exp(-i / (sr * 0.012))
+      out[start + i] = env * Math.sin((2 * Math.PI * 80 * i) / sr)
+    }
+  }
+  return out
+}
+const locked = trackClickBeats(kickClickPcm(172.55, 24), 22050, { min: 166, max: 176 })
+assertBpmNear(locked.bpm, 172.55, 0.4)
+if (locked.beatsMs.length < 60) {
+  throw new Error(`kick-lock should follow the whole click, got ${locked.beatsMs.length} beats`)
+}
+console.log('kick-lock 172.55 BPM:', locked.bpm, 'beats', locked.beatsMs.length)
 
 const barMs = (60000 / Math.max(60, click128.bpm)) * 4
 for (const s of click128.sections) {

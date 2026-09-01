@@ -70,6 +70,17 @@ export function beatTimesWithCountIn(
   const countInBeats = countInBars * beatsPerBar
   const out: { atMs: number; accent: boolean; beatIndex: number; countIn: boolean }[] = []
   const endMs = Math.max(analysis.durationMs, untilMs)
+  const tracked = analysis.clickBeatsMs?.filter((t) => t >= 0 && t <= endMs)
+
+  if (tracked && tracked.length >= 8) {
+    const countInBeats = countInBars * beatsPerBar
+    return tracked.map((atMs, beatIndex) => ({
+      atMs,
+      accent: beatIndex % opts.accentEvery === 0,
+      beatIndex,
+      countIn: opts.embedCountIn && beatIndex < countInBeats
+    }))
+  }
 
   if (opts.embedCountIn) {
     let beatIndex = 0
