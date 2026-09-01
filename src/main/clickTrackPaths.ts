@@ -9,7 +9,7 @@ export function clickTrackPathForSong(program: number, title: string): string {
     .slice(0, 48)
   const clickName =
     slug === 'take-on-me'
-      ? `pc${program}-${slug}-click-up.wav`
+      ? `pc${program}-${slug}-click-span.wav`
       : `pc${program}${slug ? `-${slug}` : ''}-click-48khz-pulse.wav`
   return path.join(cubaseRenderDir(), clickName)
 }

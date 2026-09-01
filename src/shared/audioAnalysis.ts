@@ -234,7 +234,10 @@ function pickNoveltyPeaks(novelty: Float32Array, hopMs: number, minGapMs: number
     if (novelty[i] < thr) continue
     if (novelty[i] < novelty[i - 1] || novelty[i] < novelty[i + 1]) continue
     if (i - last < minGap) continue
-    times.push(i * hopMs)
+    const denom = novelty[i - 1]! - 2 * novelty[i]! + novelty[i + 1]!
+    const delta =
+      Math.abs(denom) > 1e-12 ? (0.5 * (novelty[i - 1]! - novelty[i + 1]!)) / denom : 0
+    times.push((i + Math.max(-0.49, Math.min(0.49, delta))) * hopMs)
     last = i
   }
   return times
@@ -491,33 +494,57 @@ function kickOnBeatRatio(
 }
 
 /**
- * One kick per beat: median interval is the true pulse.
- * Autocorr of smeared novelty runs a little slow, so the click drags.
+ * Count whole beats from the first kick to the last kick.
+ * BPM = 60000 * n / (last − first). That grid cannot lag by the end.
  */
-function kickMedianIoiBpm(
+function countBpmFromKickSpan(
   novelty: Float32Array,
   hopMs: number,
   seedBpm: number,
+  startMs: number,
+  endMs: number,
   minBpm: number,
   maxBpm: number
-): number {
-  const period = 60000 / Math.max(60, seedBpm)
-  const peaks = pickNoveltyPeaks(novelty, hopMs, period * 0.82)
-  const iois: number[] = []
-  for (let i = 1; i < peaks.length; i++) {
-    const d = peaks[i]! - peaks[i - 1]!
-    if (d > period * 0.82 && d < period * 1.18) iois.push(d)
+): { bpm: number; offsetMs: number } {
+  const seedPeriod = 60000 / Math.max(60, seedBpm)
+  const peaks = pickNoveltyPeaks(novelty, hopMs, seedPeriod * 0.85).filter(
+    (t) => t >= startMs && t <= endMs
+  )
+  if (peaks.length < 16) {
+    return { bpm: Math.round(seedBpm * 1000) / 1000, offsetMs: startMs }
   }
-  if (iois.length < 24) return seedBpm
-  iois.sort((a, b) => a - b)
-  const med = iois[Math.floor(iois.length / 2)] ?? period
-  const bpm = 60000 / med
-  if (bpm < minBpm || bpm > maxBpm) return seedBpm
-  return Math.round(bpm * 1000) / 1000
+  let first = peaks[0]!
+  for (let i = 0; i < peaks.length - 8; i++) {
+    let ok = 0
+    for (let k = 0; k < 8; k++) {
+      const d = peaks[i + k + 1]! - peaks[i + k]!
+      if (d > seedPeriod * 0.8 && d < seedPeriod * 1.2) ok++
+    }
+    if (ok >= 6) {
+      first = peaks[i]!
+      break
+    }
+  }
+  const onGrid: number[] = []
+  for (const t of peaks) {
+    if (t < first) continue
+    const k = Math.round((t - first) / seedPeriod)
+    if (k < 0) continue
+    if (Math.abs(t - (first + k * seedPeriod)) > seedPeriod * 0.35) continue
+    if (onGrid.length > 0 && t - onGrid[onGrid.length - 1]! < seedPeriod * 0.6) continue
+    onGrid.push(t)
+  }
+  const last = onGrid[onGrid.length - 1] ?? first
+  const n = onGrid.length - 1
+  if (n < 16) {
+    return { bpm: Math.round(seedBpm * 1000) / 1000, offsetMs: first }
+  }
+  const bpm = (60000 * n) / (last - first)
+  if (bpm < minBpm || bpm > maxBpm) {
+    return { bpm: Math.round(seedBpm * 1000) / 1000, offsetMs: first }
+  }
+  return { bpm: Math.round(bpm * 1000) / 1000, offsetMs: first }
 }
-
-/** Stereo Mix / onset lag reads ~0.04% slow vs Cubase — a quarter-beat late by 3:35. */
-const CLICK_TEMPO_LEAD = 1.00041
 
 /**
  * Steady click grid from the capture: kick-band tempo, phase on the kick, even spacing.
@@ -545,21 +572,19 @@ export function trackClickBeats(
   const ac = autocorrBpm(gated, hopMs, minBpm, maxBpm)
   const refined = refineBpm(gated, hopMs, ac.bpm, 0.6, 0.005, minBpm, maxBpm)
   const finer = refineBpm(gated, hopMs, refined.bpm, 0.12, 0.001, minBpm, maxBpm)
-  let bpm = kickMedianIoiBpm(gated, hopMs, finer.bpm, minBpm, maxBpm)
-  bpm = Math.round(bpm * CLICK_TEMPO_LEAD * 1000) / 1000
-  const period = 60000 / Math.max(60, bpm)
+  const counted = countBpmFromKickSpan(
+    gated,
+    hopMs,
+    finer.bpm,
+    bounds.startMs,
+    bounds.endMs,
+    minBpm,
+    maxBpm
+  )
+  const bpm = counted.bpm
   const durationMs = (pcm.length / ANALYSIS_SAMPLE_RATE) * 1000
-  let bestOff = scoreAtBpm(gated, hopMs, bpm).offsetMs
-  let bestRatio = -1
-  for (let s = 0; s < 48; s++) {
-    const off = (s * period) / 48
-    const ratio = kickOnBeatRatio(kick, ANALYSIS_SAMPLE_RATE, bpm, off, bounds.startMs, bounds.endMs)
-    if (ratio > bestRatio) {
-      bestRatio = ratio
-      bestOff = off
-    }
-  }
-  let offsetMs = bestOff
+  let offsetMs = counted.offsetMs
+  const period = 60000 / Math.max(60, bpm)
   while (offsetMs < bounds.startMs - period * 0.05) offsetMs += period
   const beatsMs = evenBeatGrid(offsetMs, bpm, durationMs)
   return { bpm, offsetMs, beatsMs, durationMs }
@@ -741,7 +766,7 @@ export function analyzeMonoPcm(
   const bpm = tracked.bpm
   const rawOff = tracked.offsetMs
   const offsetMs = clickTracked ? clickTracked.offsetMs : pickKickPhase(bassNov, hopMs, bpm, rawOff)
-  const clickBeatsMs = clickTracked?.beatsMs
+  const clickBeatsMs = undefined
   if (clickTracked && !(durationMsOverride && durationMsOverride >= 1000)) {
     durationMs = Math.min(pcmMs, Math.round(clickTracked.durationMs))
   }

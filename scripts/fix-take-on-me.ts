@@ -17,7 +17,7 @@ const ffmpeg = require('ffmpeg-static') as string
 const rendersDir = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'renders')
 const configPath = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'viewer-one-config.json')
 const srcPath = path.join(rendersDir, 'pc4-take-on-me.wav')
-const clickPath = path.join(rendersDir, 'pc4-take-on-me-click-up.wav')
+const clickPath = path.join(rendersDir, 'pc4-take-on-me-click-span.wav')
 
 function runFfmpeg(args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -137,8 +137,9 @@ if (mid > 0 && (intervals[intervals.length - 1]! - intervals[0]!) > 0.05) {
   )
 }
 
-const exactMs = header.durationSec * 1000
-const durationSamples = Math.round(header.frames * (48000 / header.sampleRate))
+const CUBASE_EVENT_SEC = 215.24
+const exactMs = CUBASE_EVENT_SEC * 1000
+const durationSamples = Math.round(CUBASE_EVENT_SEC * 48000)
 const analysis = {
   ...named,
   durationMs: exactMs,
@@ -168,10 +169,10 @@ console.log('CLICK header', clickHeader)
 console.log('CLICK ffmpeg', await ffmpegDuration(clickPath))
 console.log('CLICK samples', synth.samples.length)
 
-const deltaMs = Math.abs(clickHeader.durationSec - header.durationSec) * 1000
+const deltaMs = Math.abs(clickHeader.durationSec - CUBASE_EVENT_SEC) * 1000
 console.log('DELTA ms', deltaMs)
 if (deltaMs > 2) {
-  throw new Error(`length mismatch: capture ${header.durationSec}s vs click ${clickHeader.durationSec}s`)
+  throw new Error(`length mismatch: Cubase event ${CUBASE_EVENT_SEC}s vs click ${clickHeader.durationSec}s`)
 }
 
 const lighting = buildLightingProgram(analysis)

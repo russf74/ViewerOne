@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.38
+
+- Take On Me click is counted from the first kick to the last kick in the recording (not a guessed onset tempo), written sample-accurate at Cubase clip length 3:35.240 so it is not stretched slower on import. File: `pc4-take-on-me-click-span.wav`. Other songs not changed.
+
 ## v6.00.37
 
 - Take On Me tempo comes from kick-to-kick timing (not a slow autocorrelation), then a tiny lead so the click does not drag behind Cubase. File: `pc4-take-on-me-click-up.wav`. Other songs not changed.

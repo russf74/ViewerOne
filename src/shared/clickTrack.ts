@@ -166,22 +166,37 @@ export function synthesizeClickTrack(
   const beep = synthesizeClickSample(sampleRate, 45, 1000, Math.min(1, opts.accentVolume + 0.05))
   const beepDown = synthesizeClickSample(sampleRate, 55, 780, 1)
 
-  const clipMs = (totalSamples / sampleRate) * 1000 - countInMs
-  const events = beatTimesWithCountIn(
-    analysis,
-    opts.countInBars,
-    opts.beatsPerBar,
-    Math.max(songMs, clipMs),
-    opts.embedCountIn
-  )
-  for (const ev of events) {
-    const offsetMs = ev.atMs + countInMs
-    if (offsetMs < 0) continue
-    const startSample = Math.round((offsetMs / 1000) * sampleRate)
-    if (startSample >= mix.length) continue
-    const click = ev.countIn ? (ev.accent ? beepDown : beep) : ev.accent ? accent : regular
+  const tracked = analysis.clickBeatsMs?.filter((t) => t >= 0)
+  const useSampleGrid = !(tracked && tracked.length >= 8)
+
+  const mixClick = (startSample: number, countIn: boolean, accentHit: boolean): void => {
+    if (startSample < 0 || startSample >= mix.length) return
+    const click = countIn ? (accentHit ? beepDown : beep) : accentHit ? accent : regular
     for (let i = 0; i < click.length && startSample + i < mix.length; i++) {
-      mix[startSample + i] += click[i]
+      mix[startSample + i] += click[i]!
+    }
+  }
+
+  if (useSampleGrid) {
+    const origin = (firstDownbeat / 1000) * sampleRate
+    const periodSamples = (60 * sampleRate) / Math.max(60, analysis.bpm)
+    for (let i = 0; ; i++) {
+      const startSample = Math.round(origin + i * periodSamples)
+      if (startSample >= mix.length) break
+      mixClick(startSample, opts.embedCountIn && i < countInBeats, i % opts.accentEvery === 0)
+    }
+  } else {
+    const clipMs = (totalSamples / sampleRate) * 1000 - countInMs
+    const events = beatTimesWithCountIn(
+      analysis,
+      opts.countInBars,
+      opts.beatsPerBar,
+      Math.max(songMs, clipMs),
+      opts.embedCountIn
+    )
+    for (const ev of events) {
+      const offsetMs = ev.atMs + countInMs
+      mixClick(Math.round((offsetMs / 1000) * sampleRate), ev.countIn, ev.accent)
     }
   }
 
