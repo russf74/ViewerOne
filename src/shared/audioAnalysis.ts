@@ -491,28 +491,33 @@ function kickOnBeatRatio(
 }
 
 /**
- * Keep the first beat where it is and pick the BPM that still sits on the
- * kick in the last 25s. Autocorr alone can leave a quarter-beat of drift by 3:35.
+ * One kick per beat: median interval is the true pulse.
+ * Autocorr of smeared novelty runs a little slow, so the click drags.
  */
-function fitBpmToEndKicks(
-  kick: Float32Array,
-  sampleRate: number,
+function kickMedianIoiBpm(
+  novelty: Float32Array,
+  hopMs: number,
   seedBpm: number,
-  originMs: number,
-  endMs: number
+  minBpm: number,
+  maxBpm: number
 ): number {
-  const tailFrom = Math.max(0, endMs - 25000)
-  let bestBpm = seedBpm
-  let best = -1
-  for (let bpm = seedBpm - 0.18; bpm <= seedBpm + 0.18 + 1e-12; bpm += 0.005) {
-    const ratio = kickOnBeatRatio(kick, sampleRate, bpm, originMs, tailFrom, endMs)
-    if (ratio > best) {
-      best = ratio
-      bestBpm = bpm
-    }
+  const period = 60000 / Math.max(60, seedBpm)
+  const peaks = pickNoveltyPeaks(novelty, hopMs, period * 0.82)
+  const iois: number[] = []
+  for (let i = 1; i < peaks.length; i++) {
+    const d = peaks[i]! - peaks[i - 1]!
+    if (d > period * 0.82 && d < period * 1.18) iois.push(d)
   }
-  return Math.round(bestBpm * 1000) / 1000
+  if (iois.length < 24) return seedBpm
+  iois.sort((a, b) => a - b)
+  const med = iois[Math.floor(iois.length / 2)] ?? period
+  const bpm = 60000 / med
+  if (bpm < minBpm || bpm > maxBpm) return seedBpm
+  return Math.round(bpm * 1000) / 1000
 }
+
+/** Stereo Mix / onset lag reads ~0.04% slow vs Cubase — a quarter-beat late by 3:35. */
+const CLICK_TEMPO_LEAD = 1.00041
 
 /**
  * Steady click grid from the capture: kick-band tempo, phase on the kick, even spacing.
@@ -526,7 +531,7 @@ export function trackClickBeats(
   const pcm = peakNormalize(resampled, peakOf(resampled))
   const bounds = pcmAudibleBounds(pcm, ANALYSIS_SAMPLE_RATE)
   const kick = kickBandPcm(pcm, ANALYSIS_SAMPLE_RATE)
-  const hop = 256
+  const hop = 128
   const hopMs = (hop / ANALYSIS_SAMPLE_RATE) * 1000
   const flux = spectralFlux(kick, 1024, hop)
   const energyNov = energyNovelty(frameEnergy(kick, hop))
@@ -540,8 +545,9 @@ export function trackClickBeats(
   const ac = autocorrBpm(gated, hopMs, minBpm, maxBpm)
   const refined = refineBpm(gated, hopMs, ac.bpm, 0.6, 0.005, minBpm, maxBpm)
   const finer = refineBpm(gated, hopMs, refined.bpm, 0.12, 0.001, minBpm, maxBpm)
-  let bpm = Math.round(finer.bpm * 1000) / 1000
-  let period = 60000 / Math.max(60, bpm)
+  let bpm = kickMedianIoiBpm(gated, hopMs, finer.bpm, minBpm, maxBpm)
+  bpm = Math.round(bpm * CLICK_TEMPO_LEAD * 1000) / 1000
+  const period = 60000 / Math.max(60, bpm)
   const durationMs = (pcm.length / ANALYSIS_SAMPLE_RATE) * 1000
   let bestOff = scoreAtBpm(gated, hopMs, bpm).offsetMs
   let bestRatio = -1
@@ -555,7 +561,6 @@ export function trackClickBeats(
   }
   let offsetMs = bestOff
   while (offsetMs < bounds.startMs - period * 0.05) offsetMs += period
-  bpm = fitBpmToEndKicks(kick, ANALYSIS_SAMPLE_RATE, bpm, offsetMs, bounds.endMs)
   const beatsMs = evenBeatGrid(offsetMs, bpm, durationMs)
   return { bpm, offsetMs, beatsMs, durationMs }
 }

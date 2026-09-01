@@ -17,7 +17,7 @@ const ffmpeg = require('ffmpeg-static') as string
 const rendersDir = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'renders')
 const configPath = path.join(process.env.APPDATA ?? os.homedir(), 'viewer-one', 'viewer-one-config.json')
 const srcPath = path.join(rendersDir, 'pc4-take-on-me.wav')
-const clickPath = path.join(rendersDir, 'pc4-take-on-me-click-tight.wav')
+const clickPath = path.join(rendersDir, 'pc4-take-on-me-click-up.wav')
 
 function runFfmpeg(args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {

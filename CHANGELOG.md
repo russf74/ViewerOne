@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.37
+
+- Take On Me tempo comes from kick-to-kick timing (not a slow autocorrelation), then a tiny lead so the click does not drag behind Cubase. File: `pc4-take-on-me-click-up.wav`. Other songs not changed.
+
 ## v6.00.36
 
 - Take On Me click keeps the first beat and speeds the grid so the last kick is still on it (the last file drifted about a quarter-beat by the end). File: `pc4-take-on-me-click-tight.wav`. Other songs not changed.
