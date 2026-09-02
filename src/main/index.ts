@@ -546,7 +546,13 @@ async function runLightingAnalyzeFromCubase(
     },
     waitForProgramChange: (from) => stepArrangerUntilChanged('next', from, false),
     getLatestProgram: () => latestSongProgram,
-    restoreProgram: (program) => restoreArrangerToProgram(program, false, []),
+    restoreProgram: (program) => {
+      const order = getState(store)
+        .setlist.filter((r) => r.arrangerIndex != null)
+        .sort((a, b) => (a.arrangerIndex ?? 0) - (b.arrangerIndex ?? 0))
+        .map((r) => r.program)
+      return restoreArrangerToProgram(program, false, order)
+    },
     sendAnalyzePlay,
     sendAnalyzeStop,
     withLiveMix: async (fn) => {

@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.49
+
+- Cubase capture was sending an extra Next after each song (playback already moved on), so it skipped every other track and stopped at 22. It now keeps the good WAVs and fills the gaps.
+
 ## v6.00.48
 
 - Overnight Cubase capture walks the arranger first-to-last with MIDI Next. SOUNDCHECK / INTRO / OUTRO are skipped (never played). Title-clicking is gone so it cannot jump back to soundcheck.

@@ -361,47 +361,94 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
       exportMoisesWav(row, renderPath)
     }
 
-    analyzeLog('rewind arranger to first event (no playback)')
-    await cubasePsStop()
-    await deps.rewindArranger()
-    await deps.sleep(600)
-    let pc = deps.getLatestProgram()
-    analyzeLog(`after rewind Cubase PC ${pc ?? 'none'}`)
+    const alreadyHaveWav = (row: SetlistItem): boolean =>
+      moisesWavExists(moisesWavPath(row.program, row.title))
+    const recaptureOne = Boolean(onlyTitle || onlyProgram)
+    const missingPlanned = (): SetlistItem[] =>
+      planned.filter((r) => recaptureOne || !alreadyHaveWav(r)).slice(0, limit)
 
-    const visited = new Set<number>()
-    let songNumber = 0
-    while (pc != null && !deps.isCancelled() && captured < limit) {
-      if (visited.has(pc)) {
-        analyzeLog(`arranger wrapped at PC ${pc} — done`)
-        break
-      }
-      visited.add(pc)
-      const row = rowForProgram(pc)
-      const label = row?.title ?? '?'
-      if (!row || !shouldCaptureSong(row)) {
-        analyzeLog(`skip PC ${pc} “${label}” — no playback (SOUNDCHECK/INTRO/OUTRO)`)
-      } else if (wantsCapture(row)) {
-        songNumber++
-        analyzeLog(`landed ${row.arrangerIndex}. PC ${pc} “${label}” — capture`)
-        await captureCurrentSong(row, songNumber)
-        await cubasePsStop()
-        await deps.sleep(400)
-      } else {
-        analyzeLog(`skip PC ${pc} “${label}” — filtered`)
-      }
+    const walkArranger = async (): Promise<void> => {
+      analyzeLog('rewind arranger to first event (no playback)')
+      await cubasePsStop()
+      await deps.rewindArranger()
+      await deps.sleep(600)
+      let pc = deps.getLatestProgram()
+      analyzeLog(`after rewind Cubase PC ${pc ?? 'none'}`)
 
-      const from = deps.getLatestProgram() ?? pc
-      const next = await deps.waitForProgramChange(from)
-      if (next == null) {
-        analyzeLog('end of arranger (Next did not change song)')
-        break
+      const visited = new Set<number>()
+      while (pc != null && !deps.isCancelled() && captured < limit) {
+        if (visited.has(pc)) {
+          analyzeLog(`arranger wrapped at PC ${pc}`)
+          break
+        }
+        visited.add(pc)
+        const row = rowForProgram(pc)
+        const label = row?.title ?? '?'
+        if (!row || !shouldCaptureSong(row)) {
+          analyzeLog(`skip PC ${pc} “${label}” — no playback (SOUNDCHECK/INTRO/OUTRO)`)
+        } else if (wantsCapture(row) && !recaptureOne && alreadyHaveWav(row)) {
+          analyzeLog(`have wav PC ${pc} “${label}” — keep, step Next`)
+        } else if (wantsCapture(row)) {
+          songNumber++
+          analyzeLog(`landed ${row.arrangerIndex}. PC ${pc} “${label}” — capture`)
+          await captureCurrentSong(row, songNumber)
+          await cubasePsStop()
+          await deps.sleep(400)
+        } else {
+          analyzeLog(`skip PC ${pc} “${label}” — filtered`)
+        }
+
+        // Playback often advances Cubase to the next event. Another Next would skip a song.
+        const already = deps.getLatestProgram()
+        if (already != null && already !== pc) {
+          analyzeLog(`Cubase already on PC ${already} — no extra Next`)
+          pc = already
+          continue
+        }
+        const next = await deps.waitForProgramChange(pc)
+        if (next == null) {
+          analyzeLog('end of arranger (Next did not change song)')
+          break
+        }
+        pc = next
       }
-      pc = next
     }
 
+    let songNumber = 0
+    await walkArranger()
+
+    let gaps = missingPlanned()
+    if (gaps.length > 0 && !deps.isCancelled()) {
+      analyzeLog(
+        `gaps after walk: ${gaps.map((r) => `PC${r.program} ${r.title}`).join('; ')} — rewind and retry`
+      )
+      await walkArranger()
+      gaps = missingPlanned()
+    }
+    for (const row of gaps) {
+      if (deps.isCancelled() || captured >= limit) break
+      analyzeLog(`gap restore PC ${row.program} “${row.title}”`)
+      await cubasePsStop()
+      await deps.restoreProgram(row.program)
+      await deps.sleep(500)
+      if (deps.getLatestProgram() !== row.program) {
+        analyzeLog(`gap restore failed — Cubase is PC ${deps.getLatestProgram()}`)
+        continue
+      }
+      songNumber++
+      await captureCurrentSong(row, songNumber)
+      await cubasePsStop()
+    }
+    gaps = missingPlanned()
+    if (gaps.length) {
+      analyzeLog(`still missing: ${gaps.map((r) => `PC${r.program} ${r.title}`).join('; ')}`)
+    }
+
+    const haveCount = planned.length - missingPlanned().length
     const doneMsg =
-      captured > 0
-        ? `Done — ${captured} song(s) analyzed from Cubase renders. WAVs in Desktop\\Moises-upload.`
+      haveCount > 0
+        ? `Done — ${haveCount}/${planned.length} song WAVs in Desktop\\Moises-upload` +
+          (gaps.length ? ` (missing ${gaps.length}).` : '.')
         : 'Finished — no songs captured (check Stereo Mix + Cubase output).'
     analyzeLog(doneMsg)
     deps.setScan({
