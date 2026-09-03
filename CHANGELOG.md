@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.50
+
+- Cubase capture can record SOUNDCHECK when that song is requested (overnight still skips it). SOUNDCHECK (Hungry) WAV goes to `Desktop\Moises-upload` for a click track. Capture uses Space only so MIDI Start cannot toggle playback off.
+
 ## v6.00.49
 
 - Cubase capture was sending an extra Next after each song (playback already moved on), so it skipped every other track and stopped at 22. It now keeps the good WAVs and fills the gaps.

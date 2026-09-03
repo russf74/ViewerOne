@@ -82,9 +82,13 @@ function wavHeader(filePath: string): { sampleRate: number; durationSec: number 
   }
 }
 
-function shouldCaptureSong(row: SetlistItem): boolean {
+function isSoundcheckTitle(title: string): boolean {
+  return title.toUpperCase().includes('SOUNDCHECK')
+}
+
+function shouldCaptureSong(row: SetlistItem, allowSoundcheck = false): boolean {
   const t = row.title.toUpperCase()
-  if (t.includes('SOUNDCHECK')) return false
+  if (isSoundcheckTitle(row.title) && !allowSoundcheck) return false
   if (t.startsWith('INTRO') || t.startsWith('OUTRO')) return false
   return row.program >= 1 && row.program <= 119
 }
@@ -132,7 +136,8 @@ async function captureRenderedPlayback(
         onError: (msg) => console.warn('[ViewerOne] Loopback record:', msg)
       })
       await deps.sleep(250)
-      deps.sendAnalyzePlay()
+      // Space only. MIDI Start plus Space toggles transport off when MIDI Start
+      // actually rolls (SOUNDCHECK after rewind) and records silence.
       await cubasePsPlay()
       await deps.sleep(durationMs + 800)
       deps.sendAnalyzeStop()
@@ -246,10 +251,17 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
     const wantTitle = onlyTitle
       ? onlyTitle.toLowerCase().replace(/[^a-z0-9]+/g, '')
       : ''
+    const titleKey = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, '')
+    const allowSoundcheck = (row: SetlistItem): boolean => {
+      if (!isSoundcheckTitle(row.title)) return false
+      if (onlyProgram && row.program === onlyProgram) return true
+      if (wantTitle && titleKey(row.title) === wantTitle) return true
+      return false
+    }
     const wantsCapture = (row: SetlistItem): boolean => {
-      if (!shouldCaptureSong(row) || row.arrangerIndex == null) return false
+      if (!shouldCaptureSong(row, allowSoundcheck(row)) || row.arrangerIndex == null) return false
       if (onlyProgram && row.program !== onlyProgram) return false
-      if (wantTitle && row.title.toLowerCase().replace(/[^a-z0-9]+/g, '') !== wantTitle) {
+      if (wantTitle && titleKey(row.title) !== wantTitle) {
         return false
       }
       return true
@@ -271,7 +283,8 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
         walkOrder.map((r) => `${r.arrangerIndex}. PC${r.program} ${r.title}`).join(' → ')
     )
     analyzeLog(
-      `capture ${Math.min(limit, planned.length)} song(s) (skip SOUNDCHECK/INTRO/OUTRO, no title-click)`
+      `capture ${Math.min(limit, planned.length)} song(s) ` +
+        `(${planned.some((r) => isSoundcheckTitle(r.title)) ? 'include SOUNDCHECK, skip INTRO/OUTRO' : 'skip SOUNDCHECK/INTRO/OUTRO'}, no title-click)`
     )
 
     let captured = 0
@@ -350,15 +363,23 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
         return
       }
 
+      exportMoisesWav(row, renderPath)
+
       deps.setScan({ phase: 'analyzing', message: `Song ${index}: “${title}” — analyzing render…` })
       const analyzed = await analyzeRenderFile(deps, row, renderPath)
       if (!analyzed) {
-        analyzeLog(`FAILED analyze “${title}”`)
+        deps.updateRow(row.id, {
+          audioSource: 'cubase-render',
+          cubaseRenderPath: renderPath,
+          cubaseRenderCapturedAt: new Date().toISOString()
+        })
+        captured++
+        deps.setScan({ collected: captured })
+        analyzeLog(`FAILED analyze “${title}” — wav kept`)
         return
       }
 
       persistAnalysis(row, renderPath, analyzed, row.length)
-      exportMoisesWav(row, renderPath)
     }
 
     const alreadyHaveWav = (row: SetlistItem): boolean =>
@@ -384,7 +405,7 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
         visited.add(pc)
         const row = rowForProgram(pc)
         const label = row?.title ?? '?'
-        if (!row || !shouldCaptureSong(row)) {
+        if (!row || !shouldCaptureSong(row, allowSoundcheck(row))) {
           analyzeLog(`skip PC ${pc} “${label}” — no playback (SOUNDCHECK/INTRO/OUTRO)`)
         } else if (wantsCapture(row) && !recaptureOne && alreadyHaveWav(row)) {
           analyzeLog(`have wav PC ${pc} “${label}” — keep, step Next`)
