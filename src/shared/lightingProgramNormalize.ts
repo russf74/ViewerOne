@@ -20,6 +20,18 @@ function normalizeDmxOverride(raw: unknown): DmxCueOverride | undefined {
   if (r.domePatternId !== undefined && Number.isFinite(Number(r.domePatternId))) {
     out.domePatternId = clampLedPatternId(r.domePatternId)
   }
+  if (r.strobePatternId !== undefined && Number.isFinite(Number(r.strobePatternId))) {
+    out.strobePatternId = clampLedPatternId(r.strobePatternId)
+  }
+  if (r.strobeDimmer !== undefined && Number.isFinite(Number(r.strobeDimmer))) {
+    out.strobeDimmer = Math.max(0, Math.min(255, Math.round(Number(r.strobeDimmer))))
+  }
+  if (r.strobeRate !== undefined && Number.isFinite(Number(r.strobeRate))) {
+    out.strobeRate = Math.max(0, Math.min(255, Math.round(Number(r.strobeRate))))
+  }
+  if (r.strobeWhite !== undefined && Number.isFinite(Number(r.strobeWhite))) {
+    out.strobeWhite = Math.max(0, Math.min(255, Math.round(Number(r.strobeWhite))))
+  }
   if (r.fixture1Mode === 'off' || r.fixture1Mode === 'on' || r.fixture1Mode === 'sound') {
     out.fixture1Mode = r.fixture1Mode
   }

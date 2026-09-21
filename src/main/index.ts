@@ -1192,7 +1192,8 @@ function pushDmxFrame(): void {
     mergeDmxCueOverrides(
       dmxUniverseForLedPattern(patternId, tMs, dmxStickBrightnessScale, {
         stickPatternId: dmxCueOverride?.stickPatternId,
-        domePatternId: dmxCueOverride?.domePatternId
+        domePatternId: dmxCueOverride?.domePatternId,
+        strobePatternId: dmxCueOverride?.strobePatternId
       }),
       dmxCueOverride,
       getState(store).dmxFixture1Channel,

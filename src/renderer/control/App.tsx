@@ -962,9 +962,10 @@ export function App() {
                     ) : null}
                   </div>
                   <p className="settings-hint">
-                    DMXIS is always on: Freedom Stick 48-CH pixels at 97–144, PowerDome 10-CH at 1.
-                    Set each stick to 48CH / d097 (not 8-CH). PC 125 blackout, PC 126 dim royal blue, PC 127
-                    follows ESP (random rotates every 10s).
+                    DMXIS is always on: PowerDome 10-CH at 1–10, Betopper LF4808 strobes 15-CH at
+                    11–25, Freedom Stick 48-CH pixels at 97–144. Set strobes to 15CH / d011 (not
+                    152-CH). Set each stick to 48CH / d097 (not 8-CH). PC 125 blackout, PC 126 dim
+                    royal blue, PC 127 follows ESP (random rotates every 10s).
                   </p>
                   <LightingStudio
                     row={

@@ -1,5 +1,5 @@
 import type { DmxFixtureMode } from './dmx.js'
-import { complementaryDomePatternId, complementaryStickPatternId } from './dmx.js'
+import { complementaryDomePatternId, complementaryStickPatternId, complementaryStrobePatternId } from './dmx.js'
 import type { SongAudioAnalysis } from './audioAnalysis.js'
 import { snapToBarMs } from './audioAnalysis.js'
 import { clampLedPatternId } from './ledPatterns.js'
@@ -14,6 +14,14 @@ export type DmxCueOverride = {
   stickPatternId?: number
   /** PowerDome colour/spin look (defaults to a complement of the ESP pattern). */
   domePatternId?: number
+  /** LF4808 strobe look (defaults to a complement of the ESP pattern). */
+  strobePatternId?: number
+  /** LF4808 master dimmer 0–255. */
+  strobeDimmer?: number
+  /** LF4808 CH11 shutter/strobe 0–255 (0 = solid). */
+  strobeRate?: number
+  /** LF4808 white LED 0–255. */
+  strobeWhite?: number
   fixture1Mode?: DmxFixtureMode
   fixture2Mode?: DmxFixtureMode
 }
@@ -85,10 +93,22 @@ function dmxLookForSection(label: string, energy: number): 'off' | 'idle' | 'liv
   return 'live'
 }
 
-function dmxForSection(espPatternId: number, energy: number): DmxCueOverride {
+function dmxForSection(espPatternId: number, energy: number, label = 'unknown'): DmxCueOverride {
+  const hot = energy >= 0.62 || label === 'drop' || label === 'chorus'
+  const hush = energy < 0.22 && (label === 'outro' || label === 'breakdown')
+  const strobePatternId = hush
+    ? 21
+    : hot
+      ? label === 'drop'
+        ? 18
+        : label === 'chorus'
+          ? 16
+          : 11
+      : complementaryStrobePatternId(espPatternId)
   return {
     stickPatternId: complementaryStickPatternId(espPatternId),
     domePatternId: complementaryDomePatternId(espPatternId),
+    strobePatternId,
     stickBrightnessScale: energy > 0.72 ? 1 : energy > 0.4 ? 0.78 : 0.5
   }
 }
@@ -133,7 +153,7 @@ export function buildLightingProgram(
       ledPatternId: patternId,
       label,
       dmxLook: dmxLookForSection(label, section.energy),
-      dmx: dmxForSection(patternId, section.energy)
+      dmx: dmxForSection(patternId, section.energy, label)
     })
   }
 
@@ -144,7 +164,7 @@ export function buildLightingProgram(
       ledPatternId: 2,
       label: 'start',
       dmxLook: 'live',
-      dmx: dmxForSection(2, 0.45)
+      dmx: dmxForSection(2, 0.45, 'start')
     })
   }
 

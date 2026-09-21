@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.51
+
+- Betopper LF4808 strobes (15-CH at 11–25) run the fixture’s RGB chases, white-bar flow, 63 built-in animations, and strobe overlay — same idea as the sticks and spinning dome. Verses stay in colour motion; choruses and drops add white flash. Idle stays dark.
+
 ## v6.00.50
 
 - Cubase capture can record SOUNDCHECK when that song is requested (overnight still skips it). SOUNDCHECK (Hungry) WAV goes to `Desktop\Moises-upload` for a click track. Capture uses Space only so MIDI Start cannot toggle playback off.
