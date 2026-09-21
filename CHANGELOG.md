@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.52
+
+- LF4808 strobe overlay stays fast (no slow whole-unit black blink that looked like a fault).
+
 ## v6.00.51
 
 - Betopper LF4808 strobes (15-CH at 11–25) run the fixture’s RGB chases, white-bar flow, 63 built-in animations, and strobe overlay — same idea as the sticks and spinning dome. Verses stay in colour motion; choruses and drops add white flash. Idle stays dark.

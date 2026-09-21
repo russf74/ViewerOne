@@ -1,5 +1,5 @@
 import type { DmxCueOverride } from './lightingProgram.js'
-import { dmxValueForMode, DMX_STROBE_START } from './dmx.js'
+import { dmxValueForMode, DMX_STROBE_START, lf4808Strobe } from './dmx.js'
 
 type DmxChannelValue = { channel: number; value: number }
 
@@ -31,7 +31,7 @@ export function mergeDmxCueOverrides(
     m.set(DMX_STROBE_START, clampByte(override.strobeDimmer))
   }
   if (override.strobeRate !== undefined) {
-    m.set(DMX_STROBE_START + 10, clampByte(override.strobeRate))
+    m.set(DMX_STROBE_START + 10, lf4808Strobe(override.strobeRate))
   }
   if (override.strobeWhite !== undefined) {
     m.set(DMX_STROBE_START + 4, clampByte(override.strobeWhite))

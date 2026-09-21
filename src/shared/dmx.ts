@@ -222,7 +222,7 @@ function encodeStrobe15(start: number, cue: StrobeCue): DmxChannelValue[] {
     setRel(start, 7, cue.rgbSpeed),
     setRel(start, 8, lf4808Program(cue.wPattern)),
     setRel(start, 9, cue.wSpeed),
-    setRel(start, 10, cue.strobe),
+    setRel(start, 10, lf4808Strobe(cue.strobe)),
     setRel(start, 11, lf4808Program(cue.rgbwPattern)),
     setRel(start, 12, cue.rgbwSpeed),
     setRel(start, 13, cue.bgColor),
@@ -230,8 +230,16 @@ function encodeStrobe15(start: number, cue: StrobeCue): DmxChannelValue[] {
   ])
 }
 
+/** P000 = off; low P values blink the whole head ~1 Hz and look broken. Keep flashes fast. */
+const LF4808_STROBE_MIN = 205
+
+export function lf4808Strobe(rate: number): number {
+  if (rate <= 0) return 0
+  return Math.max(LF4808_STROBE_MIN, Math.min(255, Math.round(rate)))
+}
+
 function strobeOverlay(tMs: number, rate: number, onMs = 380, periodMs = 1600): number {
-  return strobeBurstOn(tMs, onMs, periodMs) ? rate : 0
+  return strobeBurstOn(tMs, onMs, periodMs) ? lf4808Strobe(rate) : 0
 }
 
 /**
@@ -337,7 +345,7 @@ function renderStrobe15(patternId: number, tMs: number): StrobeCue {
         rgbSpeed: 190,
         wPattern: 22,
         wSpeed: 170,
-        strobe: strobeOverlay(t, 70, 220, 2000)
+        strobe: strobeOverlay(t, 210, 220, 2000)
       })
     case 9:
       return lfCue({
@@ -397,7 +405,7 @@ function renderStrobe15(patternId: number, tMs: number): StrobeCue {
         rgbSpeed: 160,
         wPattern: lf4808Cycle(t, 500, 30, 50),
         wSpeed: 255,
-        strobe: strobeBurstOn(t, 140, 500) ? 90 : 0
+        strobe: strobeBurstOn(t, 140, 500) ? 220 : 0
       })
     case 14:
       return lfCue({
@@ -464,7 +472,7 @@ function renderStrobe15(patternId: number, tMs: number): StrobeCue {
         rgbSpeed: 240,
         wPattern: 20,
         wSpeed: 200,
-        strobe: strobeOverlay(t, 80, 200, 1100)
+        strobe: strobeOverlay(t, 215, 200, 1100)
       })
     case 20:
       return lfCue({
