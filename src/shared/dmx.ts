@@ -251,17 +251,19 @@ function renderStrobe15(patternId: number, tMs: number): StrobeCue {
   const t = Math.max(0, tMs)
   switch (id) {
     case 0:
-      // Knight Rider idle — barely on, crawl-speed chase, so the heads still look alive.
+      // Knight Rider idle — static dim blue, no M/N/q chases.
       return lfCue({
         dimmer: 16,
         r: 18,
         g: 28,
         b: 160,
         w: 0,
-        rgbPattern: 3,
-        rgbSpeed: 10,
+        rgbPattern: 0,
+        rgbSpeed: 0,
         wPattern: 0,
-        wSpeed: 0
+        wSpeed: 0,
+        rgbwPattern: 0,
+        rgbwSpeed: 0
       })
     case 99:
       return STROBE_OFF

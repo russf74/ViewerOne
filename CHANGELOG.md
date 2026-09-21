@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.54
+
+- Knight Rider Betoppers stay static dim blue (no RGB colour rotate). Dome is unchanged.
+
 ## v6.00.53
 
 - Knight Rider keeps the dome and LF4808 strobes almost off: a slow royal-blue crawl, just enough to see they are alive.
