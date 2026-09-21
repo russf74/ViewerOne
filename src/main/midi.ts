@@ -441,9 +441,11 @@ export class MidiService {
         // ViewerOne that gets echoed/reflected back by the mixer is visible here even if
         // downstream logic in index.ts ends up ignoring it (e.g. echo-suppression window).
         safeCall('mixer-cc', () => {
-          console.log(
-            `[ViewerOne] MIDI: <<< received from mixer input "${name}" @ ${new Date().toISOString()} — ch ${msg.channel + 1} / CC ${msg.controller} / val ${msg.value}`
-          )
+          if (isMixerMuteCc(msg.controller)) {
+            console.log(
+              `[ViewerOne] MIDI: <<< mixer mute "${name}" ch ${msg.channel + 1} CC ${msg.controller} val ${msg.value}`
+            )
+          }
           onCc({ channel: msg.channel, controller: msg.controller, value: msg.value })
         })
       })
@@ -533,18 +535,13 @@ export class MidiService {
     const cc = Math.max(0, Math.min(127, controller))
     const v = Math.max(0, Math.min(127, value))
     const isOpenBefore = this.mixerOutput.isPortOpen()
-    console.log(
-      `[ViewerOne] MIDI: >>> about to send to mixer output @ ${new Date().toISOString()} — ${tag} (wire ch0=${ch}) — isPortOpen=${isOpenBefore}`
-    )
     try {
       if (!isOpenBefore) {
         this.dropMixerOutput('port not open before send')
         return
       }
       this.mixerOutput.send('cc', { controller: cc, value: v, channel: ch })
-      console.log(
-        `[ViewerOne] MIDI: <<< mixerOutput.send() returned normally @ ${new Date().toISOString()} — ${tag} — isPortOpen after=${this.mixerOutput.isPortOpen()}`
-      )
+      console.log(`[ViewerOne] MIDI: mixer TX ${tag}`)
     } catch (err) {
       console.warn(`[ViewerOne] MIDI: !!! mixerOutput.send() THREW for ${tag} —`, err)
       this.dropMixerOutput(err)

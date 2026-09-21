@@ -21,6 +21,23 @@ import {
 
 type AppStore = Store<AppState>
 
+/** Mute flags change many times a second in a MIDI loop — never rewrite the whole setlist JSON that often. */
+const MUTE_PERSIST_KEYS: readonly (keyof AppState)[] = [
+  'fxMuted',
+  'allMuted',
+  'synthMuted',
+  'pianoMuted'
+]
+const MUTE_PERSIST_DEBOUNCE_MS = 2000
+
+let memory: AppState | null = null
+let persistStore: AppStore | null = null
+let mutePersistTimer: ReturnType<typeof setTimeout> | null = null
+
+function isMutePersistKey(key: keyof AppState): boolean {
+  return (MUTE_PERSIST_KEYS as readonly string[]).includes(key)
+}
+
 const defaults: AppState = {
   fxMuted: false,
   allMuted: false,
@@ -76,12 +93,80 @@ function stripViewerOneConfigBom(): void {
   }
 }
 
+function readStateFromDisk(store: AppStore): AppState {
+  const ledExternalPower = Boolean(store.get('ledExternalPower') ?? false)
+  const ledBrightness = clampLedBrightness(
+    store.get('ledBrightness') ?? LED_DEFAULT_BRIGHTNESS,
+    ledExternalPower
+  )
+  return {
+    fxMuted: Boolean(store.get('fxMuted')),
+    allMuted: Boolean(store.get('allMuted')),
+    synthMuted: Boolean(store.get('synthMuted')),
+    pianoMuted: Boolean(store.get('pianoMuted')),
+    setlist: normalizeSetlist(store.get('setlist')),
+    currentSongId: (store.get('currentSongId') as string | null | undefined) ?? null,
+    esp32Enabled: Boolean(store.get('esp32Enabled')),
+    ledBrightness,
+    ledExternalPower,
+    dmxEnabled: Boolean(store.get('dmxEnabled')),
+    dmxFixture1Channel: clampDmxChannel(store.get('dmxFixture1Channel'), 97),
+    dmxFixture1Mode: normalizeDmxFixtureMode(store.get('dmxFixture1Mode'), 'sound'),
+    dmxFixture2Channel: clampDmxChannel(store.get('dmxFixture2Channel'), 1),
+    dmxFixture2Mode: normalizeDmxFixtureMode(store.get('dmxFixture2Mode'), 'sound'),
+    arrangerMidi: normalizeArrangerMidi(store.get('arrangerMidi')),
+    transportMidi: normalizeTransportMidi(store.get('transportMidi')),
+    countdownStartLeadMs: clampCountdownStartLeadMs(store.get('countdownStartLeadMs'), 2500),
+    lightingDirectorEnabled: Boolean(store.get('lightingDirectorEnabled') ?? false),
+    liveAudioSyncEnabled: Boolean(store.get('liveAudioSyncEnabled') ?? false),
+    lightingLoopbackDevice:
+      typeof store.get('lightingLoopbackDevice') === 'string' &&
+      String(store.get('lightingLoopbackDevice')).trim()
+        ? String(store.get('lightingLoopbackDevice')).trim()
+        : 'Stereo Mix',
+    lightingCaptureMode:
+      store.get('lightingCaptureMode') === 'export' ? 'export' : 'playback',
+    cubaseExportFolder:
+      typeof store.get('cubaseExportFolder') === 'string' &&
+      String(store.get('cubaseExportFolder')).trim()
+        ? String(store.get('cubaseExportFolder')).trim()
+        : undefined
+  }
+}
+
+function scheduleMutePersist(store: AppStore): void {
+  if (mutePersistTimer) clearTimeout(mutePersistTimer)
+  mutePersistTimer = setTimeout(() => {
+    mutePersistTimer = null
+    flushMutePersist(store)
+  }, MUTE_PERSIST_DEBOUNCE_MS)
+}
+
+/** Write pending mute flags to disk (call on quit). */
+export function flushMutePersist(store?: AppStore): void {
+  const s = store ?? persistStore
+  if (mutePersistTimer) {
+    clearTimeout(mutePersistTimer)
+    mutePersistTimer = null
+  }
+  if (!s || !memory) return
+  s.set({
+    fxMuted: memory.fxMuted,
+    allMuted: memory.allMuted,
+    synthMuted: memory.synthMuted,
+    pianoMuted: memory.pianoMuted
+  })
+}
+
 export function createAppStore(): AppStore {
   stripViewerOneConfigBom()
-  return new Store<AppState>({
+  const store = new Store<AppState>({
     name: 'viewer-one-config',
     defaults
   })
+  persistStore = store
+  memory = readStateFromDisk(store)
+  return store
 }
 
 function normalizeSetlist(list: unknown): SetlistItem[] {
@@ -166,51 +251,21 @@ export function assignLedPatternsByOrder(items: SetlistItem[]): SetlistItem[] {
 }
 
 export function getState(store: AppStore): AppState {
-  const ledExternalPower = Boolean(store.get('ledExternalPower') ?? false)
-  const ledBrightness = clampLedBrightness(
-    store.get('ledBrightness') ?? LED_DEFAULT_BRIGHTNESS,
-    ledExternalPower
-  )
-  return {
-    fxMuted: Boolean(store.get('fxMuted')),
-    allMuted: Boolean(store.get('allMuted')),
-    synthMuted: Boolean(store.get('synthMuted')),
-    pianoMuted: Boolean(store.get('pianoMuted')),
-    setlist: normalizeSetlist(store.get('setlist')),
-    currentSongId: (store.get('currentSongId') as string | null | undefined) ?? null,
-    esp32Enabled: Boolean(store.get('esp32Enabled')),
-    ledBrightness,
-    ledExternalPower,
-    dmxEnabled: Boolean(store.get('dmxEnabled')),
-    dmxFixture1Channel: clampDmxChannel(store.get('dmxFixture1Channel'), 97),
-    dmxFixture1Mode: normalizeDmxFixtureMode(store.get('dmxFixture1Mode'), 'sound'),
-    dmxFixture2Channel: clampDmxChannel(store.get('dmxFixture2Channel'), 1),
-    dmxFixture2Mode: normalizeDmxFixtureMode(store.get('dmxFixture2Mode'), 'sound'),
-    arrangerMidi: normalizeArrangerMidi(store.get('arrangerMidi')),
-    transportMidi: normalizeTransportMidi(store.get('transportMidi')),
-    countdownStartLeadMs: clampCountdownStartLeadMs(store.get('countdownStartLeadMs'), 2500),
-    lightingDirectorEnabled: Boolean(store.get('lightingDirectorEnabled') ?? false),
-    liveAudioSyncEnabled: Boolean(store.get('liveAudioSyncEnabled') ?? false),
-    lightingLoopbackDevice:
-      typeof store.get('lightingLoopbackDevice') === 'string' &&
-      String(store.get('lightingLoopbackDevice')).trim()
-        ? String(store.get('lightingLoopbackDevice')).trim()
-        : 'Stereo Mix',
-    lightingCaptureMode:
-      store.get('lightingCaptureMode') === 'export' ? 'export' : 'playback',
-    cubaseExportFolder:
-      typeof store.get('cubaseExportFolder') === 'string' &&
-      String(store.get('cubaseExportFolder')).trim()
-        ? String(store.get('cubaseExportFolder')).trim()
-        : undefined
-  }
+  if (!memory) memory = readStateFromDisk(store)
+  return memory
 }
 
 export function setState(store: AppStore, patch: Partial<AppState>): void {
-  for (const key of Object.keys(patch) as (keyof AppState)[]) {
-    const v = patch[key]
-    if (v !== undefined) store.set(key, v as never)
+  const current = getState(store)
+  memory = { ...current, ...patch }
+  persistStore = store
+  const keys = (Object.keys(patch) as (keyof AppState)[]).filter((k) => patch[k] !== undefined)
+  const immediate = keys.filter((k) => !isMutePersistKey(k))
+  const mutes = keys.filter((k) => isMutePersistKey(k))
+  for (const key of immediate) {
+    store.set(key, patch[key] as never)
   }
+  if (mutes.length) scheduleMutePersist(store)
 }
 
 export function newSetlistItem(partial?: Partial<SetlistItem>): SetlistItem {

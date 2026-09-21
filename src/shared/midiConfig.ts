@@ -171,6 +171,17 @@ export function cubaseMuteCcValue(muted: boolean, controller = CUBASE_MUTE_CC): 
 export const MUTE_ECHO_IGNORE_MS = 450
 /** @deprecated Use {@link MUTE_ECHO_IGNORE_MS} — kept as alias for older call sites. */
 export const CUBASE_MUTE_ECHO_IGNORE_MS = MUTE_ECHO_IGNORE_MS
+/**
+ * After any bridged mute apply, ignore inbound Cubase *and* mixer CCs for that group.
+ * Stops FX/CC85 ping-pong (Cubase FX and X32 MG6 share CC 85) once the per-source echo
+ * window expires.
+ */
+export const MUTE_BRIDGE_QUIET_MS = 550
+/** Count remote mute flips in this window; too many ⇒ hold the last state. */
+export const MUTE_FLAP_WINDOW_MS = 2000
+export const MUTE_FLAP_MAX = 8
+/** Ignore remote FX/ALL CCs this long after a flap lock (local pads still work). */
+export const MUTE_FLAP_HOLD_MS = 5000
 
 /**
  * Mixer (X32) mute CCs on {@link MIXER_MUTE_CHANNEL}.

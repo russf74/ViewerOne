@@ -1,5 +1,5 @@
 import { installProcessGuards } from './processGuards.js'
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, screen } from 'electron'
 import { setupAppMenu } from './menu.js'
 import { existsSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import {
   clampCountdownStartLeadMs,
   createAppStore,
+  flushMutePersist,
   getState,
   setState,
   newSetlistItem
@@ -59,6 +60,10 @@ import {
   CUBASE_PIANO_MUTE_CC,
   CUBASE_CHANNEL_MUTE_INVERTED,
   MUTE_ECHO_IGNORE_MS,
+  MUTE_BRIDGE_QUIET_MS,
+  MUTE_FLAP_WINDOW_MS,
+  MUTE_FLAP_MAX,
+  MUTE_FLAP_HOLD_MS,
   cubaseMuteCcValue,
   mixerMuteCcValue,
   ccValueToMuted,
@@ -313,9 +318,7 @@ async function shutdownViewerOneResources(): Promise<void> {
   } catch {
     /* ignore */
   }
-  await shutdownCubaseLengthCapture()
-  await shutdownEsp32SerialAsync()
-  await shutdownDmxSerialAsync()
+  // Close MIDI first — a Cubase↔X32 mute loop must not keep running while OCR/serial shut down.
   try {
     midi.closeInput()
     midi.closeMixerInput()
@@ -324,16 +327,55 @@ async function shutdownViewerOneResources(): Promise<void> {
   } catch {
     /* ignore — quitting anyway */
   }
+  try {
+    flushMutePersist(store)
+  } catch {
+    /* ignore */
+  }
+  await shutdownCubaseLengthCapture()
+  await shutdownEsp32SerialAsync()
+  await shutdownDmxSerialAsync()
 }
 
 /**
  * Echo ignore keyed by source+CC (`cubase:88`, `mixer:80`) — never bare CC alone.
  * Cubase ALL CC88 and mixer MG1 CC80 must not share a key (that collision caused the flash loop).
+ * FX still shares Cubase CC85 with mixer MG6 CC85 (`cubase:85` vs `mixer:85`) — also use
+ * {@link muteQuietUntil} so a delayed echo cannot ping-pong after the per-source window.
  */
 type MuteEchoSource = 'cubase' | 'mixer'
 const muteSentBySourceCc = new Map<string, { value: number; atMs: number }>()
 function muteEchoKey(source: MuteEchoSource, controller: number): string {
   return `${source}:${controller}`
+}
+const muteQuietUntil = new Map<BridgedMuteId, number>()
+const muteFlapTimes = new Map<BridgedMuteId, number[]>()
+const muteFlapHoldUntil = new Map<BridgedMuteId, number>()
+
+function isBridgedMuteQuiet(id: BridgedMuteId): boolean {
+  return Date.now() < (muteQuietUntil.get(id) ?? 0)
+}
+
+function armBridgedMuteQuiet(id: BridgedMuteId): void {
+  muteQuietUntil.set(id, Date.now() + MUTE_BRIDGE_QUIET_MS)
+}
+
+function isMuteFlapHeld(id: BridgedMuteId): boolean {
+  return Date.now() < (muteFlapHoldUntil.get(id) ?? 0)
+}
+
+/** Record a remote mute flip. True if this group is now locked against remote CCs. */
+function noteRemoteMuteFlap(id: BridgedMuteId): boolean {
+  const now = Date.now()
+  const times = (muteFlapTimes.get(id) ?? []).filter((t) => now - t < MUTE_FLAP_WINDOW_MS)
+  times.push(now)
+  muteFlapTimes.set(id, times)
+  if (times.length < MUTE_FLAP_MAX) return isMuteFlapHeld(id)
+  muteFlapHoldUntil.set(id, now + MUTE_FLAP_HOLD_MS)
+  console.warn(
+    `[ViewerOne] MIDI: ${id} mute flap lock ${MUTE_FLAP_HOLD_MS}ms — Cubase↔mixer ping-pong blocked`
+  )
+  return true
 }
 let muteBootSyncTimer: ReturnType<typeof setTimeout> | null = null
 let muteBootSyncFollowUpTimer: ReturnType<typeof setTimeout> | null = null
@@ -911,8 +953,8 @@ function handleSongPosition(midiBeats: number): void {
 
 function pushCubaseSpy(event: MidiSpyEvent): void {
   cubaseSpy = [...cubaseSpy, event].slice(-CUBASE_MIDI_SPY_LIMIT)
-  // UI-only — do not push ESP / mute side effects for every MIDI clock or note.
-  broadcastUiState()
+  // UI-only — debounce so a mute CC burst cannot freeze the renderer.
+  scheduleMidiStatusBroadcast()
 }
 
 function channelMatchesTransport(msgChannel0: number, mapping: TransportMidiMapping): boolean {
@@ -979,6 +1021,16 @@ function stopCountdownTicker(): void {
   countdownTimer = null
 }
 
+let lightingReadinessSetlist: SetlistItem[] | null = null
+let lightingReadinessCached: LightingReadinessReport | null = null
+
+function lightingReadinessFor(setlist: SetlistItem[]): LightingReadinessReport {
+  if (lightingReadinessCached && lightingReadinessSetlist === setlist) return lightingReadinessCached
+  lightingReadinessSetlist = setlist
+  lightingReadinessCached = auditLightingReadiness(setlist)
+  return lightingReadinessCached
+}
+
 function buildPublicState(): PublicState {
   const base = getState(store)
   const queuedRow = base.currentSongId
@@ -1007,7 +1059,7 @@ function buildPublicState(): PublicState {
     },
     lightingDirector: lightingDirector.snapshot(),
     lightingAnalyze,
-    lightingReadiness: auditLightingReadiness(base.setlist),
+    lightingReadiness: lightingReadinessFor(base.setlist),
     midi: {
       cubaseInputName,
       cubaseInputOpen,
@@ -1432,29 +1484,47 @@ function isOwnMixerMuteEcho(controller: number, value: number): boolean {
 
 /**
  * Single Cubase ↔ ViewerOne ↔ mixer mute apply for FX and ALL.
- * Absolute SET. Always emit absolute CCs when opts request TX (same as pre-bridge FX —
- * re-asserts mixer/Cubase if store drifted). Only {@link BridgedMuteDef} CCs/state differ.
+ * Local origin (pads / UI) always TX absolute CCs so a drifted mixer/Cubase re-asserts.
+ * Remote origin (Cubase or X32 MIDI) never re-TX if state already matches — that ping-pong
+ * (especially FX CC85 shared with MG6) froze the window while still flipping Group 6.
  */
 function applyBridgedMute(
   def: BridgedMuteDef,
   muted: boolean,
-  opts: { sendToCubase: boolean; sendToMixer: boolean }
+  opts: { sendToCubase: boolean; sendToMixer: boolean; origin: 'local' | 'remote' }
 ): void {
+  if (opts.origin === 'remote' && (isBridgedMuteQuiet(def.id) || isMuteFlapHeld(def.id))) {
+    console.log(
+      `[ViewerOne] MIDI: bridged ${def.id} remote ignored (quiet/hold) muted=${muted}`
+    )
+    return
+  }
   const st = getState(store)
   const prev = Boolean(st[def.stateKey])
   const changed = prev !== muted
+  if (!changed && opts.origin === 'remote') {
+    console.log(
+      `[ViewerOne] MIDI: bridged ${def.id} already muted=${muted} — skip remote TX ` +
+        `cubaseCC=${def.cubaseCc} mixerCC=${def.mixerCc}`
+    )
+    return
+  }
+  if (changed && opts.origin === 'remote') {
+    noteRemoteMuteFlap(def.id)
+  }
   if (changed) {
     setState(store, { [def.stateKey]: muted })
   } else {
     console.log(
       `[ViewerOne] MIDI: bridged ${def.id} state already muted=${muted} ` +
-        `(still TX absolute if flagged) cubaseCC=${def.cubaseCc} mixerCC=${def.mixerCc}`
+        `(local re-assert) cubaseCC=${def.cubaseCc} mixerCC=${def.mixerCc}`
     )
   }
+  armBridgedMuteQuiet(def.id)
   if (opts.sendToCubase) sendMuteCcToCubase(muted, def.cubaseCc)
   if (opts.sendToMixer) sendMuteCcToMixer(muted, def.mixerCc, def.id)
   console.log(
-    `[ViewerOne] MIDI: bridged ${def.id} origin-flags cubase=${opts.sendToCubase} mixer=${opts.sendToMixer} ` +
+    `[ViewerOne] MIDI: bridged ${def.id} origin=${opts.origin} cubase=${opts.sendToCubase} mixer=${opts.sendToMixer} ` +
       `prev=${prev} next=${muted} changed=${changed} cubaseCC=${def.cubaseCc} mixerCC=${def.mixerCc}`
   )
   // Mute updates display tint + CC only — LEDs stay on PC 125/126/127 (and pattern preview).
@@ -1468,7 +1538,7 @@ function applyBridgedMuteFromEsp(def: BridgedMuteDef, mutedRaw: unknown): void {
   console.log(
     `[ViewerOne] MIDI: ${def.id} mute from ESP raw=${JSON.stringify(mutedRaw)} → absolute muted=${muted}`
   )
-  applyBridgedMute(def, muted, { sendToCubase: true, sendToMixer: true })
+  applyBridgedMute(def, muted, { sendToCubase: true, sendToMixer: true, origin: 'local' })
 }
 
 function applyChannelMuted(
@@ -1647,8 +1717,19 @@ function syncEsp32SerialFromStore(): void {
 function broadcastUiState(): void {
   const payload = buildPublicState()
   for (const w of BrowserWindow.getAllWindows()) {
+    if (w.isDestroyed()) continue
     w.webContents.send('state:update', payload)
   }
+}
+
+/** Coalesce MIDI-status-only UI pushes (mixer CC dumps / spy) so the control window stays live. */
+let midiStatusBroadcastTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleMidiStatusBroadcast(): void {
+  if (midiStatusBroadcastTimer) return
+  midiStatusBroadcastTimer = setTimeout(() => {
+    midiStatusBroadcastTimer = null
+    if (!isQuitting) broadcastUiState()
+  }, 150)
 }
 
 function broadcastLoopbackMeter(sample: LoopbackMeterSample): void {
@@ -1807,7 +1888,7 @@ function connectMidi(): void {
         console.log(
           `[ViewerOne] MIDI: Cubase ${bridged.id}/CC${bridged.cubaseCc}=${msg.value} → muted=${muted} (forward mixer)`
         )
-        applyBridgedMute(bridged, muted, { sendToCubase: false, sendToMixer: true })
+        applyBridgedMute(bridged, muted, { sendToCubase: false, sendToMixer: true, origin: 'remote' })
         return
       }
       if (msg.controller === CUBASE_SYNTH_MUTE_CC) {
@@ -1866,8 +1947,8 @@ function connectMidi(): void {
   mixerInputOpen = midi.openMixerInput(mixer.input, (msg) => {
     mixerLastMessageAtMs = Date.now()
     mixerLastCc = msg
-    // UI MIDI status only — do not spam full song JSON to CrowPanel on every mixer CC.
-    broadcastUiState()
+    // Mixer mute-group TX also dumps member channel/bus CCs — never rebuild the full UI per CC.
+    scheduleMidiStatusBroadcast()
     if (msg.channel !== mixerMuteCh0 || !isMixerMuteCc(msg.controller)) {
       // Still surface other mixer CCs in Live status (mixerLastCc); only bridged mutes drive state.
       return
@@ -1885,7 +1966,7 @@ function connectMidi(): void {
     console.log(
       `[ViewerOne] MIDI: mixer RX group=${bridged.id} CC=${msg.controller} val=${msg.value} muted=${muted} (forward Cubase, no mixer echo)`
     )
-    applyBridgedMute(bridged, muted, { sendToCubase: true, sendToMixer: false })
+    applyBridgedMute(bridged, muted, { sendToCubase: true, sendToMixer: false, origin: 'remote' })
   })
   mixerOutputOpen = midi.openMixerOutput(mixer.output)
 
@@ -2839,6 +2920,27 @@ function createControlWindow(): BrowserWindow {
     void win.loadFile(join(__dirname, '../renderer/control/index.html'))
   }
 
+  win.webContents.on('render-process-gone', (_event, details) => {
+    console.warn(
+      `[ViewerOne] renderer gone (${details.reason}) — restoring control window`
+    )
+    if (isQuitting) return
+    setTimeout(() => {
+      if (isQuitting) return
+      if (win.isDestroyed()) {
+        controlWindow = createControlWindow()
+        return
+      }
+      void win.reload()
+      presentControlWindow(win)
+    }, 250)
+  })
+  win.webContents.on('unresponsive', () => {
+    console.warn('[ViewerOne] renderer unresponsive — reloading control window')
+    if (isQuitting || win.isDestroyed()) return
+    void win.reload()
+  })
+
   win.on('closed', () => {
     controlWindow = null
     // X / Alt+F4 on the only window must end the app on Windows (no tray / background mode).
@@ -2848,6 +2950,48 @@ function createControlWindow(): BrowserWindow {
   })
 
   return win
+}
+
+function presentControlWindow(win: BrowserWindow): void {
+  if (win.isDestroyed()) return
+  if (win.isMinimized()) win.restore()
+  try {
+    const bounds = win.getBounds()
+    const work = screen.getDisplayMatching(bounds).workArea
+    const onScreen =
+      bounds.x + bounds.width > work.x &&
+      bounds.x < work.x + work.width &&
+      bounds.y + bounds.height > work.y &&
+      bounds.y < work.y + work.height
+    if (!onScreen) {
+      win.setBounds({
+        x: work.x + Math.max(0, Math.round((work.width - bounds.width) / 2)),
+        y: work.y + Math.max(0, Math.round((work.height - bounds.height) / 2)),
+        width: bounds.width,
+        height: bounds.height
+      })
+    }
+  } catch {
+    /* display lookup can fail headless */
+  }
+  win.show()
+  win.moveTop()
+  win.setAlwaysOnTop(true)
+  win.focus()
+  setTimeout(() => {
+    if (!win.isDestroyed()) win.setAlwaysOnTop(false)
+  }, 400)
+}
+
+function focusOrRecreateControlWindow(): void {
+  if (isQuitting && shutdownFinished) return
+  if (!controlWindow || controlWindow.isDestroyed()) {
+    if (isQuitting) return
+    controlWindow = createControlWindow()
+    presentControlWindow(controlWindow)
+    return
+  }
+  presentControlWindow(controlWindow)
 }
 
 function registerIpc(): void {
@@ -2994,7 +3138,7 @@ function registerIpc(): void {
 
     setState(store, allowed)
     for (const { def, muted } of bridgedPatches) {
-      applyBridgedMute(def, muted, { sendToCubase: true, sendToMixer: true })
+      applyBridgedMute(def, muted, { sendToCubase: true, sendToMixer: true, origin: 'local' })
     }
     if (synthMutedToApply !== undefined) {
       applyChannelMuted('synth', synthMutedToApply, { sendToCubase: true, source: 'preview/ui' })
@@ -3419,11 +3563,7 @@ if (!gotTheLock) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    if (controlWindow && !controlWindow.isDestroyed()) {
-      if (controlWindow.isMinimized()) controlWindow.restore()
-      controlWindow.show()
-      controlWindow.focus()
-    }
+    focusOrRecreateControlWindow()
   })
 
   app.whenReady().then(() => {

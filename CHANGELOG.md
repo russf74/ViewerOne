@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.55
+
+- Stopped a Cubase↔X32 mute ping-pong on Group 6 / FX (shared CC85) that froze the window, killed the screen, and kept flipping mute every half-second. Echoes no longer re-send, a flap lock holds the last mute, and mute is not written into the big settings file on every flip. Shortcut or second open brings the window back if the screen dies.
+
 ## v6.00.54
 
 - Knight Rider Betoppers stay static dim blue (no RGB colour rotate). Dome is unchanged.
