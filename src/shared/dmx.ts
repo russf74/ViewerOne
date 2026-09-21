@@ -251,6 +251,18 @@ function renderStrobe15(patternId: number, tMs: number): StrobeCue {
   const t = Math.max(0, tMs)
   switch (id) {
     case 0:
+      // Knight Rider idle — barely on, crawl-speed chase, so the heads still look alive.
+      return lfCue({
+        dimmer: 16,
+        r: 18,
+        g: 28,
+        b: 160,
+        w: 0,
+        rgbPattern: 3,
+        rgbSpeed: 10,
+        wPattern: 0,
+        wSpeed: 0
+      })
     case 99:
       return STROBE_OFF
     case 1:
@@ -498,12 +510,12 @@ function renderStrobe15(patternId: number, tMs: number): StrobeCue {
 }
 
 const IDLE_DOME: DomeCue = {
-  dimmer: 36,
-  r: 25,
-  g: 40,
-  b: 255,
+  dimmer: 12,
+  r: 18,
+  g: 28,
+  b: 160,
   w: 0,
-  rotate: 16,
+  rotate: 5,
   auto: 0,
   autoSpeed: 0
 }
@@ -577,13 +589,17 @@ export function dmxUniverseForLedPattern(
   opts?: { stickPatternId?: number; domePatternId?: number; strobePatternId?: number }
 ): DmxChannelValue[] {
   if (patternId === 99) return []
+  const knightRider = patternId === 0
   const stickId = clampLedPatternId(opts?.stickPatternId ?? complementaryStickPatternId(patternId))
-  const domeId = clampLedPatternId(opts?.domePatternId ?? complementaryDomePatternId(patternId))
-  const strobeId =
-    opts?.strobePatternId !== undefined
+  const domeId = knightRider
+    ? 0
+    : clampLedPatternId(opts?.domePatternId ?? complementaryDomePatternId(patternId))
+  const strobeId = knightRider
+    ? 0
+    : opts?.strobePatternId !== undefined
       ? clampLedPatternId(opts.strobePatternId)
-      : patternId === 0 || patternId === 21
-        ? 0
+      : patternId === 21
+        ? 99
         : complementaryStrobePatternId(patternId)
   const dome = LED_DOME_CUES[domeId] ?? LED_DOME_CUES[7]
   return [

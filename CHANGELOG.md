@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.53
+
+- Knight Rider keeps the dome and LF4808 strobes almost off: a slow royal-blue crawl, just enough to see they are alive.
+
 ## v6.00.52
 
 - LF4808 strobe overlay stays fast (no slow whole-unit black blink that looked like a fault).
