@@ -3608,8 +3608,15 @@ if (!gotTheLock) {
           console.log('[ViewerOne] --rescan-all: Scan Arranger, then recapture and rebuild lighting')
           await runArrangerScan()
           console.log(`[ViewerOne] --rescan-all scan: ${arrangerScan.phase} — ${arrangerScan.message}`)
-          if (arrangerScan.phase === 'error' || arrangerScan.phase === 'cancelled') {
-            console.log('[ViewerOne] --rescan-all: stopping after scan (no lighting recapture)')
+          if (arrangerScan.phase === 'cancelled') {
+            console.log('[ViewerOne] --rescan-all: scan cancelled — no lighting recapture')
+            return
+          }
+          const scannedRows = getState(store).setlist.filter(
+            (r) => r.arrangerIndex != null && r.program >= 1 && r.program <= 119
+          )
+          if (scannedRows.length === 0) {
+            console.log('[ViewerOne] --rescan-all: no scanned songs — no lighting recapture')
             return
           }
           await runLightingAnalyzeFromCubase(undefined, undefined, undefined, true)

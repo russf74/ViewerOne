@@ -386,8 +386,9 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
     }
 
     const alreadyHaveWav = (row: SetlistItem): boolean =>
-      !deps.forceRecapture && moisesWavExists(moisesWavPath(row.program, row.title))
+      moisesWavExists(moisesWavPath(row.program, row.title))
     const recaptureOne = Boolean(onlyTitle || onlyProgram)
+    const skipExisting = !deps.forceRecapture && !recaptureOne
     const missingPlanned = (): SetlistItem[] =>
       planned.filter((r) => recaptureOne || !alreadyHaveWav(r)).slice(0, limit)
 
@@ -410,7 +411,7 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
         const label = row?.title ?? '?'
         if (!row || !shouldCaptureSong(row, allowSoundcheck(row))) {
           analyzeLog(`skip PC ${pc} “${label}” — no playback (SOUNDCHECK/INTRO/OUTRO)`)
-        } else if (wantsCapture(row) && !recaptureOne && alreadyHaveWav(row)) {
+        } else if (wantsCapture(row) && skipExisting && alreadyHaveWav(row)) {
           analyzeLog(`have wav PC ${pc} “${label}” — keep, step Next`)
         } else if (wantsCapture(row)) {
           songNumber++

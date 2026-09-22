@@ -250,22 +250,6 @@ export function scanIsGigReady(
       `${opts.lengthFailures} visited song(s) could not be read from Cubase this scan (kept an old time)`
     )
   }
-  if (
-    opts?.previousVisited != null &&
-    opts.previousVisited >= 8 &&
-    audit.visitedRows + 3 <= opts.previousVisited
-  ) {
-    blockers.push(`scan visited ${audit.visitedRows} songs (previous ${opts.previousVisited})`)
-  }
-  if (
-    opts?.previousNumbered != null &&
-    opts.previousNumbered >= 8 &&
-    audit.numberedSongs + 2 <= opts.previousNumbered
-  ) {
-    blockers.push(
-      `numbered songs ${audit.numberedSongs} (previous ${opts.previousNumbered}) — walk looks truncated`
-    )
-  }
   // Upper Heyford / typical set: if OUTRO exists in the store as leftover but was not visited,
   // the walk stopped early.
   const visitedOutro = items.some(
@@ -276,6 +260,25 @@ export function scanIsGigReady(
   )
   if (!visitedOutro && leftoverOutro && audit.visitedRows >= 3) {
     blockers.push('OUTRO not visited — Arranger walk stopped before the end of the chain')
+  }
+  // A shorter set that still reaches OUTRO is a real edit, not a truncated walk.
+  if (!visitedOutro) {
+    if (
+      opts?.previousVisited != null &&
+      opts.previousVisited >= 8 &&
+      audit.visitedRows + 3 <= opts.previousVisited
+    ) {
+      blockers.push(`scan visited ${audit.visitedRows} songs (previous ${opts.previousVisited})`)
+    }
+    if (
+      opts?.previousNumbered != null &&
+      opts.previousNumbered >= 8 &&
+      audit.numberedSongs + 2 <= opts.previousNumbered
+    ) {
+      blockers.push(
+        `numbered songs ${audit.numberedSongs} (previous ${opts.previousNumbered}) — walk looks truncated`
+      )
+    }
   }
   return { ready: blockers.length === 0, blockers }
 }

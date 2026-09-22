@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.58
+
+- A shorter Cubase set that still reaches OUTRO is treated as complete, not truncated. `--rescan-all` still recaptures and rebuilds lighting after that walk.
+
 ## v6.00.57
 
 - `--rescan-all` walks Cubase for fresh song lengths, then recaptures every performance song and rebuilds lighting/DMX from the new audio. `--lighting-analyze-force` recaptures even when a Moises WAV already exists.
