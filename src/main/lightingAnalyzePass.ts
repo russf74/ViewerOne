@@ -39,6 +39,8 @@ export type LightingAnalyzeDeps = {
   onlyTitle?: string
   /** Capture only this program change (CLI `--lighting-analyze-program=`). */
   onlyProgram?: number
+  /** Recapture every song even if Desktop\\Moises-upload already has a WAV. */
+  forceRecapture?: boolean
 }
 
 const CAPTURE_PAD_MS = 600
@@ -284,7 +286,8 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
     )
     analyzeLog(
       `capture ${Math.min(limit, planned.length)} song(s) ` +
-        `(${planned.some((r) => isSoundcheckTitle(r.title)) ? 'include SOUNDCHECK, skip INTRO/OUTRO' : 'skip SOUNDCHECK/INTRO/OUTRO'}, no title-click)`
+        `(${planned.some((r) => isSoundcheckTitle(r.title)) ? 'include SOUNDCHECK, skip INTRO/OUTRO' : 'skip SOUNDCHECK/INTRO/OUTRO'}, no title-click` +
+        `${deps.forceRecapture ? ', force recapture' : ''})`
     )
 
     let captured = 0
@@ -383,7 +386,7 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
     }
 
     const alreadyHaveWav = (row: SetlistItem): boolean =>
-      moisesWavExists(moisesWavPath(row.program, row.title))
+      !deps.forceRecapture && moisesWavExists(moisesWavPath(row.program, row.title))
     const recaptureOne = Boolean(onlyTitle || onlyProgram)
     const missingPlanned = (): SetlistItem[] =>
       planned.filter((r) => recaptureOne || !alreadyHaveWav(r)).slice(0, limit)

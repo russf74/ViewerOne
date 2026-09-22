@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.57
+
+- `--rescan-all` walks Cubase for fresh song lengths, then recaptures every performance song and rebuilds lighting/DMX from the new audio. `--lighting-analyze-force` recaptures even when a Moises WAV already exists.
+
 ## v6.00.56
 
 - Unplugging the CrowPanel USB no longer kills Electron. The app stays on the PC (MIDI, Cubase, mixer, local preview) and just shows the panel as searching until you plug it back in.

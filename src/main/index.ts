@@ -555,7 +555,8 @@ function sendAnalyzeStop(): void {
 async function runLightingAnalyzeFromCubase(
   maxCaptures?: number,
   onlyTitle?: string,
-  onlyProgram?: number
+  onlyProgram?: number,
+  forceRecapture?: boolean
 ): Promise<void> {
   if (lightingAnalyzePromise) return
   if (arrangerScanPromise || arrangerScan.active) {
@@ -624,7 +625,8 @@ async function runLightingAnalyzeFromCubase(
     director: lightingDirector,
     maxCaptures,
     onlyTitle,
-    onlyProgram
+    onlyProgram,
+    forceRecapture
   })
     .catch((err) => {
       console.warn('[ViewerOne] Lighting analyze failed:', err)
@@ -3598,7 +3600,25 @@ if (!gotTheLock) {
     setupAppMenu()
     controlWindow = createControlWindow()
 
-    if (process.argv.includes('--scan-arranger')) {
+    const wantRescanAll = process.argv.includes('--rescan-all')
+    const wantForceAnalyze = process.argv.includes('--lighting-analyze-force')
+    if (wantRescanAll) {
+      setTimeout(() => {
+        void (async () => {
+          console.log('[ViewerOne] --rescan-all: Scan Arranger, then recapture and rebuild lighting')
+          await runArrangerScan()
+          console.log(`[ViewerOne] --rescan-all scan: ${arrangerScan.phase} — ${arrangerScan.message}`)
+          if (arrangerScan.phase === 'error' || arrangerScan.phase === 'cancelled') {
+            console.log('[ViewerOne] --rescan-all: stopping after scan (no lighting recapture)')
+            return
+          }
+          await runLightingAnalyzeFromCubase(undefined, undefined, undefined, true)
+          console.log(
+            `[ViewerOne] --rescan-all done: ${lightingAnalyze.phase} — ${lightingAnalyze.message}`
+          )
+        })()
+      }, 6000)
+    } else if (process.argv.includes('--scan-arranger')) {
       setTimeout(() => {
         void (async () => {
           console.log('[ViewerOne] --scan-arranger: starting Scan Arranger')
@@ -3611,8 +3631,8 @@ if (!gotTheLock) {
     const analyzeMaxArg = process.argv.find((a) => a.startsWith('--lighting-analyze-max='))
     const analyzeTitleArg = process.argv.find((a) => a.startsWith('--lighting-analyze-title='))
     const analyzeProgramArg = process.argv.find((a) => a.startsWith('--lighting-analyze-program='))
-    const wantFullAnalyze = process.argv.includes('--lighting-analyze')
-    if (wantFullAnalyze || analyzeMaxArg || analyzeTitleArg || analyzeProgramArg) {
+    const wantFullAnalyze = process.argv.includes('--lighting-analyze') || wantForceAnalyze
+    if (!wantRescanAll && (wantFullAnalyze || analyzeMaxArg || analyzeTitleArg || analyzeProgramArg)) {
       const n = analyzeMaxArg
         ? Math.max(1, Math.round(Number(analyzeMaxArg.split('=')[1]) || 1))
         : undefined
@@ -3623,12 +3643,13 @@ if (!gotTheLock) {
         ? Math.round(Number(analyzeProgramArg.slice('--lighting-analyze-program='.length)))
         : 0
       const onlyProgram = parsedProgram > 0 ? parsedProgram : undefined
+      const forceRecapture = wantForceAnalyze || Boolean(onlyTitle || onlyProgram)
       setTimeout(() => {
         void (async () => {
           console.log(
-            `[ViewerOne] ${analyzeProgramArg ?? analyzeTitleArg ?? analyzeMaxArg ?? '--lighting-analyze'}: starting Cubase lighting analyze`
+            `[ViewerOne] ${analyzeProgramArg ?? analyzeTitleArg ?? analyzeMaxArg ?? (wantForceAnalyze ? '--lighting-analyze-force' : '--lighting-analyze')}: starting Cubase lighting analyze`
           )
-          await runLightingAnalyzeFromCubase(n, onlyTitle, onlyProgram)
+          await runLightingAnalyzeFromCubase(n, onlyTitle, onlyProgram, forceRecapture)
           console.log(
             `[ViewerOne] lighting analyze done: ${lightingAnalyze.phase} — ${lightingAnalyze.message}`
           )
