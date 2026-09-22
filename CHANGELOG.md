@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.60
+
+- Cubase capture stays stereo (beat analysis still uses a mono mix). A length scan keeps each song's existing audio analysis and DMX program.
+
 ## v6.00.59
 
 - When Cubase Arranger Next jumps over songs that are still in the Current Chain, Analyze clicks that chain row and captures it instead of treating the set as shorter.

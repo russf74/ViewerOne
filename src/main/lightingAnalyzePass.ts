@@ -75,17 +75,18 @@ function captureDurationSec(row: SetlistItem): number {
   return listedDurationSec(row)
 }
 
-function wavHeader(filePath: string): { sampleRate: number; durationSec: number } {
+function wavHeader(filePath: string): { sampleRate: number; channels: number; durationSec: number } {
   try {
     const buf = fs.readFileSync(filePath, { encoding: null }).subarray(0, 44)
-    if (buf.length < 32) return { sampleRate: 0, durationSec: 0 }
+    if (buf.length < 32) return { sampleRate: 0, channels: 0, durationSec: 0 }
+    const channels = buf.readUInt16LE(22)
     const sampleRate = buf.readUInt32LE(24)
     const byteRate = buf.readUInt32LE(28)
     const size = fs.statSync(filePath).size
-    if (byteRate <= 0) return { sampleRate, durationSec: 0 }
-    return { sampleRate, durationSec: Math.max(0, (size - 44) / byteRate) }
+    if (byteRate <= 0) return { sampleRate, channels, durationSec: 0 }
+    return { sampleRate, channels, durationSec: Math.max(0, (size - 44) / byteRate) }
   } catch {
-    return { sampleRate: 0, durationSec: 0 }
+    return { sampleRate: 0, channels: 0, durationSec: 0 }
   }
 }
 
@@ -166,7 +167,7 @@ async function captureRenderedPlayback(
       const peak = wavFilePeak(outputPath)
       const hdr = wavHeader(outputPath)
       analyzeLog(
-        `capture peak ${peak.toFixed(4)} ${hdr.sampleRate}Hz ${hdr.durationSec.toFixed(3)}s (${outputPath})`
+        `capture peak ${peak.toFixed(4)} ${hdr.channels}ch ${hdr.sampleRate}Hz ${hdr.durationSec.toFixed(3)}s (${outputPath})`
       )
       if (peak < 0.2) {
         analyzeLog('capture still too quiet after gain')

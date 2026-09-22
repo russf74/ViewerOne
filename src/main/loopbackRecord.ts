@@ -42,8 +42,6 @@ export class LoopbackRecorder {
           'dshow',
           '-i',
           dshowAudioFilename(opts.deviceName ?? 'Stereo Mix'),
-          '-ac',
-          '1',
           '-ar',
           String(opts.sampleRate ?? this.sampleRate),
           '-c:a',

@@ -2252,7 +2252,13 @@ function buildScannedSetlist(
       length: ocrLength || prior || '',
       year: old?.year ?? '',
       // Preserve editable metadata and every custom pick keyed by Cubase's stable song program.
-      ledPattern: clampLedPatternId(old?.ledPattern ?? songLedPatternForIndex())
+      ledPattern: clampLedPatternId(old?.ledPattern ?? songLedPatternForIndex()),
+      backingTrackPath: old?.backingTrackPath,
+      audioAnalysis: old?.audioAnalysis,
+      lightingProgram: old?.lightingProgram,
+      audioSource: old?.audioSource,
+      cubaseRenderPath: old?.cubaseRenderPath,
+      cubaseRenderCapturedAt: old?.cubaseRenderCapturedAt
     }
   })
   // A scan only proves the order of songs Cubase actually visited. Keep every unvisited,

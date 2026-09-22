@@ -43,6 +43,8 @@ export async function peakNormalizeWavFile(
   if (gain <= 1.02) {
     return { peakBefore: peak, peakAfter: peak }
   }
+  // Keep the capture's channel count. Beat analysis downmixes later; the
+  // saved WAV stays stereo so Moises still has a real mix.
   const tmp = path.join(
     os.tmpdir(),
     `vo-norm-${process.pid}-${Date.now()}.wav`
@@ -55,8 +57,6 @@ export async function peakNormalizeWavFile(
       '-y',
       '-i',
       filePath,
-      '-ac',
-      '1',
       '-ar',
       String(sampleRate > 0 ? sampleRate : 48000),
       '-af',
