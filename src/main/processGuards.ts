@@ -22,8 +22,22 @@ export function isRecoverableIoError(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false
   const e = err as { code?: string; message?: string; name?: string }
   const msg = typeof e.message === 'string' ? e.message : ''
-  if (/midi|serial|port.*(closed|not open|ENOENT|EBUSY)/i.test(msg)) return true
-  if (e.code === 'ENOENT' || e.code === 'EBUSY' || e.code === 'EIO') return true
+  if (
+    /midi|serial|port.*(closed|not open|ENOENT|EBUSY|EIO)|device attached|not functioning|Access is denied|does not recognize|UNKNOWN/i.test(
+      msg
+    )
+  ) {
+    return true
+  }
+  if (
+    e.code === 'ENOENT' ||
+    e.code === 'EBUSY' ||
+    e.code === 'EIO' ||
+    e.code === 'ENXIO' ||
+    e.code === 'UNKNOWN'
+  ) {
+    return true
+  }
   return false
 }
 

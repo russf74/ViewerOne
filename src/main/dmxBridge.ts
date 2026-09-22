@@ -217,9 +217,13 @@ async function openDmxisPort(): Promise<void> {
             port = null
             openPath = null
             stopKeepalive()
+            try {
+              p.removeAllListeners()
+            } catch {
+              /* ignore — do not close(); USB yank + serialport close can kill Electron */
+            }
             notify('searching', null)
             if (enabled) scheduleReconnect(gen)
-            void closePort(p)
           })
           p.on('close', () => {
             if (port !== p) return
@@ -227,6 +231,11 @@ async function openDmxisPort(): Promise<void> {
             port = null
             openPath = null
             stopKeepalive()
+            try {
+              p.removeAllListeners()
+            } catch {
+              /* ignore */
+            }
             notify('searching', null)
             if (enabled) scheduleReconnect(gen)
           })

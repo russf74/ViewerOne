@@ -3582,6 +3582,7 @@ if (!gotTheLock) {
         height: null,
         fw: null
       }
+      if (!connected) stopEsp32ClockSync()
       if (!isQuitting) broadcastUiState()
     })
     setDmxConnectionHandler(() => {

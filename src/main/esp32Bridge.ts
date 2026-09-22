@@ -8,6 +8,13 @@ export type { Esp32DisplayPayload } from '../shared/types.js'
 let port: SerialPort | null = null
 let openPath: string | null = null
 let rxBuf = ''
+/**
+ * Ports dropped by a Windows USB yank. Calling `close()` on those handles can
+ * native-crash Electron (`electron has stopped working`). Keep a few alive so
+ * GC does not run the binding destructor on a dead COM port.
+ */
+const abandonedPorts: SerialPort[] = []
+const MAX_ABANDONED_PORTS = 6
 
 /** Concrete COM/tty path or {@link ESP32_SERIAL_PORT_AUTO} for list-based pick. */
 let desiredPath: string | null = null
@@ -73,31 +80,64 @@ function attachSerialReader(p: SerialPort): void {
   })
 }
 
-function attachDisconnectHandlers(p: SerialPort, gen: number): void {
-  const onDrop = () => {
-    if (port !== p) return
-    console.warn('[ViewerOne] ESP32 serial disconnected:', openPath ?? desiredPath)
-    disposeCurrentPort()
-    notifyConnection(false, null)
-    if (desiredPath) scheduleReconnect(gen)
+function detachPortListeners(p: SerialPort): void {
+  try {
+    p.removeAllListeners()
+  } catch {
+    /* ignore */
   }
+}
+
+/** Device vanished — do not close(); Windows serialport close() can kill Electron. */
+function abandonPort(p: SerialPort): void {
+  detachPortListeners(p)
+  abandonedPorts.push(p)
+  while (abandonedPorts.length > MAX_ABANDONED_PORTS) {
+    abandonedPorts.shift()
+  }
+}
+
+/** Host-initiated close only (settings off / quit). Never use after a USB yank. */
+function closePortIfStillOpen(p: SerialPort, done?: () => void): void {
+  try {
+    if (!p.isOpen) {
+      done?.()
+      return
+    }
+    p.close((err) => {
+      if (err) console.warn('[ViewerOne] ESP32 serial close:', err.message)
+      done?.()
+    })
+  } catch {
+    done?.()
+  }
+}
+
+function dropLivePort(p: SerialPort, reason: string): void {
+  if (port !== p) return
+  console.warn('[ViewerOne] ESP32 serial disconnected:', openPath ?? desiredPath, reason)
+  port = null
+  openPath = null
+  abandonPort(p)
+  notifyConnection(false, null)
+  if (desiredPath) scheduleReconnect(openGeneration, 1000)
+}
+
+function attachDisconnectHandlers(p: SerialPort): void {
   p.on('error', (err: Error & { message?: string }) => {
     console.warn('[ViewerOne] ESP32 serial error:', err?.message ?? err)
-    onDrop()
+    dropLivePort(p, 'error')
   })
-  p.on('close', onDrop)
+  p.on('close', () => dropLivePort(p, 'close'))
 }
 
 function disposeCurrentPort(): void {
   if (!port) return
-  try {
-    port.removeAllListeners()
-    if (port.isOpen) port.close()
-  } catch {
-    /* ignore */
-  }
+  const p = port
   port = null
   openPath = null
+  detachPortListeners(p)
+  closePortIfStillOpen(p)
 }
 
 function disposeCurrentPortAsync(): Promise<void> {
@@ -109,33 +149,20 @@ function disposeCurrentPortAsync(): Promise<void> {
     const p = port
     port = null
     openPath = null
-    try {
-      p.removeAllListeners()
-    } catch {
-      /* ignore */
-    }
-    if (!p.isOpen) {
-      resolve()
-      return
-    }
+    detachPortListeners(p)
     const timer = setTimeout(resolve, 600)
-    try {
-      p.close(() => {
-        clearTimeout(timer)
-        resolve()
-      })
-    } catch {
+    closePortIfStillOpen(p, () => {
       clearTimeout(timer)
       resolve()
-    }
+    })
   })
 }
 
-function scheduleReconnect(prevGen: number): void {
+function scheduleReconnect(prevGen: number, minDelayMs = 0): void {
   if (!desiredPath) return
   clearReconnectTimer()
   const exp = Math.min(reconnectAttempt, 5)
-  const delayMs = Math.min(5000, 250 * 2 ** exp)
+  const delayMs = Math.max(minDelayMs, Math.min(5000, 250 * 2 ** exp))
   reconnectAttempt = Math.min(reconnectAttempt + 1, 12)
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
@@ -155,7 +182,14 @@ async function openDesiredPath(): Promise<void> {
 
   let concretePath: string | null = null
   if (desiredPath === ESP32_SERIAL_PORT_AUTO) {
-    const list = await SerialPort.list()
+    let list: Awaited<ReturnType<typeof SerialPort.list>>
+    try {
+      list = await SerialPort.list()
+    } catch (err) {
+      console.warn('[ViewerOne] ESP32 SerialPort.list failed:', err)
+      if (desiredPath) scheduleReconnect(gen, 1000)
+      return
+    }
     if (gen !== openGeneration) return
     const entries: Esp32UsbSerialListEntry[] = list.map((portInfo) => ({
       path: portInfo.path,
@@ -182,21 +216,18 @@ async function openDesiredPath(): Promise<void> {
     const p = new SerialPort({
       path: concretePath,
       baudRate: 115200,
-      autoOpen: false
+      autoOpen: false,
+      hupcl: false
     })
     p.open((err) => {
       if (gen !== openGeneration) {
-        try {
-          p.removeAllListeners()
-          if (p.isOpen) p.close()
-        } catch {
-          /* ignore */
-        }
+        detachPortListeners(p)
+        closePortIfStillOpen(p)
         return
       }
       if (err) {
         console.warn('[ViewerOne] ESP32 serial open failed:', concretePath, err.message)
-        disposeCurrentPort()
+        detachPortListeners(p)
         if (desiredPath) scheduleReconnect(gen)
         return
       }
@@ -204,14 +235,14 @@ async function openDesiredPath(): Promise<void> {
       port = p
       reconnectAttempt = 0
       attachSerialReader(p)
-      attachDisconnectHandlers(p, gen)
+      attachDisconnectHandlers(p)
       notifyConnection(true, concretePath)
       const mode = desiredPath === ESP32_SERIAL_PORT_AUTO ? ' (auto)' : ''
       console.log('[ViewerOne] ESP32 serial:', concretePath, '@ 115200' + mode)
       try {
         onOpenedCb?.()
-      } catch (err) {
-        console.warn('[ViewerOne] ESP32 onOpened callback threw (swallowed):', err)
+      } catch (openedErr) {
+        console.warn('[ViewerOne] ESP32 onOpened callback threw (swallowed):', openedErr)
       }
     })
   } catch (e) {
@@ -250,18 +281,11 @@ function writeSerialLine(line: string, label: string): void {
     p.write(line, (err) => {
       if (!err) return
       console.warn(`[ViewerOne] ESP32 ${label} write:`, err.message)
-      if (port !== p) return
-      disposeCurrentPort()
-      notifyConnection(false, null)
-      if (desiredPath) scheduleReconnect(openGeneration)
+      dropLivePort(p, 'write')
     })
   } catch (e) {
     console.warn(`[ViewerOne] ESP32 ${label} write threw:`, e)
-    if (port === p) {
-      disposeCurrentPort()
-      notifyConnection(false, null)
-      if (desiredPath) scheduleReconnect(openGeneration)
-    }
+    dropLivePort(p, 'write-throw')
   }
 }
 
