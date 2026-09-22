@@ -24,6 +24,11 @@ export type LightingAnalyzeDeps = {
   waitForProgramChange: (fromProgram: number) => Promise<number | null>
   getLatestProgram: () => number | null
   restoreProgram: (program: number) => Promise<void>
+  /**
+   * Click the Current Chain row when MIDI Next skips an event.
+   * Returns a keepable mm:ss length when Info Line Name matches.
+   */
+  locateByTitle: (title: string, program: number) => Promise<{ ok: boolean; mmss?: string }>
   /** Isolated Cubase play/stop — must NOT update gig countdown/transport. */
   sendAnalyzePlay: () => void
   sendAnalyzeStop: () => void
@@ -456,6 +461,24 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
       await cubasePsStop()
       await deps.restoreProgram(row.program)
       await deps.sleep(500)
+      if (deps.getLatestProgram() !== row.program) {
+        analyzeLog(
+          `gap MIDI missed PC ${row.program} (Cubase is PC ${deps.getLatestProgram()}) — click Current Chain “${row.title}”`
+        )
+        await deps.minimizeUi()
+        let located: { ok: boolean; mmss?: string }
+        try {
+          located = await deps.locateByTitle(row.title, row.program)
+        } finally {
+          await deps.restoreUi()
+        }
+        if (located.mmss) {
+          deps.updateRow(row.id, { length: located.mmss })
+          row.length = located.mmss
+          analyzeLog(`chain locate “${row.title}” length ${located.mmss}`)
+        }
+        await deps.sleep(400)
+      }
       if (deps.getLatestProgram() !== row.program) {
         analyzeLog(`gap restore failed — Cubase is PC ${deps.getLatestProgram()}`)
         continue

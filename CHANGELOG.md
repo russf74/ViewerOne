@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.59
+
+- When Cubase Arranger Next jumps over songs that are still in the Current Chain, Analyze clicks that chain row and captures it instead of treating the set as shorter.
+
 ## v6.00.58
 
 - A shorter Cubase set that still reaches OUTRO is treated as complete, not truncated. `--rescan-all` still recaptures and rebuilds lighting after that walk.

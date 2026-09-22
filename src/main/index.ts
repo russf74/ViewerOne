@@ -596,6 +596,24 @@ async function runLightingAnalyzeFromCubase(
         .map((r) => r.program)
       return restoreArrangerToProgram(program, false, order)
     },
+    locateByTitle: async (title, program) => {
+      const read = await readCubaseLengthForEvent(title, { allowClick: true })
+      const nameOk = Boolean(read.ok && read.nameMatched)
+      if (nameOk) {
+        latestSongProgram = program
+        console.log(
+          `[ViewerOne] Lighting analyze: chain-located “${title}” as PC ${program}` +
+            (read.mmss ? ` (${read.mmss})` : '')
+        )
+      }
+      return {
+        ok: nameOk,
+        mmss:
+          nameOk && read.mmss && isKeepableLengthForTitle(read.mmss, title)
+            ? normalizeSongLength(read.mmss)
+            : undefined
+      }
+    },
     sendAnalyzePlay,
     sendAnalyzeStop,
     withLiveMix: async (fn) => {
