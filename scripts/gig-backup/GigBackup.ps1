@@ -15,6 +15,9 @@ param(
 
   [string]$Drive,
 
+  [ValidateSet('Full', 'Incremental')]
+  [string]$Kind,
+
   [switch]$Yes
 )
 
@@ -715,6 +718,109 @@ function Get-RecentCprFolders {
   return @($folders | Select-Object -Unique)
 }
 
+function Get-UserDocumentsPath {
+  try {
+    $p = [Environment]::GetFolderPath('MyDocuments')
+    if (-not [string]::IsNullOrWhiteSpace($p)) { return $p }
+  } catch { }
+  return (Join-Path $env:USERPROFILE 'Documents')
+}
+
+function Resolve-CopyKind {
+  if ($Kind -eq 'Full' -or $Kind -eq 'Incremental') { return $Kind }
+  Write-Host ""
+  Write-Host "How should this backup run?" -ForegroundColor Cyan
+  Write-Host "  1  Full wipe and backup"
+  Write-Host "     Erase the USB drive, then copy every file. Nothing is skipped."
+  Write-Host "  2  Incremental"
+  Write-Host "     Update the existing backup. Caches and old debug dumps are skipped."
+  $answer = Read-Host "Choose 1 or 2"
+  if ($answer.Trim() -eq '1') { return 'Full' }
+  if ($answer.Trim() -eq '2') { return 'Incremental' }
+  throw "Choose 1 for a full wipe, or 2 for incremental."
+}
+
+function Clear-UsbVolume([string]$DriveRoot) {
+  $root = [System.IO.Path]::GetPathRoot($DriveRoot)
+  if ([string]::IsNullOrWhiteSpace($root)) { throw "No drive to wipe" }
+  $letter = $root.TrimEnd('\')
+  if ($letter -eq 'C:' -or $letter -eq $env:SystemDrive) {
+    throw "Refusing to wipe the Windows drive ($letter)."
+  }
+  $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$letter'"
+  if (-not $disk -or [long]$disk.Size -lt 8GB) { throw "Refusing to wipe $letter" }
+  Write-Step "Full wipe of $letter"
+  $label = $disk.VolumeName
+  if ([string]::IsNullOrWhiteSpace($label)) { $label = '(no label)' }
+  Write-Info ("{0}  {1}  {2}" -f $letter, $label, (Format-Bytes ([long]$disk.Size)))
+  Get-ChildItem -LiteralPath $root -Force -ErrorAction SilentlyContinue | ForEach-Object {
+    if ($_.Name -eq 'System Volume Information') { return }
+    Write-Info ("Removing {0}" -f $_.Name)
+    if ($_.PSIsContainer) {
+      & cmd.exe /c "rd /s /q `"$($_.FullName)`"" | Out-Null
+    }
+    if (Test-Path -LiteralPath $_.FullName) {
+      Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
+  $left = @(Get-ChildItem -LiteralPath $root -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'System Volume Information' })
+  if ($left.Count -gt 0) {
+    Write-Warn ("Still on the drive: " + (($left | ForEach-Object { $_.Name }) -join ', '))
+  } else {
+    Write-Ok "Drive $letter is clear"
+  }
+}
+
+function Get-SettingsTreeDefs([bool]$Full) {
+  $docs = Get-UserDocumentsPath
+  $steinbergDir = @()
+  $steinbergFile = @()
+  $voAppDir = @()
+  if (-not $Full) {
+    $steinbergDir = @('Cubase Pro VST3 Cache')
+    $steinbergFile = @('ApplicationStarted.txt', 'AppColorHint.txt', 'Cubase Pro Module Cache.xml')
+    $voAppDir = @('Cache', 'Code Cache', 'GPUCache', 'DawnCache', 'blob_storage', 'Session Storage', 'Shared Dictionary', 'Network', 'tmp-sc-probe')
+    $voAppRoot = Join-Path $env:APPDATA 'viewer-one'
+    if (Test-Path -LiteralPath $voAppRoot) {
+      Get-ChildItem -LiteralPath $voAppRoot -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.Name -like 'captures-backup-*' -or $_.Name -like 'mono-captures-*') { $voAppDir += $_.Name }
+      }
+    }
+  }
+  $loopLive = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Tobias Erichsen\loopMIDI'
+  $loopApply = $loopLive
+  return @(
+    [pscustomobject]@{
+      Name = 'ViewerOne data'; Live = (Join-Path $env:APPDATA 'viewer-one'); Rel = 'ViewerOne-AppData'
+      Apply = (Join-Path $env:APPDATA 'viewer-one'); ExDir = $voAppDir; ExFile = @()
+    }
+    [pscustomobject]@{
+      Name = 'Steinberg settings'; Live = (Join-Path $env:APPDATA 'Steinberg'); Rel = 'Steinberg-AppData'
+      Apply = (Join-Path $env:APPDATA 'Steinberg'); ExDir = $steinbergDir; ExFile = $steinbergFile
+    }
+    [pscustomobject]@{
+      Name = 'Steinberg documents'; Live = (Join-Path $docs 'Steinberg'); Rel = 'Steinberg-Documents'
+      Apply = (Join-Path $docs 'Steinberg'); ExDir = @(); ExFile = @()
+    }
+    [pscustomobject]@{
+      Name = 'Steinberg local'; Live = (Join-Path $env:LOCALAPPDATA 'Steinberg'); Rel = 'Steinberg-Local'
+      Apply = (Join-Path $env:LOCALAPPDATA 'Steinberg'); ExDir = @(); ExFile = @()
+    }
+    [pscustomobject]@{
+      Name = 'Steinberg content'; Live = (Join-Path $env:PROGRAMDATA 'Steinberg'); Rel = 'Steinberg-ProgramData'
+      Apply = (Join-Path $env:PROGRAMDATA 'Steinberg'); ExDir = @(); ExFile = @()
+    }
+    [pscustomobject]@{
+      Name = 'Native Instruments'; Live = (Join-Path $env:APPDATA 'Native Instruments'); Rel = 'NativeInstruments-AppData'
+      Apply = (Join-Path $env:APPDATA 'Native Instruments'); ExDir = @(); ExFile = @()
+    }
+    [pscustomobject]@{
+      Name = 'loopMIDI app'; Live = $loopLive; Rel = 'loopMIDI\App'
+      Apply = $loopApply; ExDir = @(); ExFile = @()
+    }
+  )
+}
+
 function Get-CubaseProjectRoot {
   $known = Join-Path $env:USERPROFILE 'Dropbox\My PC (LFRAY-PC)\Documents\Cubase'
   if (Test-Path -LiteralPath $known) { return $known }
@@ -892,28 +998,37 @@ function Invoke-Copy {
     throw "ViewerOne not found at $ViewerOneSrc"
   }
 
+  $copyKind = Resolve-CopyKind
+  $full = $copyKind -eq 'Full'
   $cubaseRoot = Get-CubaseProjectRoot
-  $voExclude = @('.git', 'release', '_ref', '.tmp-cubase-ocr', '.tmp-scan-qa', '.pio', '.cursor')
-  $prefsExcludeDir = @('Cubase Pro VST3 Cache')
-  $prefsExcludeFile = @('ApplicationStarted.txt', 'AppColorHint.txt', 'Cubase Pro Module Cache.xml')
-  $prefsSrc = Join-Path $env:APPDATA 'Steinberg\Cubase 15_64'
-  $cfgSrc = Join-Path $env:APPDATA 'viewer-one\viewer-one-config.json'
-  $scanSrc = Join-Path $env:APPDATA 'viewer-one\last-arranger-scan.txt'
+  $voExclude = @()
+  $voExcludeFile = @()
+  if (-not $full) {
+    $voExclude = @('.git', 'release', '_ref', '.tmp-cubase-ocr', '.tmp-scan-qa', '.pio', '.cursor')
+    $voExcludeFile = @('*.log')
+  }
   $x32Exe = Join-Path $env:USERPROFILE 'Desktop\Apps\X32-Edit.exe'
   $x32App = Join-Path $env:APPDATA 'X32-Edit'
 
-  Write-Step "Scanning"
-  $voInv = Get-FolderInventory -Path $ViewerOneSrc -ExcludeTop $voExclude -ExcludeFile @('*.log')
+  Write-Step "Scanning ($copyKind)"
+  $voInv = Get-FolderInventory -Path $ViewerOneSrc -ExcludeTop $voExclude -ExcludeFile $voExcludeFile
   $cubaseInv = [pscustomobject]@{ Bytes = [long]0; Files = [long]0 }
   if ($cubaseRoot) { $cubaseInv = Get-FolderInventory -Path $cubaseRoot }
-  $prefsInv = Get-FolderInventory -Path $prefsSrc -ExcludeTop $prefsExcludeDir -ExcludeFile $prefsExcludeFile
-  $cfgFiles = [long]0
-  $cfgBytes = [long]0
-  foreach ($p in @($cfgSrc, $scanSrc)) {
-    if (Test-Path -LiteralPath $p) {
-      $cfgFiles++
-      $cfgBytes += [long](Get-Item -LiteralPath $p -Force).Length
+  $settingsTrees = New-Object System.Collections.Generic.List[object]
+  foreach ($def in @(Get-SettingsTreeDefs $full)) {
+    if (-not (Test-Path -LiteralPath $def.Live)) {
+      Write-Info ("{0} not found -- skipped ({1})" -f $def.Name, $def.Live)
+      continue
     }
+    $inv = Get-FolderInventory -Path $def.Live -ExcludeTop $def.ExDir -ExcludeFile $def.ExFile
+    if ([long]$inv.Files -le 0) {
+      Write-Info ("{0} is empty -- skipped" -f $def.Name)
+      continue
+    }
+    $settingsTrees.Add([pscustomobject]@{
+      Name = $def.Name; Live = $def.Live; Rel = $def.Rel; ExDir = @($def.ExDir); ExFile = @($def.ExFile)
+      Files = [long]$inv.Files; Bytes = [long]$inv.Bytes
+    })
   }
   $x32Inv = [pscustomobject]@{ Bytes = [long]0; Files = [long]0 }
   $x32Files = [long]0
@@ -930,10 +1045,9 @@ function Invoke-Copy {
 
   $jobItems = New-Object System.Collections.Generic.List[object]
   $jobItems.Add((New-CopyJobItem 'ViewerOne' $voInv.Files $voInv.Bytes))
-  $jobItems.Add((New-CopyJobItem 'ViewerOne config' $cfgFiles $cfgBytes))
+  foreach ($t in $settingsTrees) { $jobItems.Add((New-CopyJobItem $t.Name $t.Files $t.Bytes)) }
   $jobItems.Add((New-CopyJobItem 'loopMIDI' 1 2048))
   if ($cubaseRoot) { $jobItems.Add((New-CopyJobItem 'Cubase projects' $cubaseInv.Files $cubaseInv.Bytes)) }
-  $jobItems.Add((New-CopyJobItem 'Cubase settings' $prefsInv.Files $prefsInv.Bytes))
   $jobItems.Add((New-CopyJobItem 'Startup' 3 8192))
   if ($x32Files -gt 0) { $jobItems.Add((New-CopyJobItem 'X32-Edit' $x32Files $x32Bytes)) }
   $estimate = [long]0
@@ -943,27 +1057,34 @@ function Invoke-Copy {
     $estimateFiles += [long]$it.Files
   }
 
-  Write-Step "What will be copied"
+  Write-Step "What will be copied ($copyKind)"
+  if ($full) { Write-Warn "Full wipe: everything currently on $driveRoot will be deleted first." }
   Write-Info ("ViewerOne         {0,8:N0} files   {1}" -f $voInv.Files, (Format-Bytes $voInv.Bytes))
+  foreach ($t in $settingsTrees) {
+    Write-Info ("{0,-18} {1,8:N0} files   {2}" -f $t.Name, $t.Files, (Format-Bytes $t.Bytes))
+  }
   if ($cubaseRoot) {
     Write-Info ("Cubase projects   {0,8:N0} files   {1}" -f $cubaseInv.Files, (Format-Bytes $cubaseInv.Bytes))
   } else {
     Write-Warn "Cubase project folder not found -- skipped"
   }
-  Write-Info ("Cubase settings   {0,8:N0} files   {1}" -f $prefsInv.Files, (Format-Bytes $prefsInv.Bytes))
-  Write-Info ("Other (config, loopMIDI, startup, X32)")
+  Write-Info "Also: loopMIDI ports, startup, X32-Edit"
   Write-Info ("Total             {0,8:N0} files   {1}" -f $estimateFiles, (Format-Bytes $estimate))
 
-  if ($disk -and [long]$disk.FreeSpace -lt $estimate) {
-    Write-Warn ("Drive only has {0} free -- copy may fail if the estimate is close." -f (Format-Bytes ([long]$disk.FreeSpace)))
+  $room = if ($full -and $disk) { [long]$disk.Size } elseif ($disk) { [long]$disk.FreeSpace } else { [long]0 }
+  if ($disk -and $room -lt $estimate) {
+    Write-Warn ("Drive only has {0} available -- copy may fail if the estimate is close." -f (Format-Bytes $room))
   }
 
   Wait-GigAppsClosed "For a clean copy, close Cubase / ViewerOne if they have unsaved work."
 
-  if (-not (Confirm-Go "Copy everything to $usbRoot now?")) {
+  $confirm = if ($full) { "Wipe $driveRoot and copy everything to $usbRoot now?" } else { "Copy everything to $usbRoot now?" }
+  if (-not (Confirm-Go $confirm)) {
     Write-Warn "Cancelled."
     return
   }
+
+  if ($full) { Clear-UsbVolume $driveRoot }
 
   $started = Get-Date
   New-Item -ItemType Directory -Path (Join-Path $usbRoot 'logs') -Force | Out-Null
@@ -973,17 +1094,11 @@ function Invoke-Copy {
   Start-CopyJob -Items @($jobItems.ToArray()) -StartedAt $started -DriveRoot $driveRoot
 
   Enter-CopyJobItem 'ViewerOne' $voInv.Files $voInv.Bytes
-  $null = Invoke-RoboCopy -Source $ViewerOneSrc -Dest (Join-Path $payload 'ViewerOne') -Mirror -ExcludeDir $voExclude -ExcludeFile @('*.log') -ExpectedBytes $voInv.Bytes -ExpectedFiles $voInv.Files
+  $null = Invoke-RoboCopy -Source $ViewerOneSrc -Dest (Join-Path $payload 'ViewerOne') -Mirror -ExcludeDir $voExclude -ExcludeFile $voExcludeFile -ExpectedBytes $voInv.Bytes -ExpectedFiles $voInv.Files
 
-  Invoke-TinyJobItem 'ViewerOne config' $cfgFiles $cfgBytes 'viewer-one-config.json' {
-    $cfgDir = Join-Path $payload 'ViewerOne-Config'
-    New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null
-    if (Test-Path -LiteralPath $cfgSrc) {
-      Copy-Item -LiteralPath $cfgSrc -Destination (Join-Path $cfgDir 'viewer-one-config.json') -Force
-    }
-    if (Test-Path -LiteralPath $scanSrc) {
-      Copy-Item -LiteralPath $scanSrc -Destination (Join-Path $cfgDir 'last-arranger-scan.txt') -Force
-    }
+  foreach ($t in $settingsTrees) {
+    Enter-CopyJobItem $t.Name $t.Files $t.Bytes
+    $null = Invoke-RoboCopy -Source $t.Live -Dest (Join-Path $payload $t.Rel) -Mirror -ExcludeDir $t.ExDir -ExcludeFile $t.ExFile -ExpectedBytes $t.Bytes -ExpectedFiles $t.Files
   }
 
   Invoke-TinyJobItem 'loopMIDI' 1 2048 'loopMIDI.reg' {
@@ -1000,9 +1115,6 @@ function Invoke-Copy {
       }
     )
   }
-
-  Enter-CopyJobItem 'Cubase settings' $prefsInv.Files $prefsInv.Bytes
-  $null = Invoke-RoboCopy -Source $prefsSrc -Dest (Join-Path $payload 'Cubase-Settings') -Mirror -ExcludeDir $prefsExcludeDir -ExcludeFile $prefsExcludeFile -ExpectedBytes $prefsInv.Bytes -ExpectedFiles $prefsInv.Files
 
   Invoke-TinyJobItem 'Startup' 3 8192 'start-gig-apps.vbs' {
     $startupDir = Join-Path $payload 'Startup'
@@ -1045,6 +1157,7 @@ function Invoke-Copy {
     sourceUser        = $env:USERNAME
     sourceUserProfile = $env:USERPROFILE
     viewerOnePath     = $ViewerOneSrc
+    copyKind          = $copyKind
     cubaseProjectRoot = [string]$cubaseRoot
     cubaseProjects    = @($projectMap)
     durationSeconds   = $secs
@@ -1058,7 +1171,7 @@ function Invoke-Copy {
   }
 
   $summary = @(
-    "Gig backup copied: $($ended.ToString('yyyy-MM-dd HH:mm'))"
+    "Gig backup copied: $($ended.ToString('yyyy-MM-dd HH:mm')) ($copyKind)"
     "From: $env:COMPUTERNAME / $env:USERNAME"
     "USB:  $usbRoot"
     "ViewerOne: $ViewerOneSrc"
@@ -1128,15 +1241,15 @@ function Invoke-Apply {
   Write-Step "This PC will be updated"
   Write-Info "ViewerOne -> $voDest"
   Write-Info "Cubase projects -> $cubaseDest"
-  Write-Info 'Cubase settings -> AppData\Steinberg\Cubase 15_64'
+  Write-Info 'Steinberg settings, MIDI Remote, content, and Native Instruments settings'
   Write-Info 'ViewerOne config -> AppData\viewer-one'
-  Write-Info 'loopMIDI ports, X32-Edit, logon startup task'
+  Write-Info 'loopMIDI app + ports, X32-Edit, logon startup task'
 
   if (-not (Test-Path -LiteralPath $CubaseExe)) {
-    Write-Warn "Cubase 15 is not installed at the usual path. Projects/settings will still be copied."
+    Write-Warn "Cubase 15 is not installed at the usual path. Projects and settings will still be copied. Cubase itself has to be installed separately."
   }
   if (-not (Get-LoopMidiExe)) {
-    Write-Warn "loopMIDI is not installed yet. Settings will be imported; install loopMIDI so the cables appear."
+    Write-Info "loopMIDI is not installed yet. The backup will copy the program in and load the cables."
   }
 
   Wait-GigAppsClosed "Close Cubase, ViewerOne, and X32-Edit before updating this PC."
@@ -1150,18 +1263,46 @@ function Invoke-Apply {
   $projSrc = Join-Path $payload 'Cubase-Projects'
   $prefsSrc = Join-Path $payload 'Cubase-Settings'
   $prefsDest = Join-Path $env:APPDATA 'Steinberg\Cubase 15_64'
-  $cfgSrc = Join-Path $payload 'ViewerOne-Config\viewer-one-config.json'
-  $scanSrc = Join-Path $payload 'ViewerOne-Config\last-arranger-scan.txt'
+  $cfgSrc = Join-Path $payload 'ViewerOne-AppData\viewer-one-config.json'
+  if (-not (Test-Path -LiteralPath $cfgSrc)) {
+    $cfgSrc = Join-Path $payload 'ViewerOne-Config\viewer-one-config.json'
+  }
+  $scanSrc = Join-Path $payload 'ViewerOne-AppData\last-arranger-scan.txt'
+  if (-not (Test-Path -LiteralPath $scanSrc)) {
+    $scanSrc = Join-Path $payload 'ViewerOne-Config\last-arranger-scan.txt'
+  }
   $x32ExeSrc = Join-Path $payload 'X32-Edit\X32-Edit.exe'
   $x32AppSrc = Join-Path $payload 'X32-Edit\AppData'
   $voExcludeApply = @('.git', 'release', '_ref', '.tmp-cubase-ocr', '.tmp-scan-qa', '.pio')
+  $applyTreeDefs = @(
+    [pscustomobject]@{ Name = 'ViewerOne data'; Rel = 'ViewerOne-AppData'; Dest = (Join-Path $env:APPDATA 'viewer-one') }
+    [pscustomobject]@{ Name = 'Steinberg settings'; Rel = 'Steinberg-AppData'; Dest = (Join-Path $env:APPDATA 'Steinberg') }
+    [pscustomobject]@{ Name = 'Steinberg documents'; Rel = 'Steinberg-Documents'; Dest = (Join-Path (Get-UserDocumentsPath) 'Steinberg') }
+    [pscustomobject]@{ Name = 'Steinberg local'; Rel = 'Steinberg-Local'; Dest = (Join-Path $env:LOCALAPPDATA 'Steinberg') }
+    [pscustomobject]@{ Name = 'Steinberg content'; Rel = 'Steinberg-ProgramData'; Dest = (Join-Path $env:PROGRAMDATA 'Steinberg') }
+    [pscustomobject]@{ Name = 'Native Instruments'; Rel = 'NativeInstruments-AppData'; Dest = (Join-Path $env:APPDATA 'Native Instruments') }
+    [pscustomobject]@{ Name = 'loopMIDI app'; Rel = 'loopMIDI\App'; Dest = (Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Tobias Erichsen\loopMIDI') }
+  )
 
   Write-Step "Scanning"
   $voInv = Get-FolderInventory -Path $voSrc -ExcludeTop $voExcludeApply
   $cubaseInv = [pscustomobject]@{ Bytes = [long]0; Files = [long]0 }
   if (Test-Path -LiteralPath $projSrc) { $cubaseInv = Get-FolderInventory -Path $projSrc }
+  $restoreTrees = New-Object System.Collections.Generic.List[object]
+  foreach ($def in $applyTreeDefs) {
+    $src = Join-Path $payload $def.Rel
+    if (-not (Test-Path -LiteralPath $src)) { continue }
+    $inv = Get-FolderInventory -Path $src
+    if ([long]$inv.Files -le 0) { continue }
+    $restoreTrees.Add([pscustomobject]@{
+      Name = $def.Name; Src = $src; Dest = $def.Dest; Files = [long]$inv.Files; Bytes = [long]$inv.Bytes
+    })
+  }
+  $hasSteinbergAppData = [bool]($restoreTrees | Where-Object { $_.Name -eq 'Steinberg settings' })
   $prefsInv = [pscustomobject]@{ Bytes = [long]0; Files = [long]0 }
-  if (Test-Path -LiteralPath $prefsSrc) { $prefsInv = Get-FolderInventory -Path $prefsSrc }
+  if ((-not $hasSteinbergAppData) -and (Test-Path -LiteralPath $prefsSrc)) {
+    $prefsInv = Get-FolderInventory -Path $prefsSrc
+  }
   $cfgFiles = [long]0
   $cfgBytes = [long]0
   foreach ($p in @($cfgSrc, $scanSrc)) {
@@ -1185,10 +1326,11 @@ function Invoke-Apply {
 
   $jobItems = New-Object System.Collections.Generic.List[object]
   $jobItems.Add((New-CopyJobItem 'ViewerOne' $voInv.Files $voInv.Bytes))
-  $jobItems.Add((New-CopyJobItem 'ViewerOne config' $cfgFiles $cfgBytes))
+  foreach ($t in $restoreTrees) { $jobItems.Add((New-CopyJobItem $t.Name $t.Files $t.Bytes)) }
+  if ($cfgFiles -gt 0) { $jobItems.Add((New-CopyJobItem 'ViewerOne config' $cfgFiles $cfgBytes)) }
   $jobItems.Add((New-CopyJobItem 'loopMIDI' 1 2048))
   if (Test-Path -LiteralPath $projSrc) { $jobItems.Add((New-CopyJobItem 'Cubase projects' $cubaseInv.Files $cubaseInv.Bytes)) }
-  if (Test-Path -LiteralPath $prefsSrc) { $jobItems.Add((New-CopyJobItem 'Cubase settings' $prefsInv.Files $prefsInv.Bytes)) }
+  if ([long]$prefsInv.Files -gt 0) { $jobItems.Add((New-CopyJobItem 'Cubase settings' $prefsInv.Files $prefsInv.Bytes)) }
   if ($x32Files -gt 0) { $jobItems.Add((New-CopyJobItem 'X32-Edit' $x32Files $x32Bytes)) }
   $jobItems.Add((New-CopyJobItem 'Startup' 1 1024))
 
@@ -1198,17 +1340,25 @@ function Invoke-Apply {
   Enter-CopyJobItem 'ViewerOne' $voInv.Files $voInv.Bytes
   $null = Invoke-RoboCopy -Source $voSrc -Dest $voDest -ExcludeDir $voExcludeApply -ExpectedBytes $voInv.Bytes -ExpectedFiles $voInv.Files
 
-  Invoke-TinyJobItem 'ViewerOne config' $cfgFiles $cfgBytes 'viewer-one-config.json' {
-    $cfgDestDir = Join-Path $env:APPDATA 'viewer-one'
-    New-Item -ItemType Directory -Path $cfgDestDir -Force | Out-Null
-    if (Test-Path -LiteralPath $cfgSrc) {
-      Copy-Item -LiteralPath $cfgSrc -Destination (Join-Path $cfgDestDir 'viewer-one-config.json') -Force
-      $repoBackup = Join-Path $voDest 'backup\viewer-one-config.json'
-      New-Item -ItemType Directory -Path (Split-Path $repoBackup) -Force | Out-Null
-      Copy-Item -LiteralPath $cfgSrc -Destination $repoBackup -Force
-    }
-    if (Test-Path -LiteralPath $scanSrc) {
-      Copy-Item -LiteralPath $scanSrc -Destination (Join-Path $cfgDestDir 'last-arranger-scan.txt') -Force
+  foreach ($t in $restoreTrees) {
+    Enter-CopyJobItem $t.Name $t.Files $t.Bytes
+    New-Item -ItemType Directory -Path $t.Dest -Force -ErrorAction SilentlyContinue | Out-Null
+    $null = Invoke-RoboCopy -Source $t.Src -Dest $t.Dest -ExpectedBytes $t.Bytes -ExpectedFiles $t.Files
+  }
+
+  if ($cfgFiles -gt 0) {
+    Invoke-TinyJobItem 'ViewerOne config' $cfgFiles $cfgBytes 'viewer-one-config.json' {
+      $cfgDestDir = Join-Path $env:APPDATA 'viewer-one'
+      New-Item -ItemType Directory -Path $cfgDestDir -Force | Out-Null
+      if (Test-Path -LiteralPath $cfgSrc) {
+        Copy-Item -LiteralPath $cfgSrc -Destination (Join-Path $cfgDestDir 'viewer-one-config.json') -Force
+        $repoBackup = Join-Path $voDest 'backup\viewer-one-config.json'
+        New-Item -ItemType Directory -Path (Split-Path $repoBackup) -Force | Out-Null
+        Copy-Item -LiteralPath $cfgSrc -Destination $repoBackup -Force
+      }
+      if (Test-Path -LiteralPath $scanSrc) {
+        Copy-Item -LiteralPath $scanSrc -Destination (Join-Path $cfgDestDir 'last-arranger-scan.txt') -Force
+      }
     }
   }
 
@@ -1221,7 +1371,7 @@ function Invoke-Apply {
     $null = Invoke-RoboCopy -Source $projSrc -Dest $cubaseDest -ExpectedBytes $cubaseInv.Bytes -ExpectedFiles $cubaseInv.Files
   }
 
-  if (Test-Path -LiteralPath $prefsSrc) {
+  if ([long]$prefsInv.Files -gt 0) {
     Enter-CopyJobItem 'Cubase settings' $prefsInv.Files $prefsInv.Bytes
     $null = Invoke-RoboCopy -Source $prefsSrc -Dest $prefsDest -ExpectedBytes $prefsInv.Bytes -ExpectedFiles $prefsInv.Files
   }
