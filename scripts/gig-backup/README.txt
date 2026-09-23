@@ -5,7 +5,13 @@ Before each gig, copy the live rig onto the USB drive. On the backup PC,
 apply that copy so Cubase, ViewerOne, loopMIDI, X32-Edit, and Windows
 startup all match.
 
-The backup PC must already have Cubase 15 installed.
+The backup laptop has a small OS drive and a separate data drive.
+Apply puts the large files on that data drive (Cubase projects and
+Steinberg content, under D:\GigData or whichever large drive it finds).
+It then creates folder links so Cubase still sees the original paths
+from this PC, including the Dropbox audio locations. The USB stick
+itself is not used as that data drive. Settings, loopMIDI, and X32-Edit
+stay on the OS drive.
 This does not install Cubase or the VST sample libraries themselves.
 It does copy loopMIDI's program files, X32-Edit, ViewerOne (including
 the Electron app), and the settings those programs need.

@@ -884,6 +884,323 @@ function Test-SamePath([string]$Left, [string]$Right) {
   }
 }
 
+function Get-RelativeUnder([string]$Full, [string]$Root) {
+  if ([string]::IsNullOrWhiteSpace($Full) -or [string]::IsNullOrWhiteSpace($Root)) { return $null }
+  try {
+    $fullN = [IO.Path]::GetFullPath($Full).TrimEnd('\')
+    $rootN = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+    if ($fullN.Length -le $rootN.Length) { return $null }
+    if (-not $fullN.StartsWith($rootN, [StringComparison]::OrdinalIgnoreCase)) { return $null }
+    $next = $fullN[$rootN.Length]
+    if ($next -ne '\' -and $next -ne '/') { return $null }
+    return $fullN.Substring($rootN.Length).TrimStart('\', '/')
+  } catch {
+    return $null
+  }
+}
+
+function Test-IsAdmin {
+  $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $prin = New-Object Security.Principal.WindowsPrincipal($id)
+  return $prin.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Test-IsReparsePoint([string]$Path) {
+  if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) { return $false }
+  try {
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    return [bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
+  } catch {
+    return $false
+  }
+}
+
+function Get-JunctionTarget([string]$Path) {
+  try {
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    $prop = $item.PSObject.Properties['Target']
+    if ($null -eq $prop -or $null -eq $prop.Value) { return $null }
+    $t = $prop.Value
+    if ($t -is [array]) {
+      if (@($t).Count -gt 0) { return [string]$t[0] }
+      return $null
+    }
+    return [string]$t
+  } catch {
+    return $null
+  }
+}
+
+function Test-IsWindowsUserProfile([string]$Path) {
+  if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) { return $false }
+  return (Test-Path -LiteralPath (Join-Path $Path 'NTUSER.DAT'))
+}
+
+function Test-ProfileResolvesHere([string]$SrcProfile) {
+  if ([string]::IsNullOrWhiteSpace($SrcProfile)) { return $false }
+  if (Test-SamePath $SrcProfile $env:USERPROFILE) { return $true }
+  if ((Test-Path -LiteralPath $SrcProfile) -and (Test-IsReparsePoint $SrcProfile)) {
+    $tgt = Get-JunctionTarget $SrcProfile
+    if ($tgt -and (Test-SamePath $tgt $env:USERPROFILE)) { return $true }
+  }
+  return $false
+}
+
+function Invoke-MklinkJunction([string]$Link, [string]$Target, [switch]$Elevated) {
+  $arg = '/c mklink /J "' + $Link + '" "' + $Target + '"'
+  $p = $null
+  if ($Elevated) {
+    $p = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -Verb RunAs -ArgumentList $arg -Wait -PassThru
+  } else {
+    $p = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList $arg -Wait -WindowStyle Hidden -PassThru
+  }
+  return ($null -ne $p -and $p.ExitCode -eq 0 -and (Test-Path -LiteralPath $Link))
+}
+
+function New-DirectoryJunction([string]$Link, [string]$Target) {
+  if ([string]::IsNullOrWhiteSpace($Link) -or [string]::IsNullOrWhiteSpace($Target)) { return $false }
+  $linkFull = [IO.Path]::GetFullPath($Link)
+  $targetFull = [IO.Path]::GetFullPath($Target)
+  if (Test-SamePath $linkFull $targetFull) { return $true }
+  if (-not (Test-Path -LiteralPath $targetFull)) {
+    New-Item -ItemType Directory -Path $targetFull -Force | Out-Null
+  }
+  if (Test-Path -LiteralPath $linkFull) {
+    if (Test-IsReparsePoint $linkFull) {
+      $cur = Get-JunctionTarget $linkFull
+      if ($cur -and (Test-SamePath $cur $targetFull)) {
+        Write-Ok ("Already linked: {0} -> {1}" -f $linkFull, $targetFull)
+        return $true
+      }
+      Write-Warn ("A folder link already exists at {0} (target: {1})" -f $linkFull, $cur)
+      return $false
+    }
+    Write-Warn "Cannot create folder link; $linkFull already exists"
+    return $false
+  }
+  $parent = Split-Path -Parent $linkFull
+  if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+  }
+  if (Invoke-MklinkJunction $linkFull $targetFull) {
+    Write-Ok ("Linked {0} -> {1}" -f $linkFull, $targetFull)
+    return $true
+  }
+  if (-not (Test-IsAdmin)) {
+    Write-Info "Need Administrator to create $linkFull (Windows will ask once)"
+    if (Invoke-MklinkJunction $linkFull $targetFull -Elevated) {
+      Write-Ok ("Linked {0} -> {1}" -f $linkFull, $targetFull)
+      return $true
+    }
+  }
+  Write-Warn ("Could not create folder link {0} -> {1}" -f $linkFull, $targetFull)
+  return $false
+}
+
+function Get-LocalDataDrive {
+  param([string]$ExcludeRoot, [long]$NeededBytes = 0)
+  $skip = @{}
+  $skip['C:'] = $true
+  if ($ExcludeRoot) {
+    $r = [IO.Path]::GetPathRoot($ExcludeRoot)
+    if ($r) { $skip[$r.TrimEnd('\').ToUpperInvariant()] = $true }
+  }
+  $need = [long]$NeededBytes + 2GB
+  if ($need -lt 2GB) { $need = 2GB }
+  $all = @(Get-CimInstance Win32_LogicalDisk | Where-Object {
+    $_.DeviceID -and
+    -not $skip.ContainsKey($_.DeviceID.ToUpperInvariant()) -and
+    $null -ne $_.Size -and
+    [long]$_.Size -gt 50GB -and
+    $null -ne $_.FreeSpace
+  })
+  if ($all.Count -eq 0) { return $null }
+  $fixed = @($all | Where-Object { $_.DriveType -eq 3 -and [long]$_.FreeSpace -ge $need } |
+    Sort-Object { [long]$_.FreeSpace } -Descending)
+  if ($fixed.Count -gt 0) { return $fixed[0] }
+  $any = @($all | Where-Object { [long]$_.FreeSpace -ge $need } |
+    Sort-Object { [long]$_.FreeSpace } -Descending)
+  if ($any.Count -gt 0) { return $any[0] }
+  return $null
+}
+
+function Test-CanLinkOriginalProfile([string]$SrcProfile, $Plan) {
+  if ([string]::IsNullOrWhiteSpace($SrcProfile)) { return $false }
+  if ($Plan.SameProfile) { return $true }
+  if ($null -ne $Plan.ProfileJunctionLink) { return $true }
+  return (Test-ProfileResolvesHere $SrcProfile)
+}
+
+function Get-BackupPathPlan {
+  param(
+    [string]$SrcProfile,
+    [string]$OrigCubase,
+    [string]$OrigViewerOne,
+    [string]$UsbRoot,
+    [long]$CubaseBytes = 0,
+    [long]$ViewerOneBytes = 0,
+    [long]$ContentBytes = 0
+  )
+  $voLaunch = Join-Path $env:USERPROFILE 'ViewerOne'
+  $plan = [ordered]@{
+    ViewerOneDest              = $voLaunch
+    ViewerOneCopyDest          = $voLaunch
+    CubaseDest                 = Join-Path $env:USERPROFILE 'Documents\Cubase'
+    CubasePhysicalDest         = Join-Path $env:USERPROFILE 'Documents\Cubase'
+    CubaseNativeLink           = $null
+    DataDrive                  = $null
+    SrcProfile                 = $SrcProfile
+    SameProfile                = $false
+    ProfileJunctionLink        = $null
+    ProfileJunctionTarget      = $null
+    CubaseJunctionLink         = $null
+    CubaseJunctionTarget       = $null
+    ViewerOneJunctionLink      = $null
+    ViewerOneJunctionTarget    = $null
+    SteinbergContentPhysical   = Join-Path $env:PROGRAMDATA 'Steinberg'
+    SteinbergContentLink       = $null
+    WillMatchOriginalPaths     = $false
+    Notes                      = New-Object System.Collections.Generic.List[string]
+  }
+  if ([string]::IsNullOrWhiteSpace($SrcProfile)) {
+    $SrcProfile = $env:USERPROFILE
+    $plan.SrcProfile = $SrcProfile
+  }
+  $plan.SameProfile = Test-SamePath $SrcProfile $env:USERPROFILE
+  if ($OrigViewerOne) {
+    $voRel = Get-RelativeUnder $OrigViewerOne $SrcProfile
+    if ($voRel) {
+      $voLaunch = Join-Path $env:USERPROFILE $voRel
+      $plan.ViewerOneDest = $voLaunch
+      $plan.ViewerOneCopyDest = $voLaunch
+    }
+  }
+  $cFree = Get-DriveFreeBytes 'C:\'
+  $voOnCNeed = [long]$ViewerOneBytes + 5GB
+  $needOnData = [long]$CubaseBytes + [long]$ContentBytes
+  $moveViewerOne = $false
+  if ($cFree -ge 0 -and $cFree -lt $voOnCNeed -and $ViewerOneBytes -gt 50MB) {
+    $voExists = (Test-Path -LiteralPath $plan.ViewerOneDest) -and -not (Test-IsReparsePoint $plan.ViewerOneDest)
+    $voKids = @()
+    if ($voExists) { $voKids = @(Get-ChildItem -LiteralPath $plan.ViewerOneDest -Force -ErrorAction SilentlyContinue) }
+    if (-not $voExists -or $voKids.Count -eq 0) {
+      $moveViewerOne = $true
+      $needOnData += [long]$ViewerOneBytes
+    }
+  }
+  $dataDisk = Get-LocalDataDrive -ExcludeRoot $UsbRoot -NeededBytes $needOnData
+  if ($dataDisk) {
+    $plan.DataDrive = $dataDisk.DeviceID
+    $plan.CubasePhysicalDest = Join-Path $dataDisk.DeviceID 'GigData\Cubase'
+    $plan.CubaseDest = $plan.CubasePhysicalDest
+    $plan.Notes.Add(("Cubase projects go on {0}\GigData\Cubase so they do not fill the OS drive" -f $dataDisk.DeviceID))
+    $docsCubase = Join-Path $env:USERPROFILE 'Documents\Cubase'
+    if (-not (Test-SamePath $docsCubase $plan.CubasePhysicalDest)) { $plan.CubaseNativeLink = $docsCubase }
+    if ($ContentBytes -gt 50MB) {
+      $plan.SteinbergContentPhysical = Join-Path $dataDisk.DeviceID 'GigData\Steinberg'
+      $plan.SteinbergContentLink = Join-Path $env:PROGRAMDATA 'Steinberg'
+      $plan.Notes.Add(("Steinberg content goes on {0}\GigData\Steinberg and C:\ProgramData\Steinberg links there" -f $dataDisk.DeviceID))
+    }
+    if ($moveViewerOne) {
+      $plan.ViewerOneCopyDest = Join-Path $dataDisk.DeviceID 'GigData\ViewerOne'
+      $plan.ViewerOneJunctionLink = $plan.ViewerOneDest
+      $plan.ViewerOneJunctionTarget = $plan.ViewerOneCopyDest
+      $plan.Notes.Add(("ViewerOne also goes on {0}; {1} will link there" -f $dataDisk.DeviceID, $plan.ViewerOneDest))
+    }
+  } else {
+    $plan.Notes.Add('No extra data drive with enough space -- large files will try to land on C:')
+  }
+  if (-not $plan.SameProfile) {
+    if (-not (Test-Path -LiteralPath $SrcProfile)) {
+      $plan.ProfileJunctionLink = $SrcProfile
+      $plan.ProfileJunctionTarget = $env:USERPROFILE
+      $plan.Notes.Add(("Link {0} -> {1} so the original Cubase path still exists" -f $SrcProfile, $env:USERPROFILE))
+    } elseif (Test-IsReparsePoint $SrcProfile) {
+      $tgt = Get-JunctionTarget $SrcProfile
+      if ($tgt -and (Test-SamePath $tgt $env:USERPROFILE)) {
+        $plan.Notes.Add("Profile link already in place: $SrcProfile")
+      } else {
+        $plan.Notes.Add("A different folder link already exists at $SrcProfile -- leaving it")
+      }
+    } elseif (Test-IsWindowsUserProfile $SrcProfile) {
+      $plan.Notes.Add("Original profile $SrcProfile is a real Windows user folder on this PC; will not take it over")
+    } else {
+      $kids = @(Get-ChildItem -LiteralPath $SrcProfile -Force -ErrorAction SilentlyContinue)
+      if ($kids.Count -eq 0) {
+        $plan.ProfileJunctionLink = $SrcProfile
+        $plan.ProfileJunctionTarget = $env:USERPROFILE
+        $plan.Notes.Add("Replace empty $SrcProfile with a link to this account")
+      } else {
+        $plan.Notes.Add("$SrcProfile already exists and is not empty; will not replace it")
+      }
+    }
+  }
+  if ($OrigCubase) {
+    $physical = [string]$plan.CubasePhysicalDest
+    if (Test-SamePath $OrigCubase $physical) {
+      $plan.WillMatchOriginalPaths = $true
+    } elseif (Test-CanLinkOriginalProfile $SrcProfile $plan) {
+      $plan.CubaseJunctionLink = $OrigCubase
+      $plan.CubaseJunctionTarget = $physical
+      $plan.WillMatchOriginalPaths = $true
+      $plan.Notes.Add(("Link {0} -> {1} so Cubase still finds audio at the original path" -f $OrigCubase, $physical))
+    } else {
+      $plan.WillMatchOriginalPaths = $false
+      $plan.Notes.Add("Could not recreate $OrigCubase on this PC. Cubase may ask to Find Missing Files.")
+    }
+  }
+  return [pscustomobject]$plan
+}
+
+function Invoke-BackupPathPlan($Plan) {
+  if ($Plan.ProfileJunctionLink) {
+    if ((Test-Path -LiteralPath $Plan.ProfileJunctionLink) -and -not (Test-IsReparsePoint $Plan.ProfileJunctionLink)) {
+      $kids = @(Get-ChildItem -LiteralPath $Plan.ProfileJunctionLink -Force -ErrorAction SilentlyContinue)
+      if ($kids.Count -eq 0) { Remove-Item -LiteralPath $Plan.ProfileJunctionLink -Force -ErrorAction SilentlyContinue }
+    }
+    if (-not (New-DirectoryJunction $Plan.ProfileJunctionLink $Plan.ProfileJunctionTarget)) {
+      $Plan.WillMatchOriginalPaths = $false
+    }
+  }
+  if ($Plan.ViewerOneCopyDest) { New-Item -ItemType Directory -Path $Plan.ViewerOneCopyDest -Force | Out-Null }
+  if ($Plan.ViewerOneJunctionLink -and $Plan.ViewerOneJunctionTarget) {
+    if (-not (New-DirectoryJunction $Plan.ViewerOneJunctionLink $Plan.ViewerOneJunctionTarget)) {
+      Write-Warn "Could not link ViewerOne; files will live at $($Plan.ViewerOneCopyDest)"
+      $Plan.ViewerOneDest = [string]$Plan.ViewerOneCopyDest
+    }
+  }
+  if ($Plan.CubasePhysicalDest) {
+    New-Item -ItemType Directory -Path $Plan.CubasePhysicalDest -Force | Out-Null
+    $Plan.CubaseDest = [string]$Plan.CubasePhysicalDest
+  }
+  if ($Plan.CubaseJunctionLink -and $Plan.CubaseJunctionTarget) {
+    if (-not (Test-ProfileResolvesHere $Plan.SrcProfile) -and -not $Plan.SameProfile) {
+      Write-Warn "Could not make $($Plan.SrcProfile) point at this account; Cubase may ask to Find Missing Files"
+      $Plan.WillMatchOriginalPaths = $false
+    } elseif (-not (New-DirectoryJunction $Plan.CubaseJunctionLink $Plan.CubaseJunctionTarget)) {
+      Write-Warn "Could not link the original Cubase path."
+      $Plan.WillMatchOriginalPaths = $false
+    } else {
+      $Plan.WillMatchOriginalPaths = $true
+    }
+  }
+  $native = [string]$Plan.CubaseNativeLink
+  if ($native -and $Plan.CubasePhysicalDest -and -not (Test-SamePath $native $Plan.CubasePhysicalDest)) {
+    if (-not (Test-Path -LiteralPath $native) -or (Test-IsReparsePoint $native)) {
+      [void](New-DirectoryJunction $native $Plan.CubasePhysicalDest)
+    }
+  }
+  if ($Plan.SteinbergContentPhysical) {
+    New-Item -ItemType Directory -Path $Plan.SteinbergContentPhysical -Force | Out-Null
+  }
+  if ($Plan.SteinbergContentLink -and $Plan.SteinbergContentPhysical) {
+    if (-not (New-DirectoryJunction $Plan.SteinbergContentLink $Plan.SteinbergContentPhysical)) {
+      Write-Warn "Steinberg content is on $($Plan.SteinbergContentPhysical). C:\ProgramData\Steinberg was left as it is."
+    }
+  }
+  return $Plan
+}
+
 function Deploy-Tooling([string]$UsbRoot) {
   New-Item -ItemType Directory -Path $UsbRoot -Force | Out-Null
   if (-not (Test-SamePath $ToolDir $UsbRoot)) {
@@ -1226,38 +1543,9 @@ function Invoke-Apply {
     Write-Warn "No manifest.json -- applying whatever is in Payload\"
   }
 
-  $voDest = Join-Path $env:USERPROFILE 'ViewerOne'
-  $cubaseDest = Join-Path $env:USERPROFILE 'Documents\Cubase'
   $srcProfile = [string](Get-ManifestValue $man 'sourceUserProfile')
   $origCubase = [string](Get-ManifestValue $man 'cubaseProjectRoot')
-  if ($srcProfile -and ($srcProfile -eq $env:USERPROFILE) -and $origCubase) {
-    $cubaseDest = $origCubase
-    Write-Info "Same Windows user as the main PC -- restoring Cubase projects to the original path so audio links keep working."
-  } else {
-    Write-Warn "Restoring Cubase projects to $cubaseDest"
-    Write-Warn "If Cubase reports missing audio, point it at that folder (Media > Find Missing Files)."
-  }
-
-  Write-Step "This PC will be updated"
-  Write-Info "ViewerOne -> $voDest"
-  Write-Info "Cubase projects -> $cubaseDest"
-  Write-Info 'Steinberg settings, MIDI Remote, content, and Native Instruments settings'
-  Write-Info 'ViewerOne config -> AppData\viewer-one'
-  Write-Info 'loopMIDI app + ports, X32-Edit, logon startup task'
-
-  if (-not (Test-Path -LiteralPath $CubaseExe)) {
-    Write-Warn "Cubase 15 is not installed at the usual path. Projects and settings will still be copied. Cubase itself has to be installed separately."
-  }
-  if (-not (Get-LoopMidiExe)) {
-    Write-Info "loopMIDI is not installed yet. The backup will copy the program in and load the cables."
-  }
-
-  Wait-GigAppsClosed "Close Cubase, ViewerOne, and X32-Edit before updating this PC."
-
-  if (-not (Confirm-Go "Update this backup PC from the USB now?")) {
-    Write-Warn "Cancelled."
-    return
-  }
+  $origViewerOne = [string](Get-ManifestValue $man 'viewerOnePath')
 
   $voSrc = Join-Path $payload 'ViewerOne'
   $projSrc = Join-Path $payload 'Cubase-Projects'
@@ -1323,6 +1611,47 @@ function Invoke-Apply {
     $x32Files += [long]$x32Inv.Files
     $x32Bytes += [long]$x32Inv.Bytes
   }
+
+  $contentBytes = [long]0
+  $contentTree = $restoreTrees | Where-Object { $_.Name -eq 'Steinberg content' } | Select-Object -First 1
+  if ($contentTree) { $contentBytes = [long]$contentTree.Bytes }
+  $plan = Get-BackupPathPlan -SrcProfile $srcProfile -OrigCubase $origCubase -OrigViewerOne $origViewerOne -UsbRoot $usbRoot -CubaseBytes ([long]$cubaseInv.Bytes) -ViewerOneBytes ([long]$voInv.Bytes) -ContentBytes $contentBytes
+  $voDest = [string]$plan.ViewerOneCopyDest
+  $cubaseDest = [string]$plan.CubasePhysicalDest
+  if ($contentTree -and $plan.SteinbergContentPhysical) { $contentTree.Dest = [string]$plan.SteinbergContentPhysical }
+
+  Write-Step "This PC will be updated"
+  Write-Info "ViewerOne -> $voDest"
+  if ($plan.ViewerOneJunctionLink) { Write-Info ("ViewerOne link -> {0}" -f $plan.ViewerOneJunctionLink) }
+  Write-Info "Cubase projects -> $cubaseDest"
+  if ($plan.CubaseJunctionLink) { Write-Info ("Cubase original path -> {0}  (folder link)" -f $plan.CubaseJunctionLink) }
+  if ($plan.CubaseNativeLink) { Write-Info ("Also available at -> {0}" -f $plan.CubaseNativeLink) }
+  if ($plan.SteinbergContentPhysical) { Write-Info ("Steinberg content -> {0}" -f $plan.SteinbergContentPhysical) }
+  Write-Info 'Settings, MIDI Remote, loopMIDI, X32-Edit, and the logon startup task stay on C:'
+  if (@($plan.Notes).Count -gt 0) {
+    foreach ($note in @($plan.Notes)) { Write-Info $note }
+  }
+  if ($plan.WillMatchOriginalPaths) {
+    Write-Ok "Cubase will still see files at the original path, so audio links should just work."
+  } else {
+    Write-Warn "Cubase may ask to Find Missing Files once."
+  }
+  if (-not (Test-Path -LiteralPath $CubaseExe)) {
+    Write-Warn "Cubase 15 is not installed at the usual path. Projects and settings will still be copied. Cubase itself has to be installed separately."
+  }
+  if (-not (Get-LoopMidiExe)) {
+    Write-Info "loopMIDI is not installed yet. The backup will copy the program in and load the cables."
+  }
+
+  Wait-GigAppsClosed "Close Cubase, ViewerOne, and X32-Edit before updating this PC."
+  if (-not (Confirm-Go "Update this backup PC from the USB now?")) {
+    Write-Warn "Cancelled."
+    return
+  }
+  $plan = Invoke-BackupPathPlan $plan
+  $voDest = [string]$plan.ViewerOneCopyDest
+  $cubaseDest = [string]$plan.CubasePhysicalDest
+  if ($contentTree -and $plan.SteinbergContentPhysical) { $contentTree.Dest = [string]$plan.SteinbergContentPhysical }
 
   $jobItems = New-Object System.Collections.Generic.List[object]
   $jobItems.Add((New-CopyJobItem 'ViewerOne' $voInv.Files $voInv.Bytes))
@@ -1424,7 +1753,21 @@ function Invoke-Apply {
     $latest = Get-ChildItem -LiteralPath (Join-Path $cubaseDest '80s-00s') -Filter '*.cpr' -ErrorAction SilentlyContinue |
       Sort-Object LastWriteTime -Descending |
       Select-Object -First 1
-    if ($latest) { Write-Ok ("Open this in Cubase: {0}" -f $latest.FullName) }
+    if ($latest) {
+      $openPath = $latest.FullName
+      if ($plan.WillMatchOriginalPaths -and $plan.CubaseJunctionLink) {
+        $rel = Get-RelativeUnder $latest.FullName $plan.CubasePhysicalDest
+        if ($rel) { $openPath = Join-Path $plan.CubaseJunctionLink $rel }
+      }
+      $dest = Join-Path $env:USERPROFILE 'Desktop\Open gig Cubase project.lnk'
+      if (Test-Path -LiteralPath $CubaseExe) {
+        New-Shortcut -Path $dest -Target $CubaseExe -Arguments ('"{0}"' -f $openPath) -WorkDir (Split-Path $openPath) -Description 'Open the gig Cubase project'
+      } else {
+        New-Shortcut -Path $dest -Target $openPath -WorkDir (Split-Path $openPath) -Description 'Open the gig Cubase project'
+      }
+      Write-Ok "Desktop shortcut: $dest"
+      Write-Ok ("Open this in Cubase: {0}" -f $openPath)
+    }
   }
   if (Test-Path -LiteralPath $prefsSrc) {
     Write-Warn "If the backup PC's audio interface differs, re-select it in Cubase Studio Setup. MIDI ports should match after loopMIDI import."
