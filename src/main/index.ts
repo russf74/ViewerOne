@@ -36,7 +36,7 @@ import {
 } from './dmxBridge.js'
 import { dmxUniverseForLedPattern, dmxUniverseForLook, DMX_RANDOM_ROTATE_MS, DMX_STICK_FRAME_MS, type DmxLook } from '../shared/dmx.js'
 import { mergeDmxCueOverrides } from '../shared/dmxCue.js'
-import type { DmxCueOverride, LightingCue } from '../shared/lightingProgram.js'
+import { extendLightingTail, type DmxCueOverride, type LightingCue, type LightingProgram } from '../shared/lightingProgram.js'
 import type { LightingReadinessReport } from '../shared/lightingReadiness.js'
 import { auditLightingReadiness } from '../shared/lightingReadiness.js'
 import { buildEsp32DisplayPayload } from '../shared/esp32Payload.js'
@@ -226,6 +226,19 @@ function armLightingDirectorForCurrentSong(): void {
   }
   lightingDirector.arm(row, st.liveAudioSyncEnabled, st.lightingLoopbackDevice)
   tickPerformanceSync()
+}
+
+function withLightingTail(
+  row: SetlistItem,
+  program: LightingProgram,
+  durationMs: number
+): LightingProgram {
+  return (
+    extendLightingTail(
+      program,
+      Math.max(songLengthSeconds(row.length) * 1000, durationMs)
+    ) ?? program
+  )
 }
 
 function updateSetlistRow(songId: string, patch: Partial<SetlistItem>): void {
@@ -3414,7 +3427,7 @@ function registerIpc(): void {
       const result = await lightingDirector.analyzeSongBackingTrack(row)
       updateSetlistRow(songId, {
         audioAnalysis: result.audioAnalysis,
-        lightingProgram: result.lightingProgram,
+        lightingProgram: withLightingTail(row, result.lightingProgram, result.audioAnalysis.durationMs),
         audioSource: 'external-file'
       })
       console.log(
@@ -3435,7 +3448,7 @@ function registerIpc(): void {
         const result = await lightingDirector.analyzeSongBackingTrack(row)
         updateSetlistRow(row.id, {
           audioAnalysis: result.audioAnalysis,
-          lightingProgram: result.lightingProgram,
+          lightingProgram: withLightingTail(row, result.lightingProgram, result.audioAnalysis.durationMs),
           audioSource: 'external-file'
         })
         console.log(

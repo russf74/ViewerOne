@@ -5,7 +5,7 @@ import { cubasePsStop, cubasePsPlay, prepareCubaseWindowForCapture } from './cub
 import { cubaseRenderPathForSong } from './cubaseRenderPaths.js'
 import type { LightingAnalyzeScanState, SetlistItem } from '../shared/types.js'
 import type { SongAudioAnalysis } from '../shared/audioAnalysis.js'
-import type { LightingProgram } from '../shared/lightingProgram.js'
+import { extendLightingTail, type LightingProgram } from '../shared/lightingProgram.js'
 import { LoopbackRecorder } from './loopbackRecord.js'
 import { peakNormalizeWavFile } from './wavNormalize.js'
 import { songLengthSeconds } from '../shared/setlistTiming.js'
@@ -310,7 +310,14 @@ export async function runLightingAnalyzePass(deps: LightingAnalyzeDeps): Promise
         cubaseRenderCapturedAt: new Date().toISOString(),
         backingTrackPath: undefined,
         audioAnalysis: analyzed.audioAnalysis,
-        lightingProgram: analyzed.lightingProgram,
+        lightingProgram:
+          extendLightingTail(
+            analyzed.lightingProgram,
+            Math.max(
+              songLengthSeconds(length || row.length) * 1000,
+              analyzed.audioAnalysis.durationMs
+            )
+          ) ?? analyzed.lightingProgram,
         length: length || row.length
       })
       captured++

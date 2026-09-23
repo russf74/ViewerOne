@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.61
+
+- Each song's last live DMX pattern now holds through the end of the song plus 15 seconds, so a quiet outro does not drop to between-songs lights before Cubase sends the end.
+
 ## v6.00.60
 
 - Cubase capture stays stereo (beat analysis still uses a mono mix). A length scan keeps each song's existing audio analysis and DMX program.

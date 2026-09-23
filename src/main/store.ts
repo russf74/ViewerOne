@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import Store from 'electron-store'
 import type { AppState, ArrangerMidiMapping, SetlistItem, TransportMidiMapping } from '../shared/types.js'
 import { normalizeSongAudioAnalysis } from '../shared/audioAnalysisNormalize.js'
+import { extendLightingTail } from '../shared/lightingProgram.js'
 import { normalizeLightingProgram } from '../shared/lightingProgramNormalize.js'
 import { clampDmxChannel, normalizeDmxFixtureMode } from '../shared/dmx.js'
 import {
@@ -12,7 +13,7 @@ import {
   RANDOM_LED_PATTERN_ID,
   songLedPatternForIndex
 } from '../shared/ledPatterns.js'
-import { normalizeSongLength } from '../shared/setlistTiming.js'
+import { normalizeSongLength, songLengthSeconds } from '../shared/setlistTiming.js'
 import {
   CUBASE_TRANSPORT_CHANNEL,
   CUBASE_TRANSPORT_START_NOTE,
@@ -193,7 +194,13 @@ function normalizeSetlist(list: unknown): SetlistItem[] {
           ? r.backingTrackPath.trim()
           : undefined,
       audioAnalysis: normalizeSongAudioAnalysis(r.audioAnalysis),
-      lightingProgram: normalizeLightingProgram(r.lightingProgram),
+      lightingProgram: extendLightingTail(
+        normalizeLightingProgram(r.lightingProgram),
+        Math.max(
+          songLengthSeconds(normalizeSongLength(r.length)) * 1000,
+          Number(r.audioAnalysis?.durationMs) || 0
+        )
+      ),
       audioSource:
         r.audioSource === 'cubase-render' || r.audioSource === 'external-file'
           ? r.audioSource

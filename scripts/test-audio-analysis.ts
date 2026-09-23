@@ -7,7 +7,7 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { analyzeMonoPcm, snapToBarMs, trackClickBeats } from '../src/shared/audioAnalysis.ts'
-import { buildLightingProgram } from '../src/shared/lightingProgram.ts'
+import { buildLightingProgram, extendLightingTail, type LightingProgram } from '../src/shared/lightingProgram.ts'
 
 function clickTrackPcm(bpm: number, durationSec: number, sr = 22050): Float32Array {
   const n = Math.floor(durationSec * sr)
@@ -285,5 +285,23 @@ try {
   }
   console.log('render BPM check skipped:', err instanceof Error ? err.message : err)
 }
+
+const earlyIdleProgram: LightingProgram = {
+  version: 1,
+  generatedAt: '',
+  bpm: 120,
+  cues: [
+    { atMs: 0, ledPatternId: 16, dmxLook: 'live', label: 'chorus' },
+    { atMs: 180000, ledPatternId: 0, dmxLook: 'idle', label: 'outro' }
+  ]
+}
+const earlyIdle = extendLightingTail(earlyIdleProgram, 200000)
+const parked = earlyIdle?.cues.find((c) => c.dmxLook === 'idle')
+if (parked?.atMs !== 215000) throw new Error(`idle tail should hold to 215s, got ${parked?.atMs}`)
+const again = extendLightingTail(earlyIdle, 200000)
+if (again?.cues.find((c) => c.dmxLook === 'idle')?.atMs !== 215000) {
+  throw new Error('extending the tail twice must not keep pushing it')
+}
+console.log('lighting tail buffer OK')
 
 console.log('audio-analysis: OK')

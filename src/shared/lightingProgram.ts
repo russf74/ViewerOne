@@ -169,13 +169,56 @@ export function buildLightingProgram(
   }
 
   cues.sort((a, b) => a.atMs - b.atMs)
-  return {
+  const built: LightingProgram = {
     version: 1,
     generatedAt: new Date().toISOString(),
     cues: compactCues(cues),
     bpm: analysis.bpm,
     beatsPerBar
   }
+  // Keep the last live look through the analysed end plus a buffer, so a quiet
+  // outro does not drop to between-songs idle before Cubase sends the end.
+  return extendLightingTail(built, analysis.durationMs) ?? built
+}
+
+/** Extra time the last live pattern keeps running after the song clock. */
+export const LIGHTING_TAIL_BUFFER_MS = 15_000
+
+/**
+ * Park trailing between-songs cues (idle/off) until `songEndMs` plus the buffer.
+ * The previous live pattern then holds through the song and 15s past it.
+ * Safe to run again: cues already at or after that point stay put.
+ */
+export function extendLightingTail(
+  program: LightingProgram | undefined,
+  songEndMs: number,
+  extraMs = LIGHTING_TAIL_BUFFER_MS
+): LightingProgram | undefined {
+  if (!program?.cues?.length) return program
+  if (!Number.isFinite(songEndMs) || songEndMs < 1000) return program
+  const holdUntil = Math.round(songEndMs + extraMs)
+  const cues = program.cues.map((c) => ({ ...c, dmx: c.dmx ? { ...c.dmx } : undefined }))
+  cues.sort((a, b) => a.atMs - b.atMs)
+  let lastLive = -1
+  for (let i = 0; i < cues.length; i++) {
+    const cue = cues[i]
+    if (cue.accentDurationMs) continue
+    if (cue.dmxLook === 'idle' || cue.dmxLook === 'off') continue
+    lastLive = i
+  }
+  if (lastLive < 0) return program
+  let changed = false
+  for (let i = lastLive + 1; i < cues.length; i++) {
+    const cue = cues[i]
+    if (cue.accentDurationMs) continue
+    if (cue.dmxLook !== 'idle' && cue.dmxLook !== 'off') continue
+    if (cue.atMs < holdUntil) {
+      cue.atMs = holdUntil
+      changed = true
+    }
+  }
+  if (!changed) return program
+  return { ...program, cues: compactCues(cues) }
 }
 
 function compactCues(cues: LightingCue[]): LightingCue[] {
