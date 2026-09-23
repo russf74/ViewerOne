@@ -773,11 +773,12 @@ function Clear-UsbVolume([string]$DriveRoot) {
 
 function Get-SettingsTreeDefs([bool]$Full) {
   $docs = Get-UserDocumentsPath
-  $steinbergDir = @()
   $steinbergFile = @()
   $voAppDir = @()
+  # Activation Manager holds this PC's licence. It will not work on the backup laptop.
+  $steinbergDir = @('Activation Manager')
   if (-not $Full) {
-    $steinbergDir = @('Cubase Pro VST3 Cache')
+    $steinbergDir += 'Cubase Pro VST3 Cache'
     $steinbergFile = @('ApplicationStarted.txt', 'AppColorHint.txt', 'Cubase Pro Module Cache.xml')
     $voAppDir = @('Cache', 'Code Cache', 'GPUCache', 'DawnCache', 'blob_storage', 'Session Storage', 'Shared Dictionary', 'Network', 'tmp-sc-probe')
     $voAppRoot = Join-Path $env:APPDATA 'viewer-one'
@@ -1564,7 +1565,7 @@ function Invoke-Apply {
   $voExcludeApply = @('.git', 'release', '_ref', '.tmp-cubase-ocr', '.tmp-scan-qa', '.pio')
   $applyTreeDefs = @(
     [pscustomobject]@{ Name = 'ViewerOne data'; Rel = 'ViewerOne-AppData'; Dest = (Join-Path $env:APPDATA 'viewer-one') }
-    [pscustomobject]@{ Name = 'Steinberg settings'; Rel = 'Steinberg-AppData'; Dest = (Join-Path $env:APPDATA 'Steinberg') }
+    [pscustomobject]@{ Name = 'Steinberg settings'; Rel = 'Steinberg-AppData'; Dest = (Join-Path $env:APPDATA 'Steinberg'); ExDir = @('Activation Manager') }
     [pscustomobject]@{ Name = 'Steinberg documents'; Rel = 'Steinberg-Documents'; Dest = (Join-Path (Get-UserDocumentsPath) 'Steinberg') }
     [pscustomobject]@{ Name = 'Steinberg local'; Rel = 'Steinberg-Local'; Dest = (Join-Path $env:LOCALAPPDATA 'Steinberg') }
     [pscustomobject]@{ Name = 'Steinberg content'; Rel = 'Steinberg-ProgramData'; Dest = (Join-Path $env:PROGRAMDATA 'Steinberg') }
@@ -1580,10 +1581,11 @@ function Invoke-Apply {
   foreach ($def in $applyTreeDefs) {
     $src = Join-Path $payload $def.Rel
     if (-not (Test-Path -LiteralPath $src)) { continue }
-    $inv = Get-FolderInventory -Path $src
+    $ex = @($def.ExDir)
+    $inv = Get-FolderInventory -Path $src -ExcludeTop $ex
     if ([long]$inv.Files -le 0) { continue }
     $restoreTrees.Add([pscustomobject]@{
-      Name = $def.Name; Src = $src; Dest = $def.Dest; Files = [long]$inv.Files; Bytes = [long]$inv.Bytes
+      Name = $def.Name; Src = $src; Dest = $def.Dest; ExDir = $ex; Files = [long]$inv.Files; Bytes = [long]$inv.Bytes
     })
   }
   $hasSteinbergAppData = [bool]($restoreTrees | Where-Object { $_.Name -eq 'Steinberg settings' })
@@ -1672,7 +1674,7 @@ function Invoke-Apply {
   foreach ($t in $restoreTrees) {
     Enter-CopyJobItem $t.Name $t.Files $t.Bytes
     New-Item -ItemType Directory -Path $t.Dest -Force -ErrorAction SilentlyContinue | Out-Null
-    $null = Invoke-RoboCopy -Source $t.Src -Dest $t.Dest -ExpectedBytes $t.Bytes -ExpectedFiles $t.Files
+    $null = Invoke-RoboCopy -Source $t.Src -Dest $t.Dest -ExcludeDir @($t.ExDir) -ExpectedBytes $t.Bytes -ExpectedFiles $t.Files
   }
 
   if ($cfgFiles -gt 0) {

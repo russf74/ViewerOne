@@ -11,7 +11,8 @@ Steinberg content, under D:\GigData or whichever large drive it finds).
 It then creates folder links so Cubase still sees the original paths
 from this PC, including the Dropbox audio locations. The USB stick
 itself is not used as that data drive. Settings, loopMIDI, and X32-Edit
-stay on the OS drive.
+stay on the OS drive. The Steinberg Activation Manager is not copied,
+so each computer keeps its own Cubase licence.
 This does not install Cubase or the VST sample libraries themselves.
 It does copy loopMIDI's program files, X32-Edit, ViewerOne (including
 the Electron app), and the settings those programs need.
