@@ -958,7 +958,13 @@ function Invoke-MklinkJunction([string]$Link, [string]$Target, [switch]$Elevated
   return ($null -ne $p -and $p.ExitCode -eq 0 -and (Test-Path -LiteralPath $Link))
 }
 
-function New-DirectoryJunction([string]$Link, [string]$Target) {
+function Remove-JunctionOnly([string]$Link) {
+  # rmdir without /s removes the link itself and leaves the folder it pointed at.
+  & cmd.exe /c "rmdir `"$Link`"" | Out-Null
+  return -not (Test-Path -LiteralPath $Link)
+}
+
+function New-DirectoryJunction([string]$Link, [string]$Target, [switch]$Replace) {
   if ([string]::IsNullOrWhiteSpace($Link) -or [string]::IsNullOrWhiteSpace($Target)) { return $false }
   $linkFull = [IO.Path]::GetFullPath($Link)
   $targetFull = [IO.Path]::GetFullPath($Target)
@@ -973,11 +979,27 @@ function New-DirectoryJunction([string]$Link, [string]$Target) {
         Write-Ok ("Already linked: {0} -> {1}" -f $linkFull, $targetFull)
         return $true
       }
-      Write-Warn ("A folder link already exists at {0} (target: {1})" -f $linkFull, $cur)
-      return $false
+      if (-not $Replace) {
+        Write-Warn ("A folder link already exists at {0} (target: {1})" -f $linkFull, $cur)
+        return $false
+      }
+      Write-Info ("Replacing old link at {0} (was {1})" -f $linkFull, $cur)
+      if (-not (Remove-JunctionOnly $linkFull)) {
+        Write-Warn "Could not remove the old folder link at $linkFull"
+        return $false
+      }
+    } else {
+      $kids = @(Get-ChildItem -LiteralPath $linkFull -Force -ErrorAction SilentlyContinue)
+      if (-not $Replace -or $kids.Count -gt 0) {
+        Write-Warn "Cannot create folder link; $linkFull already exists"
+        return $false
+      }
+      Remove-Item -LiteralPath $linkFull -Force -ErrorAction SilentlyContinue
+      if (Test-Path -LiteralPath $linkFull) {
+        Write-Warn "Cannot create folder link; $linkFull already exists"
+        return $false
+      }
     }
-    Write-Warn "Cannot create folder link; $linkFull already exists"
-    return $false
   }
   $parent = Split-Path -Parent $linkFull
   if ($parent -and -not (Test-Path -LiteralPath $parent)) {
@@ -1165,7 +1187,7 @@ function Invoke-BackupPathPlan($Plan) {
   }
   if ($Plan.ViewerOneCopyDest) { New-Item -ItemType Directory -Path $Plan.ViewerOneCopyDest -Force | Out-Null }
   if ($Plan.ViewerOneJunctionLink -and $Plan.ViewerOneJunctionTarget) {
-    if (-not (New-DirectoryJunction $Plan.ViewerOneJunctionLink $Plan.ViewerOneJunctionTarget)) {
+    if (-not (New-DirectoryJunction $Plan.ViewerOneJunctionLink $Plan.ViewerOneJunctionTarget -Replace)) {
       Write-Warn "Could not link ViewerOne; files will live at $($Plan.ViewerOneCopyDest)"
       $Plan.ViewerOneDest = [string]$Plan.ViewerOneCopyDest
     }
@@ -1178,7 +1200,7 @@ function Invoke-BackupPathPlan($Plan) {
     if (-not (Test-ProfileResolvesHere $Plan.SrcProfile) -and -not $Plan.SameProfile) {
       Write-Warn "Could not make $($Plan.SrcProfile) point at this account; Cubase may ask to Find Missing Files"
       $Plan.WillMatchOriginalPaths = $false
-    } elseif (-not (New-DirectoryJunction $Plan.CubaseJunctionLink $Plan.CubaseJunctionTarget)) {
+    } elseif (-not (New-DirectoryJunction $Plan.CubaseJunctionLink $Plan.CubaseJunctionTarget -Replace)) {
       Write-Warn "Could not link the original Cubase path."
       $Plan.WillMatchOriginalPaths = $false
     } else {
@@ -1188,14 +1210,14 @@ function Invoke-BackupPathPlan($Plan) {
   $native = [string]$Plan.CubaseNativeLink
   if ($native -and $Plan.CubasePhysicalDest -and -not (Test-SamePath $native $Plan.CubasePhysicalDest)) {
     if (-not (Test-Path -LiteralPath $native) -or (Test-IsReparsePoint $native)) {
-      [void](New-DirectoryJunction $native $Plan.CubasePhysicalDest)
+      [void](New-DirectoryJunction $native $Plan.CubasePhysicalDest -Replace)
     }
   }
   if ($Plan.SteinbergContentPhysical) {
     New-Item -ItemType Directory -Path $Plan.SteinbergContentPhysical -Force | Out-Null
   }
   if ($Plan.SteinbergContentLink -and $Plan.SteinbergContentPhysical) {
-    if (-not (New-DirectoryJunction $Plan.SteinbergContentLink $Plan.SteinbergContentPhysical)) {
+    if (-not (New-DirectoryJunction $Plan.SteinbergContentLink $Plan.SteinbergContentPhysical -Replace)) {
       Write-Warn "Steinberg content is on $($Plan.SteinbergContentPhysical). C:\ProgramData\Steinberg was left as it is."
     }
   }
