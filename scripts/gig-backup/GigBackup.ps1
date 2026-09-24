@@ -958,6 +958,32 @@ function Invoke-MklinkJunction([string]$Link, [string]$Target, [switch]$Elevated
   return ($null -ne $p -and $p.ExitCode -eq 0 -and (Test-Path -LiteralPath $Link))
 }
 
+function Clear-JunctionsOnPath([string]$LiteralPath) {
+  # A link on C:\Users\pc makes C:\Users\pc\Dropbox resolve as C:\Users\Dropbox.
+  # Remove those links only. Real folders are left alone.
+  $full = $LiteralPath.TrimEnd('\')
+  $parts = @()
+  $cur = $full
+  while ($cur -and $cur.Length -gt 3) {
+    $parts += $cur
+    $parent = Split-Path -Parent $cur
+    if (-not $parent -or $parent -eq $cur) { break }
+    $cur = $parent
+  }
+  [array]::Reverse($parts)
+  foreach ($p in $parts) {
+    if (-not (Test-Path -LiteralPath $p)) { continue }
+    if (-not (Test-IsReparsePoint $p)) { continue }
+    $was = Get-JunctionTarget $p
+    Write-Info ("Removing folder link {0} (was {1})" -f $p, $was)
+    if (-not (Remove-JunctionOnly $p)) {
+      Write-Warn "Could not remove folder link $p"
+      return $false
+    }
+  }
+  return $true
+}
+
 function Remove-JunctionOnly([string]$Link) {
   # rmdir without /s removes the link itself and leaves the folder it pointed at.
   & cmd.exe /c "rmdir `"$Link`"" | Out-Null
@@ -1176,13 +1202,18 @@ function Get-BackupPathPlan {
 }
 
 function Invoke-BackupPathPlan($Plan) {
-  if ($Plan.ProfileJunctionLink) {
-    if ((Test-Path -LiteralPath $Plan.ProfileJunctionLink) -and -not (Test-IsReparsePoint $Plan.ProfileJunctionLink)) {
-      $kids = @(Get-ChildItem -LiteralPath $Plan.ProfileJunctionLink -Force -ErrorAction SilentlyContinue)
-      if ($kids.Count -eq 0) { Remove-Item -LiteralPath $Plan.ProfileJunctionLink -Force -ErrorAction SilentlyContinue }
-    }
-    if (-not (New-DirectoryJunction $Plan.ProfileJunctionLink $Plan.ProfileJunctionTarget)) {
+  if ($Plan.CubasePhysicalDest) {
+    New-Item -ItemType Directory -Path $Plan.CubasePhysicalDest -Force | Out-Null
+    $Plan.CubaseDest = [string]$Plan.CubasePhysicalDest
+  }
+  if ($Plan.CubaseJunctionLink -and $Plan.CubaseJunctionTarget) {
+    if (-not (Clear-JunctionsOnPath $Plan.CubaseJunctionLink)) {
       $Plan.WillMatchOriginalPaths = $false
+    } elseif (-not (New-DirectoryJunction $Plan.CubaseJunctionLink $Plan.CubaseJunctionTarget -Replace)) {
+      Write-Warn "Could not link the original Cubase path."
+      $Plan.WillMatchOriginalPaths = $false
+    } else {
+      $Plan.WillMatchOriginalPaths = $true
     }
   }
   if ($Plan.ViewerOneCopyDest) { New-Item -ItemType Directory -Path $Plan.ViewerOneCopyDest -Force | Out-Null }
@@ -1190,21 +1221,6 @@ function Invoke-BackupPathPlan($Plan) {
     if (-not (New-DirectoryJunction $Plan.ViewerOneJunctionLink $Plan.ViewerOneJunctionTarget -Replace)) {
       Write-Warn "Could not link ViewerOne; files will live at $($Plan.ViewerOneCopyDest)"
       $Plan.ViewerOneDest = [string]$Plan.ViewerOneCopyDest
-    }
-  }
-  if ($Plan.CubasePhysicalDest) {
-    New-Item -ItemType Directory -Path $Plan.CubasePhysicalDest -Force | Out-Null
-    $Plan.CubaseDest = [string]$Plan.CubasePhysicalDest
-  }
-  if ($Plan.CubaseJunctionLink -and $Plan.CubaseJunctionTarget) {
-    if (-not (Test-ProfileResolvesHere $Plan.SrcProfile) -and -not $Plan.SameProfile) {
-      Write-Warn "Could not make $($Plan.SrcProfile) point at this account; Cubase may ask to Find Missing Files"
-      $Plan.WillMatchOriginalPaths = $false
-    } elseif (-not (New-DirectoryJunction $Plan.CubaseJunctionLink $Plan.CubaseJunctionTarget -Replace)) {
-      Write-Warn "Could not link the original Cubase path."
-      $Plan.WillMatchOriginalPaths = $false
-    } else {
-      $Plan.WillMatchOriginalPaths = $true
     }
   }
   $native = [string]$Plan.CubaseNativeLink
