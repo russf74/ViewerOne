@@ -1586,13 +1586,13 @@ function Invoke-Apply {
   $x32AppSrc = Join-Path $payload 'X32-Edit\AppData'
   $voExcludeApply = @('.git', 'release', '_ref', '.tmp-cubase-ocr', '.tmp-scan-qa', '.pio')
   $applyTreeDefs = @(
-    [pscustomobject]@{ Name = 'ViewerOne data'; Rel = 'ViewerOne-AppData'; Dest = (Join-Path $env:APPDATA 'viewer-one') }
+    [pscustomobject]@{ Name = 'ViewerOne data'; Rel = 'ViewerOne-AppData'; Dest = (Join-Path $env:APPDATA 'viewer-one'); ExDir = @() }
     [pscustomobject]@{ Name = 'Steinberg settings'; Rel = 'Steinberg-AppData'; Dest = (Join-Path $env:APPDATA 'Steinberg'); ExDir = @('Activation Manager') }
-    [pscustomobject]@{ Name = 'Steinberg documents'; Rel = 'Steinberg-Documents'; Dest = (Join-Path (Get-UserDocumentsPath) 'Steinberg') }
-    [pscustomobject]@{ Name = 'Steinberg local'; Rel = 'Steinberg-Local'; Dest = (Join-Path $env:LOCALAPPDATA 'Steinberg') }
-    [pscustomobject]@{ Name = 'Steinberg content'; Rel = 'Steinberg-ProgramData'; Dest = (Join-Path $env:PROGRAMDATA 'Steinberg') }
-    [pscustomobject]@{ Name = 'Native Instruments'; Rel = 'NativeInstruments-AppData'; Dest = (Join-Path $env:APPDATA 'Native Instruments') }
-    [pscustomobject]@{ Name = 'loopMIDI app'; Rel = 'loopMIDI\App'; Dest = (Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Tobias Erichsen\loopMIDI') }
+    [pscustomobject]@{ Name = 'Steinberg documents'; Rel = 'Steinberg-Documents'; Dest = (Join-Path (Get-UserDocumentsPath) 'Steinberg'); ExDir = @() }
+    [pscustomobject]@{ Name = 'Steinberg local'; Rel = 'Steinberg-Local'; Dest = (Join-Path $env:LOCALAPPDATA 'Steinberg'); ExDir = @() }
+    [pscustomobject]@{ Name = 'Steinberg content'; Rel = 'Steinberg-ProgramData'; Dest = (Join-Path $env:PROGRAMDATA 'Steinberg'); ExDir = @() }
+    [pscustomobject]@{ Name = 'Native Instruments'; Rel = 'NativeInstruments-AppData'; Dest = (Join-Path $env:APPDATA 'Native Instruments'); ExDir = @() }
+    [pscustomobject]@{ Name = 'loopMIDI app'; Rel = 'loopMIDI\App'; Dest = (Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Tobias Erichsen\loopMIDI'); ExDir = @() }
   )
 
   Write-Step "Scanning"
@@ -1603,7 +1603,8 @@ function Invoke-Apply {
   foreach ($def in $applyTreeDefs) {
     $src = Join-Path $payload $def.Rel
     if (-not (Test-Path -LiteralPath $src)) { continue }
-    $ex = @($def.ExDir)
+    $ex = @()
+    if ($def.PSObject.Properties['ExDir']) { $ex = @($def.ExDir) }
     $inv = Get-FolderInventory -Path $src -ExcludeTop $ex
     if ([long]$inv.Files -le 0) { continue }
     $restoreTrees.Add([pscustomobject]@{
