@@ -3086,6 +3086,36 @@ function registerIpc(): void {
     return buildPublicState()
   })
 
+  ipcMain.handle(
+    'setlist:patchRow',
+    (
+      _e,
+      id: string,
+      patch: Partial<Pick<SetlistItem, 'title' | 'length' | 'year' | 'ledPattern'>>
+    ) => {
+      if (!id || !patch || typeof patch !== 'object') return buildPublicState()
+      const st = getState(store)
+      let found = false
+      const next = st.setlist.map((row) => {
+        if (row.id !== id) return row
+        found = true
+        return {
+          ...row,
+          ...(patch.title !== undefined ? { title: String(patch.title) } : {}),
+          ...(patch.length !== undefined ? { length: normalizeSongLength(patch.length) } : {}),
+          ...(patch.year !== undefined ? { year: String(patch.year) } : {}),
+          ...(patch.ledPattern !== undefined
+            ? { ledPattern: clampLedPatternId(patch.ledPattern) }
+            : {})
+        }
+      })
+      if (!found) return buildPublicState()
+      setState(store, { setlist: next })
+      broadcastState()
+      return buildPublicState()
+    }
+  )
+
   ipcMain.handle('setlist:remove', (_e, id: string) => {
     const st = getState(store)
     const next = st.setlist.filter((r) => r.id !== id)

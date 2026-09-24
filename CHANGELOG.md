@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.62
+
+- Editing a song title updates the in-app CrowPanel preview and the panel immediately. The intro title is no longer left on the previous name after you change it.
+
 ## v6.00.61
 
 - Each song's last live DMX pattern now holds through the end of the song plus 15 seconds, so a quiet outro does not drop to between-songs lights before Cubase sends the end.

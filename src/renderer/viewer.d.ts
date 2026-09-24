@@ -5,6 +5,10 @@ export type ViewerApi = {
   getState: () => Promise<PublicState>
   onState: (fn: (s: PublicState) => void) => () => void
   setSetlist: (items: SetlistItem[]) => Promise<PublicState>
+  patchSetlistRow: (
+    id: string,
+    patch: Partial<Pick<SetlistItem, 'title' | 'length' | 'year' | 'ledPattern'>>
+  ) => Promise<PublicState>
   addSong: () => Promise<PublicState>
   removeSong: (id: string) => Promise<PublicState>
   prevSong: () => Promise<PublicState>

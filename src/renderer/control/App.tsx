@@ -308,11 +308,9 @@ export function App() {
 
   const updateRow = useCallback(
     (id: string, patch: Partial<Pick<SetlistItem, 'title' | 'length' | 'year' | 'ledPattern'>>) => {
-      if (!state) return
-      const nextItems = state.setlist.map((r) => (r.id === id ? { ...r, ...patch } : r))
-      void setSetlist(nextItems)
+      void window.viewer.patchSetlistRow(id, patch)
     },
-    [state, setSetlist]
+    []
   )
 
   const cubaseStatus = useMemo(() => (state ? cubaseStatusLine(state) : null), [state])

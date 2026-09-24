@@ -147,7 +147,11 @@ export function SortableRow({
         className="text-input title-line"
         type="text"
         value={titleDraft}
-        onChange={(e) => setTitleDraft(e.target.value)}
+        onChange={(e) => {
+          const next = e.target.value
+          setTitleDraft(next)
+          if (next !== item.title) onChange({ title: next })
+        }}
         onFocus={() => {
           titleFocus.current = true
         }}

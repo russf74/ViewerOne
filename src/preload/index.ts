@@ -10,6 +10,10 @@ const api = {
     return () => ipcRenderer.removeListener('state:update', listener)
   },
   setSetlist: (items: SetlistItem[]): Promise<PublicState> => ipcRenderer.invoke('setlist:set', items),
+  patchSetlistRow: (
+    id: string,
+    patch: Partial<Pick<SetlistItem, 'title' | 'length' | 'year' | 'ledPattern'>>
+  ): Promise<PublicState> => ipcRenderer.invoke('setlist:patchRow', id, patch),
   addSong: (): Promise<PublicState> => ipcRenderer.invoke('setlist:add'),
   removeSong: (id: string): Promise<PublicState> => ipcRenderer.invoke('setlist:remove', id),
   prevSong: (): Promise<PublicState> => ipcRenderer.invoke('setlist:prevSong'),
