@@ -147,7 +147,6 @@ const lightingDirector = new LightingDirector()
 const loopbackMeter = new LoopbackMeter((sample) => broadcastLoopbackMeter(sample))
 
 let dmxCueOverride: DmxCueOverride | undefined
-let dmxStickBrightnessScale = 1
 
 function applyDirectorCue(cue: LightingCue): void {
   const id = clampLedPatternId(cue.ledPatternId)
@@ -155,7 +154,6 @@ function applyDirectorCue(cue: LightingCue): void {
   ledIdleDimActive = false
   ledPattern = ledPatternName(id)
   dmxCueOverride = cue.dmx
-  dmxStickBrightnessScale = cue.dmx?.stickBrightnessScale ?? 1
   const look = cue.dmxLook
   if (look) {
     dmxLook = look
@@ -1275,7 +1273,7 @@ function pushDmxFrame(): void {
   }
   dmxSetChannels(
     mergeDmxCueOverrides(
-      dmxUniverseForLedPattern(patternId, tMs, dmxStickBrightnessScale, {
+      dmxUniverseForLedPattern(patternId, tMs, 1, {
         stickPatternId: dmxCueOverride?.stickPatternId,
         domePatternId: dmxCueOverride?.domePatternId,
         strobePatternId: dmxCueOverride?.strobePatternId

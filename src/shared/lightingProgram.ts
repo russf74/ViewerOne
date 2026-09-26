@@ -109,7 +109,7 @@ function dmxForSection(espPatternId: number, energy: number, label = 'unknown'):
     stickPatternId: complementaryStickPatternId(espPatternId),
     domePatternId: complementaryDomePatternId(espPatternId),
     strobePatternId,
-    stickBrightnessScale: energy > 0.72 ? 1 : energy > 0.4 ? 0.78 : 0.5
+    stickBrightnessScale: 1
   }
 }
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## v6.00.63
+
+- Live DMX programmes run every fixture at full brightness. Between-songs, blue knight rider, and blackout stay at their low levels.
+
 ## v6.00.62
 
 - Editing a song title updates the in-app CrowPanel preview and the panel immediately. The intro title is no longer left on the previous name after you change it.

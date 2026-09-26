@@ -317,7 +317,6 @@ function renderStrobe15(patternId: number, tMs: number): StrobeCue {
       })
     case 5:
       return lfCue({
-        dimmer: 200,
         r: 40,
         g: 70,
         b: 180,
@@ -500,7 +499,6 @@ function renderStrobe15(patternId: number, tMs: number): StrobeCue {
       })
     case 21:
       return lfCue({
-        dimmer: 40,
         r: 0,
         g: 30,
         b: 160,
@@ -529,7 +527,7 @@ const LED_DOME_CUES: Record<number, DomeCue> = {
   2: { dimmer: 255, r: 255, g: 0, b: 180, w: 40, rotate: 175, auto: 0, autoSpeed: 0 },
   3: { dimmer: 255, r: 0, g: 40, b: 255, w: 80, rotate: 70, auto: 0, autoSpeed: 0 },
   4: { dimmer: 255, r: 255, g: 30, b: 0, w: 50, rotate: 185, auto: 0, autoSpeed: 0 },
-  5: { dimmer: 220, r: 40, g: 60, b: 180, w: 255, rotate: 48, auto: 0, autoSpeed: 0 },
+  5: { dimmer: 255, r: 40, g: 60, b: 180, w: 255, rotate: 48, auto: 0, autoSpeed: 0 },
   6: { dimmer: 255, r: 0, g: 255, b: 30, w: 40, rotate: 210, auto: 0, autoSpeed: 0 },
   7: { dimmer: 255, r: 0, g: 0, b: 0, w: 0, rotate: 110, auto: 5, autoSpeed: 255 },
   8: { dimmer: 255, r: 255, g: 0, b: 200, w: 30, rotate: 160, auto: 0, autoSpeed: 0 },
@@ -545,7 +543,7 @@ const LED_DOME_CUES: Record<number, DomeCue> = {
   18: { dimmer: 255, r: 0, g: 0, b: 0, w: 0, rotate: 168, auto: 5, autoSpeed: 240 },
   19: { dimmer: 255, r: 255, g: 60, b: 0, w: 40, rotate: 118, auto: 0, autoSpeed: 0 },
   20: { dimmer: 255, r: 0, g: 0, b: 0, w: 0, rotate: 100, auto: 5, autoSpeed: 230 },
-  21: { dimmer: 55, r: 0, g: 30, b: 160, w: 20, rotate: 14, auto: 0, autoSpeed: 0 }
+  21: { dimmer: 255, r: 0, g: 30, b: 160, w: 20, rotate: 14, auto: 0, autoSpeed: 0 }
 }
 
 export function powerDome10ChChannels(start: number, look: DmxLook): DmxChannelValue[] {
